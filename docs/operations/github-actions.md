@@ -17,7 +17,7 @@ Two jobs, on purpose:
    any code that runs in that job, therefore cannot read a token. It produces the
    evidence contract and uploads `.barad-dur/security` as an artifact.
 2. **publish** is skipped for `pull_request` events whose head repository is a
-   fork. It downloads the same evidence and runs `sync --pending`, which reuses
+   fork, and for `pull_request_target` callers whose head repository is a fork. It downloads the same evidence and runs `sync --pending`, which reuses
    the finished run instead of scanning again. Credentials exist only here.
 
 The evidence artifact also carries `state/inventory.json` and
@@ -52,6 +52,13 @@ jobs:
 ```
 
 Declared `workflow_call` inputs: `config-file`, `trivy-runner`, `python-version`.
+
+Caller responsibility: do not forward secrets to a caller-side job that runs
+untrusted code. This workflow keeps the scan job secret-free, but a caller that
+injects secrets into its own steps is outside its control. On `pull_request_target`,
+remember that `actions/checkout` defaults to the **base** branch; set the ref
+explicitly if the pull-request tree must be scanned (it is scanned without secrets
+either way).
 Unused secrets may be omitted; an adapter that is enabled but has no endpoint
 records `PENDING` / `not_configured` instead of failing the analysis.
 

@@ -160,6 +160,14 @@ Vulnerability and misconfiguration findings keep full fidelity: redaction can
 never hide a finding. Logs are scrubbed of every configured token/env value and of
 `Authorization` / `X-Api-Key` header values before they are written.
 
+`barad-security.yml` may use `${VAR}` / `${VAR:-default}` for non-sensitive
+switches (a runner mode, a base reference, an enable flag). Expanding a variable
+that the configuration declares as an integration endpoint, or any variable whose
+name ends in `token`, `secret`, `password` or `api_key`, is **refused** with a
+clear configuration error: a repository file must never be able to copy a runtime
+secret into a manifest, an outbound payload or a log line. Credentials are read by
+the adapters at run time and never appear in `config.effective`.
+
 ## BARAD-DÛR publication contract
 
 Proposed, not implemented on the platform side. The adapter calls exactly:

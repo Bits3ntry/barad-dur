@@ -46,7 +46,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "base_ref": {"type": ["string", "null"], "maxLength": 200},
+        "base_ref": {
+          "type": ["string", "null"],
+          "maxLength": 200,
+          "pattern": "^(?!-)[^\\s]+$"
+        },
         "dependency_patterns": {
           "type": "array",
           "maxItems": 200,

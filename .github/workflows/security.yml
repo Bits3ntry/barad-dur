@@ -121,10 +121,12 @@ jobs:
   publish:
     name: publish evidence
     needs: scan
-    # Trusted contexts only: never a pull request from a fork.
+    # Trusted contexts only: never a pull request from a fork, including a
+    # `pull_request_target` caller (its head repository is the fork as well).
     if: |
       always() && needs.scan.result != 'cancelled' && !(
-        github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork
+        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+        && github.event.pull_request.head.repo.fork
       )
     runs-on: ubuntu-latest
     timeout-minutes: 20

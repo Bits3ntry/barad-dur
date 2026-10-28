@@ -148,6 +148,20 @@ class DecisionTests(RepoTestCase):
         self.assertTrue(report.dependency_changed)
         self.assertTrue(context.base_resolution.startswith("merge_base_of_"))
 
+    def test_option_shaped_base_reference_never_reaches_git(self):
+        context = detect_git_context(self.repo, event="pr", base_ref="--upload-pack=/bin/sh", environ={})
+        self.assertIsNone(context.base_sha)
+        self.assertEqual(context.base_resolution, "unavailable")
+        self.assertIn("base_ref_rejected", {problem["code"] for problem in context.problems})
+        report = detect_changes(self.config(), context, resolve_version(self.config(), environ={}))
+        decisions = evaluate(self.config(), context, report, None, inventory_present=True)
+        self.assertTrue(decisions.generate_sbom)
+        self.assertEqual(decisions.sbom_reason, "base_reference_unavailable")
+        # The rejected reference is recorded as a problem, never as a base to compare against.
+        self.assertIsNone(context.base_ref)
+        rejected = [problem for problem in context.problems if problem["code"] == "base_ref_rejected"][0]
+        self.assertIn("upload-pack", rejected["detail"])
+
     def test_monorepo_attributes_changes_to_the_right_service(self):
         write_file(self.repo, "services/api/package.json", json.dumps({"name": "api", "version": "1.0.0"}) + "\n")
         write_file(self.repo, "services/api/src/index.ts", "export const a = 1;\n")

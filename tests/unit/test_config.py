@@ -95,6 +95,39 @@ class ConfigTests(unittest.TestCase):
         document = minimal(trivy={"timeout_seconds": "${SEC_TIMEOUT:-900}"})
         self.assertEqual(self.build(document, environ={}).get("trivy.timeout_seconds"), 900)
 
+    def test_a_credential_can_never_be_expanded_into_the_file(self):
+        secret = "dtrack-super-secret-value"
+        for document in (
+            minimal(sbom={"include_patterns": ["**/package.json"]},
+                    integrations={"defectdojo": {"test_title_prefix": "${DTRACK_API_KEY}"}}),
+            minimal(integrations={"dependency_track": {"token_env": "MY_FAKE_NAME"}},
+                    sbom={"include_patterns": ["**/${GITHUB_TOKEN}"]}),
+        ):
+            with self.assertRaises(ConfigError) as caught:
+                self.build(document, environ={"DTRACK_API_KEY": secret,
+                                              "GITHUB_TOKEN": secret,
+                                              "MY_FAKE_NAME": secret})
+            message = str(caught.exception)
+            self.assertIn("refusing to expand credential", message)
+            self.assertNotIn(secret, message)
+
+    def test_a_declared_endpoint_variable_cannot_be_expanded_either(self):
+        with self.assertRaises(ConfigError) as caught:
+            self.build(minimal(detection={"base_ref": "${DTRACK_URL}"}),
+                       environ={"DTRACK_URL": "http://127.0.0.1:18080"})
+        self.assertIn("DTRACK_URL", str(caught.exception))
+
+    def test_non_credential_variables_still_expand(self):
+        config = self.build(minimal(trivy={"runner": "${BARAD_TRIVY_RUNNER:-local}"}), environ={})
+        self.assertEqual(config.get("trivy.runner"), "local")
+
+    def test_base_ref_cannot_look_like_a_git_option(self):
+        for value in ("--upload-pack=/bin/sh", "-c", "main branch"):
+            with self.assertRaises(ConfigError):
+                self.build(minimal(detection={"base_ref": value}))
+        self.assertEqual(self.build(minimal(detection={"base_ref": "origin/main"})).get("detection.base_ref"),
+                         "origin/main")
+
     def test_credentials_are_referenced_by_name_only(self):
         config = self.build(minimal())
         document = config.public()

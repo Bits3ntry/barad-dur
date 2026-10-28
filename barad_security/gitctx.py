@@ -31,6 +31,20 @@ GITHUB_EVENT_MAP = {
 
 _ZERO_SHA = re.compile(r"^0+$")
 _SHA = re.compile(r"^[0-9a-f]{7,64}$")
+# A ref reaching `git` as one argv element still must not look like an option.
+_REF_FORBIDDEN = re.compile(r"^\-|[\s\x00-\x1f]")
+
+
+def validate_ref(ref):
+    """Return a safe revision string, or None when it must not reach git."""
+    if not isinstance(ref, str):
+        return None
+    candidate = ref.strip()
+    if not candidate or len(candidate) > 200:
+        return None
+    if _REF_FORBIDDEN.search(candidate):
+        return None
+    return candidate
 
 
 @dataclass
@@ -119,6 +133,7 @@ def _load_event_payload(environ):
 
 
 def _resolve_commit(repo, ref):
+    ref = validate_ref(ref)
     if not ref:
         return None
     status, out, _ = _run_git(repo, ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"])
@@ -204,6 +219,11 @@ def detect_git_context(repo_root, *, event=None, base_ref=None, environ=None):
         status, out, _ = _run_git(repo, ["rev-list", "--max-parents=0", "HEAD"])
         context.root_commit = len((out or "").split()) == 1 and parents == 0
 
+    if base_ref and validate_ref(base_ref) is None:
+        context.problems.append({
+            "code": "base_ref_rejected",
+            "detail": f"refusing an unsafe base reference: {str(base_ref)[:80]!r}",
+        })
     base_candidates = _base_candidates(context, base_ref, payload, env)
     context.base_ref = base_candidates[0][0] if base_candidates else None
     resolved_from = None
@@ -237,8 +257,8 @@ def detect_git_context(repo_root, *, event=None, base_ref=None, environ=None):
 def _base_candidates(context, base_ref, payload, env):
     """Ordered (ref, resolution) pairs; the first resolvable one wins."""
     candidates = []
-    if base_ref:
-        candidates.append((str(base_ref), "explicit_base_ref"))
+    if validate_ref(base_ref):
+        candidates.append((validate_ref(base_ref), "explicit_base_ref"))
     if env.get("GITHUB_BASE_SHA") and not _ZERO_SHA.match(env["GITHUB_BASE_SHA"]):
         candidates.append((env["GITHUB_BASE_SHA"], "github_base_sha"))
     before = payload.get("before") or env.get("GITHUB_EVENT_BEFORE") or env.get("GITHUB_BEFORE")

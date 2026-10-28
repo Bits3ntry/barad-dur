@@ -176,6 +176,34 @@ DEFAULTS = {
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
+# A variable whose name ends in one of these words is treated as a credential.
+# Expansion of such a variable is refused: a repository file must never be able
+# to copy a runtime secret into a manifest, an outbound payload or a log line.
+_CREDENTIAL_NAME = re.compile(r"(?i)(?:^|_)(?:token|secret|password|passwd|api_?key|access_key)$")
+
+_INTEGRATION_ENV_KEYS = ("endpoint_env", "token_env")
+
+
+def _declared_env_names(document):
+    """Every environment variable the configuration names as an integration input."""
+    names = set()
+    for block in ("barad_dur", "dependency_track", "defectdojo"):
+        settings = (document or {}).get("integrations", {}).get(block) if isinstance(document, dict) else None
+        if not isinstance(settings, dict):
+            defaults = DEFAULTS["integrations"].get(block, {})
+            settings = defaults
+        for key in _INTEGRATION_ENV_KEYS:
+            value = settings.get(key)
+            if isinstance(value, str) and value and _ENV_PATTERN.search(value) is None:
+                names.add(value)
+    return names
+
+
+def _blocked_expansion_names(document, environ):
+    blocked = _declared_env_names(document) | _declared_env_names(DEFAULTS)
+    blocked |= {name for name in (environ or {}) if _CREDENTIAL_NAME.search(name)}
+    return blocked
+
 
 def _deep_merge(base, override):
     if not isinstance(base, dict) or not isinstance(override, dict):
@@ -189,10 +217,14 @@ def _deep_merge(base, override):
     return merged
 
 
-def _expand(node, environ, errors, path=()):
+def _expand(node, environ, errors, path=(), *, blocked=(), refused=None):
+    refused = refused if refused is not None else []
     if isinstance(node, str):
         def replace(match):
             name, default = match.group(1), match.group(2)
+            if name in blocked:
+                refused.append((".".join(path) or "<root>", name))
+                return match.group(0)
             value = environ.get(name)
             if value is None:
                 if default is not None:
@@ -215,9 +247,11 @@ def _expand(node, environ, errors, path=()):
                 return int(expanded.strip())
         return expanded
     if isinstance(node, dict):
-        return {key: _expand(value, environ, errors, path + (str(key),)) for key, value in node.items()}
+        return {key: _expand(value, environ, errors, path + (str(key),), blocked=blocked, refused=refused)
+                for key, value in node.items()}
     if isinstance(node, list):
-        return [_expand(value, environ, errors, path + (str(index),)) for index, value in enumerate(node)]
+        return [_expand(value, environ, errors, path + (str(index),), blocked=blocked, refused=refused)
+                for index, value in enumerate(node)]
     return node
 
 
@@ -349,8 +383,18 @@ def build_config(document, *, source=None, repo_root=None, environ=None, strict=
     if not isinstance(document, dict):
         raise ConfigError("configuration root must be a mapping")
 
+    environment = dict(environ if environ is not None else os.environ)
+    blocked = _blocked_expansion_names(document, environment)
     expansion_errors = []
-    expanded = _expand(document, dict(environ if environ is not None else os.environ), expansion_errors)
+    refused = []
+    expanded = _expand(document, environment, expansion_errors, blocked=blocked, refused=refused)
+    if refused:
+        places = ", ".join(f"{location} ({name})" for location, name in sorted(set(refused)))
+        raise ConfigError(
+            "refusing to expand credential environment variable(s): "
+            f"{places}. Integrations read their token from the environment at run time; "
+            "a configuration file may only reference the variable name."
+        )
     if expansion_errors:
         missing = ", ".join(sorted(set(expansion_errors)))
         raise ConfigError(f"undefined environment variable referenced at: {missing}")

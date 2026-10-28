@@ -67,6 +67,7 @@ class WorkflowContractTests(unittest.TestCase):
         publish = self.jobs["publish"]
         condition = publish["if"]
         self.assertIn("pull_request", condition)
+        self.assertIn("pull_request_target", condition)
         self.assertIn("fork", condition)
         self.assertIn("needs.scan.result", condition)
         run_steps = " ".join(step.get("run", "") for step in self.steps("publish"))

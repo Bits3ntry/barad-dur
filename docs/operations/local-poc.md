@@ -38,7 +38,10 @@ configuration reads `${BARAD_TRIVY_RUNNER:-local}`.
 
 `validate-config` never scans: it validates structure, semantics and path
 containment, then prints the effective project, Trivy settings, SBOM source and
-evidence directory.
+evidence directory. Environment expansion is limited: `${VAR}` works for switches
+such as `${BARAD_TRIVY_RUNNER:-local}`, but expanding an integration endpoint or any
+`*_TOKEN` / `*_SECRET` / `*_API_KEY` variable is refused, because a repository file
+must never be able to pull a runtime credential into evidence.
 
 A run prints a short summary and writes the evidence contract described in
 [the artifact contract](../architecture/artifact-contract.md):
@@ -167,6 +170,8 @@ locally):
   monorepo scoping and PR-with-many-commits;
 - Deferred publication: run with an unreachable BARAD-DÛR, then `sync` against a
   local HTTP double;
+- credential-expansion refusal, option-shaped base reference rejection and the
+  `pull_request_target` fork gate, each with its own regression test;
 - Dependency-Track and DefectDojo request shapes against HTTP doubles, including
   duplicate suppression and release-history protection.
 
