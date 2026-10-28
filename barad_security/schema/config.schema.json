@@ -1,0 +1,218 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://barad-dur.local/schema/barad-security-1.json",
+  "title": "barad-security.yml",
+  "description": "Internal contract for the BARAD-DUR security runner. Not a Trivy native configuration file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "project"],
+  "properties": {
+    "version": {"const": 1},
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "service"],
+      "properties": {
+        "name": {"$ref": "#/definitions/identity"},
+        "service": {"$ref": "#/definitions/identity"},
+        "ecosystem": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,31}$"},
+        "path": {"$ref": "#/definitions/relpath"},
+        "related_paths": {"type": "array", "maxItems": 64, "items": {"$ref": "#/definitions/relpath"}},
+        "version": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source": {"enum": ["auto", "package-json", "pyproject", "file", "literal", "env", "git-tag"]},
+            "path": {"$ref": "#/definitions/relpath"},
+            "key": {"type": "string", "maxLength": 120},
+            "value": {"type": "string", "maxLength": 120},
+            "env": {"$ref": "#/definitions/envvar"}
+          }
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "local_enabled": {"type": "boolean"},
+        "github_enabled": {"type": "boolean"},
+        "fail_on_findings": {"type": "boolean"},
+        "fail_on_scanner_error": {"type": "boolean"},
+        "log_level": {"enum": ["DEBUG", "INFO", "WARNING", "ERROR"]}
+      }
+    },
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "base_ref": {"type": ["string", "null"], "maxLength": 200},
+        "dependency_patterns": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {"$ref": "#/definitions/glob"}
+        },
+        "build_patterns": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {"$ref": "#/definitions/glob"}
+        }
+      }
+    },
+    "trivy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "always_run": {"type": "boolean"},
+        "runner": {"enum": ["local", "docker"]},
+        "executable": {"type": "string", "pattern": "^[A-Za-z0-9._/-]{1,200}$"},
+        "image": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,200}$"},
+        "cache_enabled": {"type": "boolean"},
+        "cache_dir": {"$ref": "#/definitions/relpath"},
+        "scan_type": {"enum": ["fs", "image"]},
+        "target": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,300}$"},
+        "scanners": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["vuln", "secret", "misconfig", "license"]}
+        },
+        "severity": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"]}
+        },
+        "report_format": {"enum": ["json"]},
+        "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 7200}
+      }
+    },
+    "sbom": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "generator": {"enum": ["trivy"]},
+        "format": {"enum": ["cyclonedx"]},
+        "generate_on": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dependency_changes": {"type": "boolean"},
+            "version_changes": {"type": "boolean"},
+            "build_changes": {"type": "boolean"},
+            "release": {"type": "boolean"}
+          }
+        },
+        "include_patterns": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {"$ref": "#/definitions/glob"}
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "directory": {"$ref": "#/definitions/relpath"},
+        "preserve_reports": {"type": "boolean"},
+        "preserve_logs": {"type": "boolean"},
+        "create_manifest": {"type": "boolean"},
+        "checksums": {"enum": ["sha256"]}
+      }
+    },
+    "integrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "barad_dur": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "required": {"type": "boolean"},
+            "endpoint_env": {"$ref": "#/definitions/envvar"},
+            "token_env": {"$ref": "#/definitions/envvar"},
+            "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 600},
+            "max_attempts": {"type": "integer", "minimum": 1, "maximum": 10}
+          }
+        },
+        "dependency_track": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "required": {"type": "boolean"},
+            "endpoint_env": {"$ref": "#/definitions/envvar"},
+            "token_env": {"$ref": "#/definitions/envvar"},
+            "publish_on_release": {"type": "boolean"},
+            "update_development_project": {"type": "boolean"},
+            "development_version": {"$ref": "#/definitions/identity"},
+            "auto_create": {"type": "boolean"},
+            "parent_name": {"$ref": "#/definitions/identity"},
+            "parent_version": {"type": "string", "maxLength": 100},
+            "latest_policy": {"enum": ["never", "semver_highest"]},
+            "allow_release_overwrite": {"type": "boolean"},
+            "wait_for_analysis": {"type": "boolean"},
+            "wait_timeout_seconds": {"type": "number", "minimum": 1, "maximum": 3600},
+            "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 600},
+            "max_attempts": {"type": "integer", "minimum": 1, "maximum": 10}
+          }
+        },
+        "defectdojo": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "required": {"type": "boolean"},
+            "endpoint_env": {"$ref": "#/definitions/envvar"},
+            "token_env": {"$ref": "#/definitions/envvar"},
+            "publish_trivy_reports": {"type": "boolean"},
+            "publish_on_pull_request": {"type": "boolean"},
+            "reimport": {"type": "boolean"},
+            "product_name": {"$ref": "#/definitions/identity"},
+            "engagement_name": {"$ref": "#/definitions/identity"},
+            "test_title_prefix": {"type": "string", "maxLength": 80},
+            "minimum_severity": {"enum": ["Critical", "High", "Medium", "Low", "Info"]},
+            "auto_create_context": {"type": "boolean"},
+            "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 600},
+            "max_attempts": {"type": "integer", "minimum": 1, "maximum": 10}
+          }
+        }
+      }
+    },
+    "notifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "direct_slack": {"type": "boolean"}
+      }
+    }
+  },
+  "definitions": {
+    "identity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/+@-]{0,99}$"
+    },
+    "relpath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._@+/-]+$"
+    },
+    "glob": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9*?\\[\\]._@+/-]+$"
+    },
+    "envvar": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+    }
+  }
+}

@@ -1,0 +1,124 @@
+# barad-security.yml — internal contract for the BARAD-DÛR security runner.
+# Not a Trivy native configuration file. Copy to a repository root and edit.
+# Credentials never live here: integrations name the environment variable that
+# holds the value (endpoint_env / token_env).
+
+version: 1
+
+project:
+  name: OVAC
+  service: OVAC-Backend
+  ecosystem: node
+  path: .
+  # Optional: extra repository paths whose dependency changes belong to this
+  # service (monorepo shared packages).
+  # related_paths:
+  #   - packages/shared
+  version:
+    source: package-json
+
+execution:
+  local_enabled: true
+  github_enabled: true
+  fail_on_findings: false
+  fail_on_scanner_error: true
+
+detection:
+  # Base reference used when the caller does not pass --base-ref and the CI
+  # environment does not provide one. null means "infer" (merge-base for PRs,
+  # previous tag for releases, HEAD for local runs).
+  base_ref: null
+
+trivy:
+  enabled: true
+  always_run: true
+  # local  -> run the `trivy` binary from PATH (or `executable`)
+  # docker -> run the pinned image below (no local install required)
+  runner: local
+  executable: trivy
+  image: aquasec/trivy:0.76.1
+  cache_enabled: true
+  cache_dir: .barad-dur/cache/trivy
+  scan_type: fs
+  scanners:
+    - vuln
+    - secret
+    - misconfig
+  severity:
+    - UNKNOWN
+    - LOW
+    - MEDIUM
+    - HIGH
+    - CRITICAL
+  report_format: json
+  timeout_seconds: 900
+
+sbom:
+  enabled: true
+  generator: trivy
+  format: cyclonedx
+
+  generate_on:
+    dependency_changes: true
+    version_changes: true
+    build_changes: true
+    release: true
+
+  include_patterns:
+    - "**/package.json"
+    - "**/package-lock.json"
+    - "**/npm-shrinkwrap.json"
+    - "**/pnpm-lock.yaml"
+    - "**/yarn.lock"
+    - "**/pyproject.toml"
+    - "**/poetry.lock"
+    - "**/uv.lock"
+    - "**/requirements*.txt"
+    - "**/Dockerfile*"
+    - "**/.nvmrc"
+    - "**/.python-version"
+
+artifacts:
+  directory: .barad-dur/security
+  preserve_reports: true
+  preserve_logs: true
+  create_manifest: true
+  checksums: sha256
+
+integrations:
+  barad_dur:
+    enabled: false
+    required: false
+    endpoint_env: BARAD_DUR_URL
+    token_env: BARAD_DUR_TOKEN
+
+  dependency_track:
+    enabled: false
+    required: false
+    endpoint_env: DTRACK_URL
+    token_env: DTRACK_API_KEY
+    publish_on_release: true
+    update_development_project: false
+    development_version: main
+    auto_create: true
+    # Never promote a version automatically unless the policy says so.
+    latest_policy: never
+    # A historical release SBOM is never overwritten silently.
+    allow_release_overwrite: false
+    wait_for_analysis: false
+    wait_timeout_seconds: 300
+
+  defectdojo:
+    enabled: false
+    required: false
+    endpoint_env: DOJO_URL
+    token_env: DOJO_TOKEN
+    publish_trivy_reports: false
+    # Pull-request evidence is not imported by default.
+    publish_on_pull_request: false
+    reimport: true
+    test_title_prefix: ""
+    minimum_severity: Info
+
+notifications:
+  direct_slack: false
