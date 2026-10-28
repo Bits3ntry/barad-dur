@@ -121,6 +121,13 @@ class ConfigTests(unittest.TestCase):
         config = self.build(minimal(trivy={"runner": "${BARAD_TRIVY_RUNNER:-local}"}), environ={})
         self.assertEqual(config.get("trivy.runner"), "local")
 
+    def test_the_default_engine_is_the_pinned_container(self):
+        """Local and CI must scan with the same Trivy build unless a repo says otherwise."""
+        config = self.build(minimal())
+        self.assertEqual(config.get("trivy.runner"), "docker")
+        self.assertEqual(config.get("trivy.image"), "aquasec/trivy:0.76.1")
+        self.assertEqual(self.build(minimal(trivy={"runner": "local"})).get("trivy.runner"), "local")
+
     def test_base_ref_cannot_look_like_a_git_option(self):
         for value in ("--upload-pack=/bin/sh", "-c", "main branch"):
             with self.assertRaises(ConfigError):

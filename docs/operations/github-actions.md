@@ -64,10 +64,12 @@ records `PENDING` / `not_configured` instead of failing the analysis.
 
 ## Trivy in Actions
 
-`trivy-runner: docker` uses the pinned image `aquasec/trivy:0.76.1` that is
-already required by `compose.yaml`; no third-party action and no floating version
-is involved. `trivy-runner: local` expects Trivy on `PATH` (install it in a step
-before the run step in that case).
+`trivy-runner` defaults to `docker` and uses the pinned image
+`aquasec/trivy:0.76.1` that is already required by `compose.yaml`; no third-party
+action and no floating version is involved. That default matches the runner's own
+default, so the local CLI and the workflow scan with the same Trivy build.
+`trivy-runner: local` expects Trivy on `PATH` (install it in a step before the run
+step in that case).
 
 ## Self-hosted runner
 

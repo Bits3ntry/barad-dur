@@ -32,9 +32,9 @@ detection:
 trivy:
   enabled: true
   always_run: true
-  # local  -> run the `trivy` binary from PATH (or `executable`)
-  # docker -> run the pinned image below (no local install required)
-  runner: local
+  # docker -> run the pinned image below (default: the same engine locally and in CI)
+  # local  -> run the `trivy` binary from PATH (or `executable`), for hosts that ship it
+  runner: docker
   executable: trivy
   image: aquasec/trivy:0.76.1
   cache_enabled: true

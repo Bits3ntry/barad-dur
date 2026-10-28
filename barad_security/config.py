@@ -101,7 +101,9 @@ DEFAULTS = {
     "trivy": {
         "enabled": True,
         "always_run": True,
-        "runner": "local",
+        # The container is the default so the local CLI and CI execute exactly the
+        # same Trivy build; `local` stays available for hosts that ship the binary.
+        "runner": "docker",
         "executable": "trivy",
         "image": "aquasec/trivy:0.76.1",
         "cache_enabled": True,

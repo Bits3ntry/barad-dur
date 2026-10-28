@@ -18,7 +18,7 @@ execution:
 trivy:
   enabled: true
   always_run: true
-  runner: ${BARAD_TRIVY_RUNNER:-local}
+  runner: ${BARAD_TRIVY_RUNNER:-docker}
   executable: trivy
   image: aquasec/trivy:0.76.1
   cache_enabled: true

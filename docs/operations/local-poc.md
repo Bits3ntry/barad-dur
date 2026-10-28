@@ -15,19 +15,26 @@ toolchain next to it for a single CLI.
 
 ```sh
 .venv/bin/python -m pip install -r requirements.txt   # PyYAML + jsonschema
-docker image inspect aquasec/trivy:0.76.1 >/dev/null   # container mode
-trivy --version                                        # or a local binary
+docker image inspect aquasec/trivy:0.76.1 >/dev/null   # default engine (container)
+# optional: trivy --version                           # only for trivy.runner: local
 ```
 
 `trivy.runner` chooses how Trivy is invoked:
 
 | Value | Meaning | When |
 |---|---|---|
-| `local` | the `trivy` binary from `PATH` or `trivy.executable` | Trivy installed on the host |
-| `docker` | `aquasec/trivy:<pinned tag>`, target mounted read-only | no local install (the case on this host) |
+| `docker` (**default**) | `aquasec/trivy:<pinned tag>`, target mounted read-only, evidence dir writable | always; it is also what CI runs |
+| `local` | the `trivy` binary from `PATH` or `trivy.executable` | a host or runner that already ships the binary |
 
-You can switch per environment without editing the file, because the example
-configuration reads `${BARAD_TRIVY_RUNNER:-local}`.
+The default is the container on purpose: the local CLI and GitHub Actions execute
+the **same Trivy build**, so a difference in results cannot come from a different
+scanner installation. What changes between environments is the mode, never the
+engine. You can override it without editing the file, because the example
+configuration reads `${BARAD_TRIVY_RUNNER:-docker}`:
+
+```sh
+BARAD_TRIVY_RUNNER=local ./bin/barad-security run --event local   # host binary
+```
 
 ## 2. Two commands
 
@@ -39,7 +46,7 @@ configuration reads `${BARAD_TRIVY_RUNNER:-local}`.
 `validate-config` never scans: it validates structure, semantics and path
 containment, then prints the effective project, Trivy settings, SBOM source and
 evidence directory. Environment expansion is limited: `${VAR}` works for switches
-such as `${BARAD_TRIVY_RUNNER:-local}`, but expanding an integration endpoint or any
+such as `${BARAD_TRIVY_RUNNER:-docker}`, but expanding an integration endpoint or any
 `*_TOKEN` / `*_SECRET` / `*_API_KEY` variable is refused, because a repository file
 must never be able to pull a runtime credential into evidence.
 

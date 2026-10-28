@@ -151,7 +151,10 @@ class TrivyRunner:
         then the image, then the Trivy subcommand and its flags.
         """
         if shutil.which("docker") is None:
-            raise ScannerError("trivy.runner is 'docker' but the docker CLI is not available")
+            raise ScannerError(
+                "trivy.runner is 'docker' but the docker CLI is not available; "
+                "start Docker or use trivy.runner: local with a Trivy binary"
+            )
         flags = self._common_flags(format_name=format_name, include_scanners=include_scanners)
         output_dir = output_path.parent.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -208,7 +211,10 @@ class TrivyRunner:
         """Fail early, with a technical error, when Trivy cannot be invoked at all."""
         if self.runner == "docker":
             if shutil.which("docker") is None:
-                raise ScannerError("trivy.runner is 'docker' but the docker CLI is not available")
+                raise ScannerError(
+                "trivy.runner is 'docker' but the docker CLI is not available; "
+                "start Docker or use trivy.runner: local with a Trivy binary"
+            )
             return
         executable = self.executable
         if os.sep in executable:
@@ -217,7 +223,8 @@ class TrivyRunner:
             return
         if shutil.which(executable) is None:
             raise ScannerError(
-                f"trivy executable not found: {executable}; install Trivy or set trivy.runner: docker"
+                f"trivy executable not found: {executable}; install Trivy or use the default "
+                "trivy.runner: docker (it only needs Docker)"
             )
 
     # -- execution ---------------------------------------------------------
