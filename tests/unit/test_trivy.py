@@ -107,8 +107,17 @@ class TrivyRunnerTests(unittest.TestCase):
         self.assertIn(f"{self.repo}:/scan:ro", joined)
         self.assertIn("/out/report.json", joined)
         self.assertNotIn(":/out:ro", joined)
-        self.assertEqual(argv[-1], "aquasec/trivy:0.76.1")
         self.assertEqual(mount_target, self.repo.resolve())
+        # Docker options precede the image; every Trivy flag must come after it,
+        # otherwise docker itself rejects them ("unknown flag: --format").
+        image_index = argv.index("aquasec/trivy:0.76.1")
+        self.assertGreater(image_index, 0)
+        # The cache is a volume mount in docker mode, not a --cache-dir flag.
+        for flag in ("--format", "--output", "--exit-code", "--scanners"):
+            self.assertGreater(argv.index(flag), image_index, flag)
+        self.assertEqual(argv[image_index + 1], "fs")
+        self.assertFalse([argument for argument in argv[:image_index]
+                          if argument.startswith("--format")])
 
     def test_timeout_is_a_technical_failure(self):
         runner = self.runner()

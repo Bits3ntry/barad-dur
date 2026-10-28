@@ -144,33 +144,40 @@ class TrivyRunner:
         return argv, cwd, None
 
     def _docker_command(self, *, format_name, output_path, include_scanners=True):
+        """Build `docker run` so every Trivy flag lands AFTER the image reference.
+
+        Docker parses everything before the image as its own options; putting a
+        Trivy flag there fails with "unknown flag". Mounts therefore come first,
+        then the image, then the Trivy subcommand and its flags.
+        """
         if shutil.which("docker") is None:
             raise ScannerError("trivy.runner is 'docker' but the docker CLI is not available")
         flags = self._common_flags(format_name=format_name, include_scanners=include_scanners)
         output_dir = output_path.parent.resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
         container_output = f"/out/{output_path.name}"
-        argv = ["docker", "run", "--rm"]
+        docker_options = ["docker", "run", "--rm"]
         if self.scan_type == "image":
-            argv += [
-                *flags, "--image-src", "remote", "--exit-code", "0",
+            mount_target = None
+            docker_options += ["-v", f"{output_dir}:/out"]
+            trivy_arguments = [
+                "image", *flags, "--image-src", "remote", "--exit-code", "0",
                 "--output", container_output, self.scan_target(),
             ]
-            mount_target = None
         else:
             mount_target = self.scan_root()
             if not mount_target.is_dir():
                 raise ScannerError(f"scan target is not a directory: {self.scan_target()}")
-            argv += [
-                "-v", f"{mount_target}:/scan:ro", *flags, "--exit-code", "0",
-                "--output", container_output, "/scan",
+            # The scan target is read-only; the evidence directory is writable.
+            docker_options += ["-v", f"{mount_target}:/scan:ro", "-v", f"{output_dir}:/out"]
+            trivy_arguments = [
+                "fs", *flags, "--exit-code", "0", "--output", container_output, "/scan",
             ]
-        argv += ["-v", f"{output_dir}:/out"]
         if self.cache_enabled:
             cache = self.cache_path()
             cache.mkdir(parents=True, exist_ok=True)
-            argv += ["-v", f"{cache}:/root/.cache/trivy"]
-        argv.append(self.image)
-        return argv, self.repo_root, mount_target
+            docker_options += ["-v", f"{cache}:/root/.cache/trivy"]
+        return [*docker_options, self.image, *trivy_arguments], self.repo_root, mount_target
 
     def _command(self, *, format_name, output_path, include_scanners=True):
         if self.runner == "docker":
