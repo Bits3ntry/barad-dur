@@ -23,6 +23,11 @@ identically by the local CLI, a Git hook, `act` and GitHub Actions.
 └── pending/<run-id>.json            evidence waiting to be published later
 ```
 
+`git.repository_offset` is the path from the Git top level to the configured
+repository root (`""` at the root, `services/api` for a service-level
+configuration); diff paths in `changes.files_changed` are always Git-root
+relative.
+
 `run-id` is `<source>-<UTC yyyymmddThhmmssZ>-<6 hex>`, e.g.
 `local-20261028T100000Z-ab12cd`. `source` is `local`, `github` or `act`. A caller
 may pin it with `--run-id` (CI does not), and `sync` never creates a new one.
@@ -46,7 +51,7 @@ never leaves a truncated manifest or ledger.
     "event": "pr", "branch": "feature/update-axios",
     "commit_sha": "abc123…", "base_sha": "def456…", "head_sha": "abc123…",
     "base_ref": "main", "base_resolution": "merge_base_of_explicit_base_ref",
-    "pull_request": "12", "tag": null
+    "repository_offset": "", "pull_request": "12", "tag": null
   },
   "timestamps": {"started_at": "2026-10-28T10:00:00Z", "finished_at": "2026-10-28T10:01:30Z"},
   "changes": {
@@ -149,6 +154,9 @@ request.
 | `artifacts.preserve_reports: false` | reports are deleted **after** a fully resolved run; kept when anything is pending |
 | `artifacts.preserve_logs: false` | `execution.log` is deleted at the end |
 | `artifacts.create_manifest: false` | `manifest.json` is not written (checksums and decisions still are) |
+
+`trivy.exclude_paths` is recorded in `steps.trivy.parameters.exclude_paths` and
+passed to Trivy as `--skip-dirs` for each entry, relative to the scan target.
 
 ## Secret handling
 

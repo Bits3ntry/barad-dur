@@ -174,7 +174,16 @@ class ConfigTests(unittest.TestCase):
     def test_missing_configuration_file_is_an_explicit_error(self):
         with self.assertRaises(ConfigError) as caught:
             load_config(repo_root=self.repo, environ={})
-        self.assertIn("barad-security.yml", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn("no barad-security.yml found", message)
+        self.assertIn("barad-security.example.yml", message)   # tells you what to copy
+
+    def test_excluded_paths_are_relative_to_the_scan_target(self):
+        config = self.build(minimal(trivy={"exclude_paths": [".venv", "node_modules", "artifacts"]}))
+        self.assertEqual(config.exclude_paths(), [".venv", "node_modules", "artifacts"])
+        for value in ("/etc", "../outside"):
+            with self.assertRaises(ConfigError):
+                self.build(minimal(trivy={"exclude_paths": [value]}))
 
     def test_patterns_cannot_escape_the_repository(self):
         with self.assertRaises(ConfigError):

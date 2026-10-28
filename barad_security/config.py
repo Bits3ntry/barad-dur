@@ -111,6 +111,7 @@ DEFAULTS = {
         "scan_type": "fs",
         "scanners": ["vuln", "secret", "misconfig"],
         "severity": ["UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"],
+        "exclude_paths": [],
         "report_format": "json",
         "timeout_seconds": 900,
     },
@@ -321,6 +322,10 @@ class Config:
                 patterns.append(pattern)
         return patterns
 
+    def exclude_paths(self):
+        """Directories to skip, relative to the Trivy scan target."""
+        return list(self.get("trivy.exclude_paths", []) or [])
+
     def include_patterns(self):
         """Files worth an inventory check even when no built-in pattern matches."""
         return list(self.get("sbom.include_patterns", []) or [])
@@ -358,9 +363,16 @@ def find_config_file(repo_root, explicit=None):
         candidate = Path(repo_root) / name
         if candidate.is_file():
             return candidate.resolve()
+    example = None
+    for candidate in (Path(repo_root) / "config" / "barad-security.example.yml",
+                      Path(__file__).resolve().parents[1] / "config" / "barad-security.example.yml"):
+        if candidate.is_file():
+            example = candidate
+            break
+    hint = (f"copy {example} {Path(repo_root) / 'barad-security.yml'}"
+            if example else "create a barad-security.yml at the repository root")
     raise ConfigError(
-        "no barad-security.yml found in "
-        f"{Path(repo_root).resolve()}; pass --config or copy config/barad-security.example.yml"
+        f"no barad-security.yml found in {Path(repo_root).resolve()}; {hint}"
     )
 
 

@@ -108,6 +108,21 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn("configuration valid", result.stdout)
                 self.assertNotIn("error", result.stdout.lower())
 
+    def test_this_repository_scans_itself_with_the_container_engine(self):
+        result = run_cli(["validate-config", "--repository", str(REPO_ROOT)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = yaml.safe_load((REPO_ROOT / "barad-security.yml").read_text(encoding="utf-8"))
+        self.assertIn("docker", document["trivy"]["runner"])          # ${BARAD_TRIVY_RUNNER:-docker}
+        self.assertEqual(document["trivy"]["image"], "aquasec/trivy:0.76.1")
+        for excluded in (".venv", "artifacts", ".git", ".codegraph"):
+            self.assertIn(excluded, document["trivy"]["exclude_paths"])
+
+    def test_declared_version_matches_the_package(self):
+        import barad_security
+
+        declared = (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertEqual(declared, barad_security.__version__)
+
     def test_invalid_configuration_is_rejected_with_exit_code_two(self):
         with __import__("tempfile").TemporaryDirectory() as directory:
             path = Path(directory) / "barad-security.yml"

@@ -52,6 +52,9 @@ trivy:
     - CRITICAL
   report_format: json
   timeout_seconds: 900
+  # Directories to skip, relative to the scan target (tooling, vendored trees,
+  # generated evidence). Never point these at source you want inventoried.
+  exclude_paths: []
 
 sbom:
   enabled: true

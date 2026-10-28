@@ -36,7 +36,34 @@ configuration reads `${BARAD_TRIVY_RUNNER:-docker}`:
 BARAD_TRIVY_RUNNER=local ./bin/barad-security run --event local   # host binary
 ```
 
-## 2. Two commands
+## 2. Where the configuration lives
+
+`barad-security.yml` belongs to the repository that is **scanned**, never to the
+runner: the runner is one program that reads a different file per project. This
+repository therefore has its own `barad-security.yml` at its root (service
+`barad-dur-security-runner`), so you can exercise the workflow on the tool itself:
+
+```sh
+./bin/barad-security run --event pr --base-ref main     # scans this repository
+```
+
+Scanning another project means pointing `--repository` at *its* root, which must
+contain its own configuration:
+
+```sh
+./bin/barad-security run --repository /path/to/ovac-backend --event push
+```
+
+If the directory has no configuration, the CLI says exactly which example file to
+copy. In a monorepo you can also keep the configuration inside the service folder
+and pass that folder as `--repository`; the manifest records
+`git.repository_offset` and change attribution stays Git-root relative, so a
+sibling service is never blamed.
+
+`trivy.exclude_paths` keeps tooling out of the inventory (`.venv`, `node_modules`,
+generated evidence). Paths are relative to the scan target.
+
+## 3. Two commands
 
 ```sh
 ./bin/barad-security validate-config --repository examples/node
@@ -63,7 +90,7 @@ run local-20261028T100000Z-ab12cd: completed
 
 `--json` prints the whole manifest instead, which is what CI consumes.
 
-## 3. The five acceptance scenarios, by hand
+## 4. The five acceptance scenarios, by hand
 
 Use `examples/node` as the demonstration repository (it is a real Git-tracked
 project with a Node manifest, a lockfile and a Dockerfile). Copy it to a scratch
@@ -140,7 +167,7 @@ export BARAD_DUR_URL=http://127.0.0.1:8080
 
 `sync` republishes from the preserved evidence. It does **not** rescan.
 
-## 4. Git hooks
+## 5. Git hooks
 
 ```sh
 cp examples/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
@@ -152,7 +179,7 @@ The hook calls the same CLI. It never blocks a commit on findings; a technical
 failure is reported and only blocks when `BARAD_SECURITY_BLOCK_ON_ERROR=1`, so a
 broken scanner cannot stop ordinary work without an explicit decision.
 
-## 5. Exit codes
+## 6. Exit codes
 
 | Code | Meaning |
 |---|---|
@@ -165,7 +192,7 @@ A finding is never a technical failure, and `0 findings` is never presented as
 "clean": `security.scan_successful` reflects Trivy's exit code and the parsed
 report, not the absence of findings.
 
-## 6. Verified on this host / not verified
+## 7. Verified on this host / not verified
 
 Verified by the test suite and by hand on 2026-10-28 (macOS arm64, Python 3.13.7,
 Trivy 0.76.1 via Docker, Dependency-Track 5.2.1 and DefectDojo 3.4.202 available

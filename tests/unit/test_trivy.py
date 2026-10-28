@@ -87,6 +87,14 @@ class TrivyRunnerTests(unittest.TestCase):
             runner.preflight()
         self.assertIn("not found", str(caught.exception))
 
+    def test_excluded_paths_become_skip_dirs_flags(self):
+        outcome = self.runner(exclude_paths=[".venv", "node_modules"]).scan_json(self.out / "report.json")
+        argv = outcome.command
+        pairs = [(argv[index], argv[index + 1]) for index, value in enumerate(argv[:-1])
+                 if value == "--skip-dirs"]
+        self.assertEqual(pairs, [("--skip-dirs", ".venv"), ("--skip-dirs", "node_modules")])
+        self.assertEqual(outcome.parameters["exclude_paths"], [".venv", "node_modules"])
+
     def test_sbom_generation_never_enables_security_scanners(self):
         outcome = self.runner().generate_sbom(self.out / "sbom.cdx.json")
         self.assertEqual(outcome.status, "success")

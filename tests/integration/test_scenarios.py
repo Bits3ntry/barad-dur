@@ -362,6 +362,51 @@ class Scenario(ScenarioBase):
         self.assertEqual(manifest["security"]["target"], "services/api")
 
 
+class SubdirectoryRepositoryTests(unittest.TestCase):
+    """A configuration inside a service folder of a monorepo must still be correct.
+
+    Diff paths are Git-root relative, so scoping and version comparison need the
+    offset between the configured root and the Git top level. Without it, a change
+    to a sibling service would be attributed to this one.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.repo = init_repo(self.root / "repo")
+        write_file(self.repo, "services/api/package.json",
+                   json.dumps({"name": "api", "version": "1.0.0"}, indent=2) + "\n")
+        write_file(self.repo, "services/api/src/index.ts", "export const a = 1;\n")
+        write_file(self.repo, "services/web/package.json",
+                   json.dumps({"name": "web", "version": "2.0.0"}, indent=2) + "\n")
+        self.trivy = install_fake_trivy(self.root / "bin")
+        self.api = self.repo / "services" / "api"
+        self.config = configuration(self.api, self.trivy)
+        self.base = commit_all(self.repo, "monorepo")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_changes_are_attributed_from_the_git_root(self):
+        write_file(self.repo, "services/api/package.json",
+                   json.dumps({"name": "api", "version": "1.0.1"}, indent=2) + "\n")
+        write_file(self.repo, "services/web/src/app.tsx", "export const web = 1;\n")
+        commit_all(self.repo, "touch both services")
+        result = run_cli(["run", "--event", "push", "--base-ref", self.base,
+                          "--repository", str(self.api), "--config", str(self.config), "--json"],
+                         cwd=self.repo)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads(result.stdout)
+        self.assertEqual(manifest["service"], "OVAC-Backend")
+        self.assertEqual(manifest["git"]["repository_offset"], "services/api")
+        self.assertEqual(manifest["changes"]["files_changed"], ["services/api/package.json"])
+        self.assertEqual(manifest["changes"]["files_ignored"], 1)
+        # Version comparison reads the file at the base commit from the Git root.
+        self.assertTrue(manifest["changes"]["version_changed"])
+        self.assertEqual(manifest["changes"]["previous_version"], "1.0.0")
+        self.assertEqual(manifest["changes"]["current_version"], "1.0.1")
+
+
 class ArtifactContractTests(ScenarioBase):
     def test_manifest_carries_every_required_field(self):
         manifest = self.run_once("--event", "push", "--base-ref", self.first)

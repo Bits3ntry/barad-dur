@@ -150,8 +150,13 @@ def _git_tag_version(project_root):
     return result.stdout.strip().lstrip("v")
 
 
-def resolve_version_at_commit(config, commit, *, environ=None):
-    """Read the same version declaration as it existed at `commit`."""
+def resolve_version_at_commit(config, commit, *, environ=None, git_offset=""):
+    """Read the same version declaration as it existed at `commit`.
+
+    `git_offset` is the path from the Git top level to the configured repository
+    root; Git wants paths from the top level, the configuration speaks from its
+    own root.
+    """
     if not commit:
         return VersionInfo(value=None, source="unresolved", problems=[{"code": "base_reference_unavailable"}])
     env = environ if environ is not None else os.environ
@@ -167,8 +172,9 @@ def resolve_version_at_commit(config, commit, *, environ=None):
     path = current.path or version_config.get("path")
     if not path:
         return VersionInfo(value=None, source="unresolved", problems=[{"code": "version_path_unknown"}])
+    git_path = f"{git_offset}/{path}" if git_offset else path
     result = subprocess.run(
-        ["git", "-C", str(config.repo_root), "show", f"{commit}:{path}"],
+        ["git", "-C", str(config.repo_root), "show", f"{commit}:{git_path}"],
         capture_output=True,
         text=True,
         timeout=60,

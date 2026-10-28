@@ -164,12 +164,18 @@ def parse_porcelain(output):
     return changes
 
 
-def _scope_prefixes(config):
-    prefixes = []
+def _scope_prefixes(config, offset=""):
+    """Service scope as Git-root-relative prefixes.
+
+    `offset` is the path from the Git top level to the configured repository
+    root, so the same configuration works whether it sits at the repository root
+    or in a service subdirectory of a monorepo.
+    """
+    base = f"{offset}/" if offset else ""
     project_path = str(config.get("project.path", ".") or ".")
-    prefixes.append("" if project_path in (".", "./") else project_path.strip("/") + "/")
+    prefixes = [base if project_path in (".", "./") else base + project_path.strip("/") + "/"]
     for related in config.get("project.related_paths", []) or []:
-        prefixes.append(related.strip("/") + "/")
+        prefixes.append(base + related.strip("/") + "/")
     return prefixes
 
 
@@ -215,7 +221,7 @@ def detect_changes(config, context, version_info=None):
     dependency_patterns = config.dependency_patterns()
     build_patterns = config.build_patterns()
     include_patterns = config.include_patterns()
-    prefixes = _scope_prefixes(config)
+    prefixes = _scope_prefixes(config, context.repository_offset)
     version_path = (version_info.path if version_info and version_info.path else None)
     if not version_path:
         declared = config.version_sources().get("path")
@@ -245,11 +251,13 @@ def detect_changes(config, context, version_info=None):
         report.version_file_changed |= is_version
         report.code_changed |= category == "code"
 
-    _compare_versions(config, report, version_info, base_sha=context.base_sha if report.base_available else None)
+    _compare_versions(config, report, version_info,
+                      base_sha=context.base_sha if report.base_available else None,
+                      offset=context.repository_offset)
     return report
 
 
-def _compare_versions(config, report, version_info, base_sha):
+def _compare_versions(config, report, version_info, base_sha, offset=""):
     current = version_info or resolve_version(config)
     report.current_version = current.value
     if not current.value:
@@ -259,7 +267,7 @@ def _compare_versions(config, report, version_info, base_sha):
     if not base_sha:
         report.version_comparison = "base_reference_unavailable"
         return
-    previous = resolve_version_at_commit(config, base_sha)
+    previous = resolve_version_at_commit(config, base_sha, git_offset=offset)
     report.previous_version = previous.value
     if not previous.value:
         report.version_comparison = "previous_unresolved"

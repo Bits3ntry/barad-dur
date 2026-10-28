@@ -88,6 +88,11 @@
           "uniqueItems": true,
           "items": {"enum": ["UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"]}
         },
+        "exclude_paths": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {"$ref": "#/definitions/relpath"}
+        },
         "report_format": {"enum": ["json"]},
         "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 7200}
       }

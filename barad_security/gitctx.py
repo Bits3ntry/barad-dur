@@ -64,6 +64,9 @@ class GitContext:
     tag: str = None
     is_merge: bool = False
     root_commit: bool = False
+    # Relative path from the Git top level to the configured repository root
+    # ("" when they are the same directory). Diff paths are Git-root relative.
+    repository_offset: str = ""
     problems: list = field(default_factory=list)
 
     def public(self):
@@ -76,6 +79,7 @@ class GitContext:
             "head_sha": self.head_sha,
             "base_ref": self.base_ref,
             "base_resolution": self.base_resolution,
+            "repository_offset": self.repository_offset,
             "pull_request": self.pull_request,
             "tag": self.tag,
         }
@@ -180,6 +184,11 @@ def detect_git_context(repo_root, *, event=None, base_ref=None, environ=None):
 
     context.available = True
     context.repository_root = Path(out.strip())
+    try:
+        offset = Path(repo).resolve().relative_to(context.repository_root.resolve())
+        context.repository_offset = "" if str(offset) == "." else offset.as_posix()
+    except ValueError:  # the Git top level is not an ancestor; keep Git-root scoping
+        context.repository_offset = ""
 
     payload, payload_source = _load_event_payload(env)
     inferred_event, env_source = event_from_environment(env)

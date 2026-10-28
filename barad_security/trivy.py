@@ -103,6 +103,7 @@ class TrivyRunner:
         self.cache_enabled = bool(config.get("trivy.cache_enabled", True))
         self.cache_dir = config.get("trivy.cache_dir", ".barad-dur/cache/trivy")
         self.scan_type = config.get("trivy.scan_type", "fs")
+        self.exclude_paths = config.exclude_paths()
         self._version = None
 
     # -- target resolution -------------------------------------------------
@@ -123,6 +124,9 @@ class TrivyRunner:
 
     def _common_flags(self, *, format_name, include_scanners=True):
         flags = ["--format", format_name, "--no-progress", "--timeout", f"{self.timeout}s"]
+        for path in self.exclude_paths:
+            # Relative to the scan target, which is what Trivy reasons about.
+            flags += ["--skip-dirs", path]
         if include_scanners:
             flags += ["--scanners", ",".join(self.scanners)]
             if "vuln" in self.scanners:
@@ -275,6 +279,7 @@ class TrivyRunner:
                 "format": "json",
                 "exit_code_policy": "0 (findings never fail the run)",
                 "cache_enabled": self.cache_enabled,
+                "exclude_paths": list(self.exclude_paths),
                 "timeout_seconds": self.timeout,
             },
             stdout_tail=_tail(stdout),
