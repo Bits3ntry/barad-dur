@@ -1,0 +1,19 @@
+# Designated isolated integration-test project. Never point at production names.
+version: 1
+project:
+  name: barad-cli-poc-20261028
+  version:
+    source: pyproject
+integrations:
+  dependency_track:
+    enabled: true
+    endpoint: http://127.0.0.1:18080
+    auto_create: true
+    wait_timeout_seconds: 30
+  defectdojo:
+    enabled: true
+    endpoint: http://127.0.0.1:18082
+    product_name: barad-cli-poc-20261028
+    product_type_name: Barad CLI POC
+    engagement_name: barad-cli-poc-20261028 isolated
+    auto_create_context: true
