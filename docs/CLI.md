@@ -64,7 +64,7 @@ integrations:
 
 Supported `project.version.source`: `auto`, `package-json`, `pyproject`, `file`, `literal`, `env`, `git-tag` (same semantics as the existing runner). `scan.target` can select a relative subdirectory or JAR; `scan.target_type: image` selects an image reference. `scan.runner: local` uses an installed Trivy executable. Invalid keys, path escapes, direct secret fields and malformed types fail before scanning. The configured `output.directory` and CLI `--output` must stay inside the scan root and cannot overlap `.barad/state`.
 
-Credentials are **environment variables**, never YAML values: `DTRACK_API_KEY`, `DOJO_TOKEN`; endpoints default to `DTRACK_URL`/`DOJO_URL` when set, overriding YAML `endpoint`. `BARAD_DEFAULT_BRANCH` defaults to `main`. The optional Barad API uses `BARAD_DUR_URL` and `BARAD_DUR_TOKEN` only when actually configured. The requested `.env.example` could not be created because the environment denied that path; the variable names are listed here pending an approved safer plan. Do not commit populated `.env` or `.secrets`.
+Credentials are **environment variables**, never YAML values: `DTRACK_API_KEY`, `DOJO_TOKEN`; endpoints default to `DTRACK_URL`/`DOJO_URL` when set, overriding YAML `endpoint`. `BARAD_DEFAULT_BRANCH` defaults to `main`. The optional Barad API uses `BARAD_DUR_URL` and `BARAD_DUR_TOKEN` only when actually configured. The environment denied `.env.example`; the user chose documentation-only variable names, so no template file is delivered. Do not commit populated `.env` or `.secrets`.
 
 ## Inventory and publication policy
 
