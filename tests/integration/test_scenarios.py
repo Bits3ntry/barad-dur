@@ -79,9 +79,9 @@ class ScenarioBase(unittest.TestCase):
     def run_once(self, *args, env=None, expect=0):
         return self.manifest(self.run_cli("run", *args, env=env, expect=expect))
 
-    def latest_manifest(self):
-        runs = sorted((self.repo / ".barad-dur" / "security" / "runs").iterdir())
-        return read_json(runs[-1] / "manifest.json"), runs[-1]
+    def run_dir(self, manifest):
+        """Resolve the run directory from its id, never from directory ordering."""
+        return self.repo / ".barad-dur" / "security" / "runs" / manifest["run_id"]
 
 class Scenario(ScenarioBase):
     """The acceptance table, one test per row."""
@@ -97,7 +97,7 @@ class Scenario(ScenarioBase):
         self.assertNotIn("sbom", manifest["steps"])
         self.assertFalse(manifest["decisions"]["generate_sbom"])
         self.assertEqual(manifest["decisions"]["sbom_reason"], "no_inventory_change")
-        _manifest, run_dir = self.latest_manifest()
+        run_dir = self.run_dir(manifest)
         self.assertTrue((run_dir / "trivy-report.json").is_file())
         self.assertFalse((run_dir / "sbom.cdx.json").exists())
         self.assertTrue((run_dir / "decisions.json").is_file())
@@ -116,7 +116,7 @@ class Scenario(ScenarioBase):
         self.assertEqual(manifest["git"]["commit_sha"], head)
         self.assertEqual(manifest["git"]["base_sha"], self.first)
         self.assertEqual(manifest["steps"]["sbom"]["status"], "SUCCESS")
-        _manifest, run_dir = self.latest_manifest()
+        run_dir = self.run_dir(manifest)
         self.assertTrue((run_dir / "trivy-report.json").is_file())
         self.assertTrue((run_dir / "sbom.cdx.json").is_file())
         checksums = (run_dir / "checksums.sha256").read_text().splitlines()
@@ -227,8 +227,7 @@ class Scenario(ScenarioBase):
         self.assertFalse(manifest["result"]["publication_successful"])
         self.assertEqual(manifest["steps"]["barad_dur"]["status"], "PENDING")
         self.assertEqual(manifest["steps"]["barad_dur"]["reason"], "unreachable")
-        run_dir = Path(manifest["steps"]["trivy"]["artifact"] and
-                       sorted((self.repo / ".barad-dur" / "security" / "runs").iterdir())[-1])
+        run_dir = self.run_dir(manifest)
         self.assertTrue((run_dir / "trivy-report.json").is_file())
         self.assertTrue((self.repo / ".barad-dur" / "security" / "pending"
                          / f"{manifest['run_id']}.json").is_file())
@@ -258,7 +257,7 @@ class Scenario(ScenarioBase):
         self.assertEqual(manifest["steps"]["defectdojo"]["status"], "PENDING")
         self.assertEqual(manifest["result"]["status"], "partial")
         self.assertTrue(manifest["result"]["scan_successful"])
-        run_dir = sorted((self.repo / ".barad-dur" / "security" / "runs").iterdir())[-1]
+        run_dir = self.run_dir(manifest)
         self.assertTrue((run_dir / "trivy-report.json").is_file())
         self.assertTrue((run_dir / "publication.json").is_file())
 
@@ -324,7 +323,7 @@ class Scenario(ScenarioBase):
         self.assertEqual(manifest["steps"]["barad_dur"]["reason"], "not_configured")
         message = json.dumps(manifest["steps"]["barad_dur"])
         self.assertIn("BARAD_DUR_TOKEN", message)          # names the variable
-        run_dir = sorted((self.repo / ".barad-dur" / "security" / "runs").iterdir())[-1]
+        run_dir = self.run_dir(manifest)
         for path in run_dir.iterdir():
             if path.is_file():
                 self.assertNotIn("token-must-not-leak", path.read_text(errors="replace"),
@@ -386,7 +385,7 @@ class ArtifactContractTests(ScenarioBase):
 
     def test_secret_evidence_is_redacted_outbound_but_kept_locally(self):
         manifest = self.run_once("--event", "push", "--base-ref", self.first)
-        run_dir = sorted((self.repo / ".barad-dur" / "security" / "runs").iterdir())[-1]
+        run_dir = self.run_dir(manifest)
         raw = (run_dir / "trivy-report.json").read_text()
         sanitized = (run_dir / "trivy-report.sanitized.json").read_text()
         self.assertIn("AKIAIOSFODNN7EXAMPLE", raw)
@@ -396,7 +395,7 @@ class ArtifactContractTests(ScenarioBase):
 
     def test_execution_log_is_json_lines_with_the_run_id(self):
         manifest = self.run_once("--event", "push", "--base-ref", self.first)
-        run_dir = sorted((self.repo / ".barad-dur" / "security" / "runs").iterdir())[-1]
+        run_dir = self.run_dir(manifest)
         lines = (run_dir / "execution.log").read_text().splitlines()
         self.assertGreater(len(lines), 3)
         for line in lines:
