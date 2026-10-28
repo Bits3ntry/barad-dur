@@ -15,7 +15,7 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s cli/tests -v
 ```
 
-Only three public subcommands exist: `scan`, `run`, `health`. The older `./bin/barad-security` remains available for existing CI/hooks and has its own config and commands; it is not the new CLI. The installable wheel includes `barad_security` and its schema. No Barad server is required.
+Only three public subcommands exist: `scan`, `run`, `health`. The older `./bin/barad-security` entry point is legacy scaffolding for local hooks only; CI no longer calls it, and it is not the new CLI. The installable wheel includes `barad_security` and its schema. No Barad server is required.
 
 ## Target and evidence
 
@@ -87,6 +87,29 @@ The isolated POC config is `cli/tests/fixtures/representative/.barad.yml`; never
 | 2 | Invalid arguments or configuration; scanning did not start. |
 | 4 | Partial synchronization or degraded optional health. Artifacts remain available. |
 
-## CI adapter boundary and limits
+## CI adapter: `.github/workflows/security.yml`
 
-A future GitHub Action should install this wheel, call `barad scan` on untrusted PRs and `barad run` only on trusted default-branch/release jobs with credentials, then upload the manifest and sanitized report as evidence. It must preserve local/remote fingerprint distinction and async processing states. Existing `.github/workflows/security.yml` still calls `barad_security`; it was not silently migrated. No dashboard, AI worker, MCP replacement or new server API was implemented. The Compose stack remains a loopback-only POC without TLS/SSO, and the local-only fixture scan could not refresh its vulnerability DB because `mirror.gcr.io` DNS timed out; a repository-root scan with a warm cache was validated instead.
+`.github/workflows/security.yml` now installs this wheel (`pip install .`) and calls `barad` directly. It keeps two jobs and two trust boundaries.
+
+| Job | Trigger | Command | Credentials |
+|---|---|---|---|
+| `scan` | every trigger, including pull requests and forks | `barad scan . --config <config-file>` | none; `barad scan` does not read integrations |
+| `publish` | release event, or the repository default branch only | `barad run . --config <config-file>` | `DTRACK_URL`, `DTRACK_API_KEY`, `DOJO_URL`, `DOJO_TOKEN`, inside the publish step only |
+
+Both jobs read `config/ci.barad.yml`, which enables Dependency-Track and DefectDojo while holding no credential and no endpoint: the environment supplies both. The workflow passes the repository root positionally (`barad run . --config config/ci.barad.yml`) because a config file under `config/` would otherwise be taken as the project root and scan only that directory.
+
+`barad run` **rescans** inside the publish job; it does not resume the scan job's artifacts. The publish job therefore has its own evidence, and neither job uploads the raw `security.json` because secret matches can contain credential material. Artifacts keep `manifest.json`, `security.sanitized.json`, `sbom.cdx.json` and `checksums.sha256` per job, plus `publication.json` for publish.
+
+When any publish credential is absent, the publish step prints a GitHub notice naming the missing variables and exits 0 without invoking `barad`: a missing optional service is visible and skips only publication. A publication that does run and fails fails the job — there is no `|| true`. Because both integrations are enabled, the gate requires all four variables; a deployment that publishes to only one service must supply placeholder values for the other, or override `config-file` and the gate together.
+
+Reusable-workflow changes (`workflow_call` is preserved):
+
+| Input or secret | Change |
+|---|---|
+| `config-file` | Default changed to `config/ci.barad.yml`. |
+| `python-version` | Unchanged. |
+| `trivy-runner` | Removed; `scan.runner` in the configuration file selects Docker or a local Trivy. |
+| `BARAD_DUR_URL`, `BARAD_DUR_TOKEN` | Removed; the CLI has no Barad API synchronizer, so declaring them promised publication that never ran. |
+| `DTRACK_URL`, `DTRACK_API_KEY`, `DOJO_URL`, `DOJO_TOKEN` | Kept, all optional. |
+
+Local verification of this workflow is structural and behavioral only (`python -m unittest discover -s cli/tests -p test_ci_workflow.py`); GitHub-hosted execution was not available here, so a green hosted run is still unproven. No dashboard, AI worker, MCP replacement or new server API was implemented. The Compose stack remains a loopback-only POC without TLS/SSO, and the local-only fixture scan could not refresh its vulnerability DB because `mirror.gcr.io` DNS timed out; a repository-root scan with a warm cache was validated instead.

@@ -1,0 +1,45 @@
+# config/ci.barad.yml — the explicit configuration used by
+# `.github/workflows/security.yml`.
+#
+# Two jobs read this file:
+#   * `scan`   — credential-free; `barad scan` ignores integrations entirely.
+#   * `publish` — trusted default-branch/release refs only; `barad run` rescans
+#     and then synchronizes the enabled integrations.
+#
+# No secret value lives here. Each integration names the environment variable
+# that holds its credential, and the endpoint comes from the environment too
+# (`DTRACK_URL`, `DOJO_URL`), so no internal hostname is committed.
+#
+# The workflow passes the repository root positionally (`barad run . --config
+# config/ci.barad.yml`) on purpose: a config file under `config/` would
+# otherwise be treated as the project root. Keep `scan.target` unset.
+version: 1
+
+project:
+  # Explicit publication identity for CI; override with the `config-file` input
+  # when a caller needs a different project name.
+  name: barad-dur
+
+scan:
+  target_type: fs
+  runner: docker
+  image: aquasec/trivy:0.76.1
+  scanners: [vuln, secret, misconfig]
+
+output:
+  directory: .barad/reports
+
+integrations:
+  dependency_track:
+    enabled: true
+    endpoint_env: DTRACK_URL
+    token_env: DTRACK_API_KEY
+    auto_create: true
+    wait_timeout_seconds: 120
+  defectdojo:
+    enabled: true
+    endpoint_env: DOJO_URL
+    token_env: DOJO_TOKEN
+    auto_create_context: true
+    product_type_name: Barad CI
+    engagement_name: barad-dur CI

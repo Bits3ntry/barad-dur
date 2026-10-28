@@ -1,38 +1,47 @@
-# Reusable BARAD-DÛR security workflow.
+# Reusable BARAD-DÛR security workflow (installable `barad` CLI).
 #
-# The GitHub-specific part only checks out the repository, prepares Python,
-# passes the Git context, runs the SAME runner as the local CLI and preserves the
-# evidence. No security logic lives here.
+# Two jobs, two trust boundaries:
 #
-# Secrets are never available to the scanning job, so a pull request from a fork,
-# or any untrusted code, cannot read them. Publication is a separate trusted job
-# that downloads the evidence and runs `barad-security sync --pending`, which
-# reuses the preserved run instead of scanning again.
+#   scan     — credential-free. Installs the `barad` wheel and runs `barad scan`.
+#              Pull requests, forks and internal branches all land here, so no
+#              secret is reachable from code that could change the runner.
+#   publish  — trusted default-branch and release refs only. `barad run` RESCANS
+#              inside this job and then synchronizes the enabled integrations;
+#              it does not resume the artifacts of the scan job. Credentials
+#              exist only in that single publish step, and a failed publication
+#              fails the job instead of being masked.
+#
+# Neither job uploads the raw Trivy report: `security.json` embeds secret
+# matches. Only the manifest, the sanitized report, the SBOM and the checksums
+# are preserved, per job, so both boundaries keep their own evidence.
+#
+# Changes from the legacy runner workflow:
+#   * `python -m barad_security run/sync`, `--pending` reuse and the
+#     `requirements.txt` install are gone; the wheel is installed with
+#     `pip install .` and exposes the `barad` entry point.
+#   * the `trivy-runner` input is gone — the runner comes from
+#     `scan.runner` in the configuration file.
+#   * `BARAD_DUR_URL` / `BARAD_DUR_TOKEN` secrets are gone: the CLI has no Barad
+#     API synchronizer, so declaring them promised publication that never ran.
+#   * `config-file` now defaults to `config/ci.barad.yml`.
 name: security
 
 on:
   workflow_call:
     inputs:
       config-file:
-        description: Path to the configuration file, relative to the repository root.
+        description: Path to the CLI configuration file, relative to the repository root.
         type: string
         required: false
-        default: barad-security.yml
-      trivy-runner:
-        description: Trivy invocation mode for this execution surface.
-        type: string
-        required: false
-        default: docker
+        default: config/ci.barad.yml
       python-version:
-        description: Python version used to run the CLI.
+        description: Python version used to install and run the CLI.
         type: string
         required: false
         default: "3.12"
     secrets:
-      BARAD_DUR_URL:
-        required: false
-      BARAD_DUR_TOKEN:
-        required: false
+      # Read by the publish step only; all are optional so a caller without
+      # remote services still gets a credential-free scan.
       DTRACK_URL:
         required: false
       DTRACK_API_KEY:
@@ -57,11 +66,11 @@ permissions:
 
 jobs:
   scan:
-    name: scan (no secrets)
+    name: scan (no credentials)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Check out full history (base reference needs every PR commit)
+      - name: Check out full history (the base reference needs PR commits)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -72,69 +81,54 @@ jobs:
         with:
           python-version: ${{ inputs.python-version || '3.12' }}
 
-      - name: Install runner dependencies
-        run: python -m pip install --disable-pip-version-check --no-input -r requirements.txt
+      - name: Install the barad CLI
+        run: python -m pip install --disable-pip-version-check --no-input .
 
-      - name: Trivy availability
-        run: |
-          if [ "$BARAD_TRIVY_RUNNER" = "docker" ]; then
-            docker run --rm "$TRIVY_IMAGE" --version
-          else
-            trivy --version
-          fi
+      # No credential variable exists in this job's environment or in the
+      # workflow configuration it reads. Exit code 1 (scan failed) keeps failing
+      # the job; nothing about the scan is masked.
+      - name: Run barad scan
         env:
-          BARAD_TRIVY_RUNNER: ${{ inputs.trivy-runner || 'docker' }}
-          TRIVY_IMAGE: aquasec/trivy:0.76.1
-
-      # Credential variables are intentionally absent from this step's environment.
-      - name: Run BARAD-DÛR security runner
-        env:
-          BARAD_TRIVY_RUNNER: ${{ inputs.trivy-runner || 'docker' }}
-          BARAD_SECURITY_CONFIG: ${{ inputs.config-file || 'barad-security.yml' }}
+          BARAD_CONFIG: ${{ inputs.config-file || 'config/ci.barad.yml' }}
         run: |
-          case "$GITHUB_EVENT_NAME" in
-            pull_request|pull_request_target) event=pr ;;
-            push) event=push ;;
-            release) event=release ;;
-            *) event=dispatch ;;
-          esac
-          python -m barad_security run \
-            --event "$event" \
-            --config "$BARAD_SECURITY_CONFIG" \
-            --repository . \
-            --json > security-run.json
-          status=$?
-          cat security-run.json
-          exit $status
+          set -uo pipefail
+          barad scan . --config "$BARAD_CONFIG"
 
-      - name: Preserve evidence
+      - name: Preserve sanitized scan evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: barad-security-evidence-${{ github.run_id }}-${{ github.job }}
+          name: barad-scan-evidence-${{ github.run_id }}
           path: |
-            .barad-dur/security
-            security-run.json
+            .barad/reports/**/manifest.json
+            .barad/reports/**/security.sanitized.json
+            .barad/reports/**/sbom.cdx.json
+            .barad/reports/**/checksums.sha256
           if-no-files-found: warn
           retention-days: 30
 
   publish:
-    name: publish evidence
+    name: publish (trusted refs only)
     needs: scan
-    # Trusted contexts only: never a pull request from a fork, including a
-    # `pull_request_target` caller (its head repository is the fork as well).
+    # Trusted contexts only. A pull request from a fork, an internal branch, or
+    # `pull_request_target` never reaches this job; the only trusted surfaces are
+    # a release event and the repository default branch.
     if: |
-      always() && needs.scan.result != 'cancelled' && !(
-        (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
-        && github.event.pull_request.head.repo.fork
+      always() && needs.scan.result == 'success' && (
+        github.event_name == 'release' ||
+        (
+          github.event_name != 'pull_request' &&
+          github.event_name != 'pull_request_target' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
-      - name: Check out runner code
+      - name: Check out the trusted ref
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
@@ -142,28 +136,51 @@ jobs:
         with:
           python-version: ${{ inputs.python-version || '3.12' }}
 
-      - name: Install runner dependencies
-        run: python -m pip install --disable-pip-version-check --no-input -r requirements.txt
+      - name: Install the barad CLI
+        run: python -m pip install --disable-pip-version-check --no-input .
 
-      - name: Restore preserved evidence
-        uses: actions/download-artifact@v4
-        with:
-          name: barad-security-evidence-${{ github.run_id }}-${{ github.job }}
-          path: .
-
-      - name: Publish pending evidence (no rescan)
+      # The only step that can see credentials. Missing credentials are reported
+      # as a visible notice and skip publication; they never fake a success for a
+      # publication that was attempted, and they never fail the scan-only path.
+      - name: Publish (barad run, rescans with credentials)
         env:
-          CONFIG_FILE: ${{ inputs.config-file || 'barad-security.yml' }}
-          BARAD_DUR_URL: ${{ secrets.BARAD_DUR_URL }}
-          BARAD_DUR_TOKEN: ${{ secrets.BARAD_DUR_TOKEN }}
+          BARAD_CONFIG: ${{ inputs.config-file || 'config/ci.barad.yml' }}
           DTRACK_URL: ${{ secrets.DTRACK_URL }}
           DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
           DOJO_URL: ${{ secrets.DOJO_URL }}
           DOJO_TOKEN: ${{ secrets.DOJO_TOKEN }}
         run: |
-          if [ ! -d .barad-dur/security/runs ]; then
-            echo "no preserved run to publish; the scan job produced no evidence"
+          set -uo pipefail
+          missing=""
+          for name in DTRACK_URL DTRACK_API_KEY DOJO_URL DOJO_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice title=Publication skipped::Publish credentials are not configured:$missing"
+            echo "No publication was attempted; the credential-free scan evidence is preserved."
             exit 0
           fi
-          python -m barad_security sync --pending --config "$CONFIG_FILE" --repository . || true
-          # Publication failures are reported in publication.json and never lose the analysis.
+          set +e
+          barad run . --config "$BARAD_CONFIG" --json > publication.json
+          status=$?
+          set -e
+          if [ -s publication.json ]; then
+            cat publication.json
+          fi
+          exit "$status"
+
+      - name: Preserve sanitized publication evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: barad-publish-evidence-${{ github.run_id }}
+          path: |
+            .barad/reports/**/manifest.json
+            .barad/reports/**/security.sanitized.json
+            .barad/reports/**/sbom.cdx.json
+            .barad/reports/**/checksums.sha256
+            publication.json
+          if-no-files-found: warn
+          retention-days: 30
