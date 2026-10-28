@@ -61,6 +61,9 @@ def write_file(repo, relative, content):
 def run_cli(args, *, cwd=None, env=None, timeout=120):
     """Run the runner through its public entry point, never through internals."""
     full_env = dict(os.environ)
+    # The package must be importable from any working directory, exactly like bin/barad-security.
+    full_env["PYTHONPATH"] = str(REPO_ROOT) + (
+        os.pathsep + full_env["PYTHONPATH"] if full_env.get("PYTHONPATH") else "")
     full_env.pop("DTRACK_API_KEY", None)
     full_env.pop("DOJO_TOKEN", None)
     full_env.pop("BARAD_DUR_TOKEN", None)

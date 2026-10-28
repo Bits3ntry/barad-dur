@@ -203,6 +203,16 @@ def _expand(node, environ, errors, path=()):
             return value
 
         expanded = _ENV_PATTERN.sub(replace, node)
+        # A value that is exactly one reference keeps its YAML type, so
+        # `enabled: ${DTRACK_ENABLED:-false}` is a boolean, not the string "false".
+        if _ENV_PATTERN.fullmatch(node) and expanded != node:
+            lowered = expanded.strip().lower()
+            if lowered in ("true", "false"):
+                return lowered == "true"
+            if lowered in ("null", "~", ""):
+                return None
+            if re.fullmatch(r"-?\d+", expanded.strip()):
+                return int(expanded.strip())
         return expanded
     if isinstance(node, dict):
         return {key: _expand(value, environ, errors, path + (str(key),)) for key, value in node.items()}
@@ -268,15 +278,16 @@ class Config:
         return self.path(self.get("artifacts.directory", ".barad-dur/security"))
 
     def dependency_patterns(self):
+        """Manifests and lockfiles only; build files are classified separately."""
         patterns = list(DEFAULT_DEPENDENCY_PATTERNS)
-        for pattern in self.get("sbom.include_patterns", []) or []:
-            stripped = pattern[len("**/"):] if pattern.startswith("**/") else pattern
-            if stripped not in patterns:
-                patterns.append(stripped)
         for pattern in self.get("detection.dependency_patterns", []) or []:
             if pattern not in patterns:
                 patterns.append(pattern)
         return patterns
+
+    def include_patterns(self):
+        """Files worth an inventory check even when no built-in pattern matches."""
+        return list(self.get("sbom.include_patterns", []) or [])
 
     def build_patterns(self):
         patterns = list(DEFAULT_BUILD_PATTERNS)

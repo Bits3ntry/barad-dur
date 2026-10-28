@@ -15,6 +15,8 @@ LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
 
 REDACTED = "[REDACTED]"
 
+_DEFAULT_STREAM = object()
+
 # Header-shaped secrets that may appear in a stringified request or error.
 _SENSITIVE_HEADERS = (
     "x-api-key",
@@ -80,10 +82,10 @@ def utc_timestamp(moment=None):
 class Logger:
     """Append-only structured logger bound to one run id."""
 
-    def __init__(self, run_id, *, path=None, stream=None, level="INFO", redactor=None):
+    def __init__(self, run_id, *, path=None, stream=_DEFAULT_STREAM, level="INFO", redactor=None):
         self.run_id = run_id
         self.path = path
-        self.stream = stream if stream is not None else sys.stderr
+        self.stream = sys.stderr if stream is _DEFAULT_STREAM else stream
         self.level = level if level in LEVELS else "INFO"
         self.redactor = redactor or Redactor()
         self._lock = threading.Lock()

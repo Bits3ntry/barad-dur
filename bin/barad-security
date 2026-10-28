@@ -1,0 +1,10 @@
+#!/bin/sh
+# Portable launcher: works from a checkout without installing the package.
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+if [ -x "$here/.venv/bin/python" ]; then
+  python="$here/.venv/bin/python"
+else
+  python=${PYTHON:-python3}
+fi
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python" -m barad_security "$@"

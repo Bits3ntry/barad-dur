@@ -87,6 +87,14 @@ class ConfigTests(unittest.TestCase):
         config = self.build(minimal(), environ={})
         self.assertIsNone(config.get("detection.base_ref"))
 
+    def test_environment_values_keep_their_yaml_type(self):
+        document = minimal(integrations={"dependency_track": {"enabled": "${DTRACK_ON:-false}"}})
+        self.assertIs(self.build(document, environ={}).get("integrations.dependency_track.enabled"), False)
+        self.assertIs(self.build(document, environ={"DTRACK_ON": "true"}).get(
+            "integrations.dependency_track.enabled"), True)
+        document = minimal(trivy={"timeout_seconds": "${SEC_TIMEOUT:-900}"})
+        self.assertEqual(self.build(document, environ={}).get("trivy.timeout_seconds"), 900)
+
     def test_credentials_are_referenced_by_name_only(self):
         config = self.build(minimal())
         document = config.public()
