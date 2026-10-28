@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ..errors import PublishError
 from ..http import HttpClient, validate_endpoint
+from ..logs import Redactor
 
 PUBLISHED = "PUBLISHED"
 DUPLICATE = "DUPLICATE"
@@ -40,6 +41,7 @@ class PublishContext:
     required: bool = False
     idempotency_key: str = None
     retry_of: str = None
+    known_external_ids: dict = field(default_factory=dict)  # from the idempotency ledger
 
     def artifact(self, name):
         path = self.artifacts.get(name)
@@ -111,6 +113,18 @@ class Publisher:
             raise PublishError(str(error), service=self.service) from None
         return url, token_value, token_name
 
+    def redactor(self):
+        """Known secret values of this integration, so messages can be scrubbed."""
+        values = []
+        for key in ("token_env", "endpoint_env"):
+            name = self.settings().get(key)
+            if name:
+                values.append(self.config.env(name) or "")
+        return Redactor(values)
+
+    def redact(self, text):
+        return self.redactor().text(text)
+
     def client(self):
         settings = self.settings()
         return HttpClient(
@@ -121,7 +135,8 @@ class Publisher:
         )
 
     def fail(self, reason, error=None, attempts=None, detail=None):
-        message = str(error) if error else reason
+        # An external system may echo a credential in its error body; scrub it.
+        message = self.redact(str(error) if error else reason)
         self.logger.warning(self.log_step, "publication_failed",
                             {"service": self.service, "reason": reason, "message": message})
         return PublicationResult(
