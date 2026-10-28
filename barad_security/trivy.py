@@ -172,13 +172,17 @@ class TrivyRunner:
                 "--output", container_output, self.scan_target(),
             ]
         else:
-            mount_target = self.scan_root()
-            if not mount_target.is_dir():
-                raise ScannerError(f"scan target is not a directory: {self.scan_target()}")
+            scan_path = self.scan_root()
+            if scan_path.is_dir():
+                mount_target, container_target = scan_path, "/scan"
+            elif scan_path.is_file() and scan_path.suffix.lower() == ".jar":
+                mount_target, container_target = scan_path.parent, f"/scan/{scan_path.name}"
+            else:
+                raise ScannerError(f"scan target is not a directory or JAR: {self.scan_target()}")
             # The scan target is read-only; the evidence directory is writable.
             docker_options += ["-v", f"{mount_target}:/scan:ro", "-v", f"{output_dir}:/out"]
             trivy_arguments = [
-                "fs", *flags, "--exit-code", "0", "--output", container_output, "/scan",
+                "fs", *flags, "--exit-code", "0", "--output", container_output, container_target,
             ]
         if self.cache_enabled:
             cache = self.cache_path()

@@ -1,0 +1,11 @@
+__pycache__/
+!.env.example
+.env
+.env.*
+.pytest_cache/
+.secrets/
+.venv/
+*.pyc
+artifacts/
+backups/
+.barad/

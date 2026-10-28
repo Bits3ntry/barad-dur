@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "barad"
+version = "0.1.0"
+description = "BARAD-DÛR standalone security CLI: scan, run and health without the Compose stack."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+    "jsonschema>=4.0",
+]
+
+[project.scripts]
+barad = "barad.cli:main"
+
+[tool.setuptools.packages.find]
+where = [".", "cli"]
+include = ["barad*", "barad_security*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+barad_security = ["schema/*.json"]
