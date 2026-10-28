@@ -1,0 +1,69 @@
+# Demo service for the local POC. Copy this file to a repository root.
+version: 1
+
+project:
+  name: OVAC
+  service: OVAC-Backend
+  ecosystem: node
+  path: .
+  version:
+    source: package-json
+
+execution:
+  local_enabled: true
+  github_enabled: true
+  fail_on_findings: false
+  fail_on_scanner_error: true
+
+trivy:
+  enabled: true
+  always_run: true
+  runner: ${BARAD_TRIVY_RUNNER:-local}
+  executable: trivy
+  image: aquasec/trivy:0.76.1
+  cache_enabled: true
+  scan_type: fs
+  scanners: [vuln, secret, misconfig]
+  severity: [UNKNOWN, LOW, MEDIUM, HIGH, CRITICAL]
+
+sbom:
+  enabled: true
+  generator: trivy
+  format: cyclonedx
+  generate_on:
+    dependency_changes: true
+    version_changes: true
+    build_changes: true
+    release: true
+
+artifacts:
+  directory: .barad-dur/security
+  preserve_reports: true
+  preserve_logs: true
+  create_manifest: true
+  checksums: sha256
+
+integrations:
+  barad_dur:
+    enabled: ${BARAD_DUR_ENABLED:-false}
+    required: false
+    endpoint_env: BARAD_DUR_URL
+    token_env: BARAD_DUR_TOKEN
+  dependency_track:
+    enabled: ${DTRACK_ENABLED:-false}
+    required: false
+    endpoint_env: DTRACK_URL
+    token_env: DTRACK_API_KEY
+    publish_on_release: true
+    update_development_project: false
+    development_version: main
+    auto_create: true
+  defectdojo:
+    enabled: ${DOJO_ENABLED:-false}
+    required: false
+    endpoint_env: DOJO_URL
+    token_env: DOJO_TOKEN
+    publish_trivy_reports: false
+
+notifications:
+  direct_slack: false

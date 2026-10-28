@@ -1,0 +1,23 @@
+#!/bin/sh
+# Plain Git hook: run the same runner as CI on every commit.
+# Install: cp examples/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+set -eu
+if [ "${BARAD_SECURITY_SKIP:-0}" = "1" ]; then
+  echo "barad-security: skipped by BARAD_SECURITY_SKIP"
+  exit 0
+fi
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+# A hook must never block a commit on findings: fail_on_findings stays false in
+# the configuration. A technical failure is reported, and the commit is blocked
+# only when BARAD_SECURITY_BLOCK_ON_ERROR=1.
+if python -m barad_security run --event local --repository "$root"; then
+  exit 0
+fi
+status=$?
+if [ "${BARAD_SECURITY_BLOCK_ON_ERROR:-0}" = "1" ]; then
+  echo "barad-security: technical failure (exit $status); commit blocked" >&2
+  exit 1
+fi
+echo "barad-security: technical failure (exit $status); commit allowed, evidence kept" >&2
+exit 0

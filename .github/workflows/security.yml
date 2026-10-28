@@ -1,0 +1,167 @@
+# Reusable BARAD-DÛR security workflow.
+#
+# The GitHub-specific part only checks out the repository, prepares Python,
+# passes the Git context, runs the SAME runner as the local CLI and preserves the
+# evidence. No security logic lives here.
+#
+# Secrets are never available to the scanning job, so a pull request from a fork,
+# or any untrusted code, cannot read them. Publication is a separate trusted job
+# that downloads the evidence and runs `barad-security sync --pending`, which
+# reuses the preserved run instead of scanning again.
+name: security
+
+on:
+  workflow_call:
+    inputs:
+      config-file:
+        description: Path to the configuration file, relative to the repository root.
+        type: string
+        required: false
+        default: barad-security.yml
+      trivy-runner:
+        description: Trivy invocation mode for this execution surface.
+        type: string
+        required: false
+        default: docker
+      python-version:
+        description: Python version used to run the CLI.
+        type: string
+        required: false
+        default: "3.12"
+    secrets:
+      BARAD_DUR_URL:
+        required: false
+      BARAD_DUR_TOKEN:
+        required: false
+      DTRACK_URL:
+        required: false
+      DTRACK_API_KEY:
+        required: false
+      DOJO_URL:
+        required: false
+      DOJO_TOKEN:
+        required: false
+  pull_request:
+  push:
+    branches: [main, master]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: scan (no secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out full history (base reference needs every PR commit)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version || '3.12' }}
+
+      - name: Install runner dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements.txt
+
+      - name: Trivy availability
+        run: |
+          if [ "$BARAD_TRIVY_RUNNER" = "docker" ]; then
+            docker run --rm "$TRIVY_IMAGE" --version
+          else
+            trivy --version
+          fi
+        env:
+          BARAD_TRIVY_RUNNER: ${{ inputs.trivy-runner || 'docker' }}
+          TRIVY_IMAGE: aquasec/trivy:0.76.1
+
+      # Credential variables are intentionally absent from this step's environment.
+      - name: Run BARAD-DÛR security runner
+        env:
+          BARAD_TRIVY_RUNNER: ${{ inputs.trivy-runner || 'docker' }}
+          BARAD_SECURITY_CONFIG: ${{ inputs.config-file || 'barad-security.yml' }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request|pull_request_target) event=pr ;;
+            push) event=push ;;
+            release) event=release ;;
+            *) event=dispatch ;;
+          esac
+          python -m barad_security run \
+            --event "$event" \
+            --config "$BARAD_SECURITY_CONFIG" \
+            --repository . \
+            --json > security-run.json
+          status=$?
+          cat security-run.json
+          exit $status
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: barad-security-evidence-${{ github.run_id }}-${{ github.job }}
+          path: |
+            .barad-dur/security
+            security-run.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish:
+    name: publish evidence
+    needs: scan
+    # Trusted contexts only: never a pull request from a fork.
+    if: |
+      always() && needs.scan.result != 'cancelled' && !(
+        github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out runner code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version || '3.12' }}
+
+      - name: Install runner dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements.txt
+
+      - name: Restore preserved evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: barad-security-evidence-${{ github.run_id }}-${{ github.job }}
+          path: .
+
+      - name: Publish pending evidence (no rescan)
+        env:
+          CONFIG_FILE: ${{ inputs.config-file || 'barad-security.yml' }}
+          BARAD_DUR_URL: ${{ secrets.BARAD_DUR_URL }}
+          BARAD_DUR_TOKEN: ${{ secrets.BARAD_DUR_TOKEN }}
+          DTRACK_URL: ${{ secrets.DTRACK_URL }}
+          DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
+          DOJO_URL: ${{ secrets.DOJO_URL }}
+          DOJO_TOKEN: ${{ secrets.DOJO_TOKEN }}
+        run: |
+          if [ ! -d .barad-dur/security/runs ]; then
+            echo "no preserved run to publish; the scan job produced no evidence"
+            exit 0
+          fi
+          python -m barad_security sync --pending --config "$CONFIG_FILE" --repository . || true
+          # Publication failures are reported in publication.json and never lose the analysis.

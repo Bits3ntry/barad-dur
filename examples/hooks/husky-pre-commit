@@ -1,0 +1,13 @@
+#!/bin/sh
+# Husky variant (.husky/pre-commit). Husky runs from the repository root.
+# No second implementation: it calls the same CLI, in-process.
+if [ "${BARAD_SECURITY_SKIP:-0}" = "1" ]; then
+  echo "barad-security: skipped"
+  exit 0
+fi
+python -m barad_security run --event local --repository "$(git rev-parse --show-toplevel)" || {
+  status=$?
+  if [ "${BARAD_SECURITY_BLOCK_ON_ERROR:-0}" = "1" ]; then exit 1; fi
+  echo "barad-security: technical failure (exit $status); commit allowed, evidence kept"
+}
+exit 0

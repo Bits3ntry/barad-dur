@@ -1,0 +1,10 @@
+{
+  "name": "councilbox-client",
+  "version": "3.4.1",
+  "private": true,
+  "dependencies": {
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "axios": "0.21.1"
+  }
+}
