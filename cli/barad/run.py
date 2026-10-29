@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from .commands.scan import resolve
 from .scan import SANITIZED_REPORT, SBOM, run_scan
 from .store import ScanStore
-from .integrations import dependency_track, defectdojo
+from integrations import dependency_track, defectdojo
 
 EXIT_PARTIAL = 4
 

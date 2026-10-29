@@ -18,7 +18,7 @@ barad = "barad.cli:main"
 
 [tool.setuptools.packages.find]
 where = [".", "cli"]
-include = ["barad*", "barad_security*"]
+include = ["barad*", "barad_security*", "integrations*"]
 namespaces = false
 
 [tool.setuptools.package-data]
