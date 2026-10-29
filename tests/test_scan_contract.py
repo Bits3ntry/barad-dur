@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support import CliTestCase, FakeTrivy, invoke
+from cli_support import CliTestCase, FakeTrivy, invoke
 
 
 def digest(path):
@@ -195,7 +195,7 @@ class ScanContractTests(CliTestCase):
         self.assertEqual(sorted(self.default_output.iterdir()), reports_before)
 
     def test_scan_accepts_an_absolute_repository_path(self):
-        from support import REPO_ROOT
+        from cli_support import REPO_ROOT
 
         self.write("marker.txt", "demo\n")
 

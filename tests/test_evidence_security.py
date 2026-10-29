@@ -4,7 +4,7 @@ import stat
 import subprocess
 import unittest
 
-from support import REPO_ROOT, CliTestCase
+from cli_support import REPO_ROOT, CliTestCase
 
 PRESERVED_GITIGNORE_LINES = [
     "__pycache__/",

@@ -1,7 +1,7 @@
 """Non-destructive public health contract."""
 from unittest import mock
 
-from support import CliTestCase, invoke
+from cli_support import CliTestCase, invoke
 from barad_security.http import Response, HttpStatusError
 
 

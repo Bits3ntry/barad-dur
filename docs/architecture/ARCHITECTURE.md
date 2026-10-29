@@ -1,51 +1,48 @@
-# Consolidated Barad-dûr boundaries
+# Barad-dûr architecture
 
-The local CLI is a thin consumer of existing scanner, versioning, validation and HTTP modules. Compose owns the persistent services; no server, dashboard, AI worker or new MCP process was introduced. The older `barad_security` runner and CI workflow remain operational while migration is deliberate.
+The repository has four active runtime boundaries: root Docker Compose, the installable CLI, reusable remote integrations, and a local GitHub Action adapter. Everything else is intentionally out of scope.
 
 ## Execution map
 
 ```text
 barad (pyproject.toml -> cli/barad/cli.py)
-  scan/run -> commands/scan.py -> scan.py -> barad_security.trivy.TrivyRunner
-                                  -> barad_security.sbom / sanitize / versioning / gitctx
-                                  -> store.py -> .barad/reports + .barad/state
-  run -> integrations/dependency_track.py -> barad_security.http.HttpClient -> DT API
-      -> integrations/defectdojo.py       -> barad_security.http.HttpClient -> Dojo API
-  health -> read-only local subprocess + authenticated GET diagnostics
+  scan/run -> cli/barad/scan.py -> barad_security.trivy.TrivyRunner
+                                  -> barad_security.sbom / versioning / inventory
+                                  -> cli/barad/store.py -> .barad/reports + .barad/state
+  run -> integrations/dependency_track -> Dependency-Track API
+      -> integrations/defectdojo       -> DefectDojo API
+  health -> local tool checks + authenticated GET diagnostics
 
-existing .github/workflows/security.yml -> bin/barad-security -> barad_security/ (preserved)
-compose.yaml -> DT API/frontend/PostgreSQL, Dojo nginx/uwsgi/celery/PostgreSQL/Valkey,
-                Trivy server, optional scanner tools; named persistent volumes unchanged
+action/action.yml -> installs this checkout -> barad scan | run | health
+.github/workflows/security.yml -> same CLI, with separate scan and trusted publish jobs
+compose.yaml -> unified PostgreSQL, Dependency-Track, DefectDojo, Valkey, Trivy Server
 ```
 
-`pyproject.toml` builds an independent wheel containing both `barad` and the reused `barad_security` package/schema. CLI command names are stable regardless of future API placement. `defectdojo_mcp/` and `scripts/` are preserved, not moved or merged because their consumers and historical data were not proven safe to remove. Existing `_docs/` holds earlier POC notes; current CLI contracts live in [docs/CLI.md](../CLI.md).
+`cli/barad/integrations/` and `cli/barad/inventory.py` are compatibility exports only. The implementations live in `integrations/` and `barad_security/inventory.py`; no scanner, inventory, SBOM, version, evidence, or remote adapter has a second implementation.
 
-## Data contracts and trust
+## Boundaries
 
-| Boundary | Input | Output and invariants |
+| Boundary | Owns | Does not own |
 |---|---|---|
-| Project configuration | Optional `.barad.yml` + environment override | Strict known keys; token values only from env, never persisted. `barad-security.yml` remains a separate legacy runner contract. |
-| Scanner | Filesystem directory/JAR or explicit built image | Trivy JSON on **every** scan, CycloneDX JSON on **every** scan; failures never become success. Docker target mounted read-only, evidence directory writable/private. |
-| Local evidence | Scanner reports, Git/version context | `.barad/reports/<scan-id>/` immutable per run ID plus `.barad/state/local-inventory.json`. Raw secret evidence owner-only and ignored by Git. Manifest hashes are about artifact bytes; fingerprint is about normalized inventory. |
-| Dependency-Track | CycloneDX + exact project/version and event policy | Authenticated lookup, optional creation, remote BOM export comparison, upload only when new/changed/unverifiable. Token completion plus exported inventory comparison needed to claim PUBLISHED. Pending token saved locally only to avoid immediate duplicate submission; it is **not** remote publication proof. |
-| DefectDojo | Sanitized Trivy JSON | `Trivy Scan` Import/Reimport into stable Product/Engagement/Test; remote identity and product checked; `close_old_findings=false`; finding count observed. Optional failure cannot destroy scan evidence. |
-| Health | Tools, optional service endpoints | Only version probes and authenticated GETs. Missing optional integrations are NOT CONFIGURED, not a standalone failure. |
+| `compose.yaml` | Persistent service topology and volumes. | CLI scans, application API, dashboards. |
+| `barad_security/` | Trivy mechanics, SBOM validation, identity/version resolution, safe HTTP, inventory normalization, evidence hashing. | CLI command parsing and remote workflow orchestration. |
+| `cli/barad/` | Three commands, local evidence layout, scan/run orchestration, read-only health checks. | Remote adapter implementations. |
+| `integrations/` | Dependency-Track and DefectDojo API adapters. | Trivy execution or CLI argument parsing. |
+| `action/` | GitHub Actions dispatch to the installable CLI. | A separate scanning engine. |
 
-Inventory fingerprint v4 includes normalized PURL+version or name/type/version fallback, sorted distinct dependency edges, canonical metadata-root edge and target/image reference; nondeterministic CycloneDX metadata is ignored. DT rewrites the root bom-ref to its project UUID on export, so the canonical target-root node is essential for idempotence. The original SBOM SHA-256 remains independent. A local snapshot can tell `scan` what it scanned before, never what a remote API accepted.
+## Data and safety contracts
 
-## Context and status policy
+- PostgreSQL remains one server with separate `dtrack` and `defectdojo` databases and roles. Existing backup and rollback volumes are external and are never removed by Compose.
+- Raw Trivy reports and execution logs are private evidence. The manifest, sanitized report, SBOM, and checksums are suitable for controlled sharing.
+- `scan` creates artifacts but has no remote mutation. `run` preserves scan evidence if either adapter is unavailable or partial. `health` issues no writes.
+- Dependency-Track publication is verified by an exported normalized SBOM, not inferred from HTTP success.
+- DefectDojo reimport is bound to a stable test and Product; it never auto-closes historical findings.
+- The workflow has a credential-free scan boundary and a trusted publish boundary. It never uploads the raw report.
 
-- PR and non-default branches: scan/report; do not create stable DT project versions. `BARAD_DEFAULT_BRANCH` chooses the trusted development branch; release events require a stable resolved version.
-- Default branch/local trusted context: use detected application version, independent of dependency changes. DT creates/updates only with enabled integration and explicit `auto_create` for missing versions. No broad “Latest” promotion.
-- DefectDojo: stable test title per Product + version; repeated imports reimport the same Test, not a new historical Test. Old findings are not automatically closed. A successful HTTP POST is not proof of parser completeness.
-- A scan can be `completed` while a synchronization is `partial` (exit 4); artifacts and processing token remain traceable. Network errors are sanitized; secrets never appear in the manifest.
+## Verification boundary
 
-## Deployment and migration
+Unit and contract tests are rooted at `tests/`. Compose syntax is validated with `docker compose config --quiet`. Operational tests must create explicitly named isolated targets and record the actual remote identifiers and outcomes in [AUDIT.md](AUDIT.md). A test or document must not claim live service behavior without that record.
 
-`docker compose config --quiet` validates the existing stack, and `docker compose up -d` starts core services with the original `.env` and volumes. Never use `down -v`, rename volumes, rotate DefectDojo's credential-encryption key or overwrite the live `.env` without a backup/restore plan. See [README.md](../../README.md). The CLI uses Docker Trivy on demand; the Compose Trivy **server** is a separate analyzer endpoint for Dependency-Track, not an assumption that scanning a Dockerfile scans a built image.
+## Excluded components
 
-Future GitHub Action: install the same wheel; on PR call `barad scan`, on trusted default/release call `barad run` with secret env vars, then upload manifest and sanitized report. The current workflow still calls the older `barad_security` entry point; migration needs separate CI validation and should not silently alter working publication behavior. Central API/MCP/dashboard/workers can later consume the manifest and move adapters server-side without changing the three CLI commands.
-
-## Known limitations
-
-Loopback Compose is a POC (no TLS/SSO or production RBAC). A fresh isolated Trivy cache could not refresh its vulnerability DB during this audit because DNS for `mirror.gcr.io` timed out; repository-root scanning used an existing warm cache. Real image and JAR content scans, CI migration, backup/restore drill, and production credential lifecycle remain UNVERIFIED. Existing tracked `tests/`, `examples/`, `docs/` deletions were present before this task; no destructive cleanup was performed. See [audit](AUDIT.md) for observed commands and failures.
+No dashboard, custom API, MCP, AI worker, Syft, or CycloneDX CLI is part of this architecture.

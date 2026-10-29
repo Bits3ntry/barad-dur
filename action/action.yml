@@ -1,0 +1,35 @@
+name: Barad-dur
+description: Installs this checkout and forwards scan, run, or health to the barad CLI.
+inputs:
+  command:
+    description: CLI command to execute: scan, run, or health.
+    required: false
+    default: scan
+  target:
+    description: Filesystem path or image target for scan and run.
+    required: false
+    default: .
+  config:
+    description: Optional path to a .barad.yml configuration file.
+    required: false
+    default: .barad.yml
+runs:
+  using: composite
+  steps:
+    - name: Install Barad-dur
+      shell: bash
+      run: python -m pip install --disable-pip-version-check --no-input "$GITHUB_ACTION_PATH/.."
+    - name: Run Barad-dur
+      shell: bash
+      env:
+        BARAD_COMMAND: ${{ inputs.command }}
+        BARAD_TARGET: ${{ inputs.target }}
+        BARAD_CONFIG: ${{ inputs.config }}
+      run: |
+        set -euo pipefail
+        case "$BARAD_COMMAND" in
+          scan) barad scan "$BARAD_TARGET" --config "$BARAD_CONFIG" ;;
+          run) barad run "$BARAD_TARGET" --config "$BARAD_CONFIG" ;;
+          health) barad health --config "$BARAD_CONFIG" ;;
+          *) echo "Unsupported Barad-dur command: $BARAD_COMMAND" >&2; exit 2 ;;
+        esac

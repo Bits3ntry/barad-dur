@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import CliTestCase, FakeTrivy
+from cli_support import CliTestCase, FakeTrivy
 
 
 class ConfigurationTests(CliTestCase):
@@ -24,7 +24,7 @@ class ConfigurationTests(CliTestCase):
         self.assertEqual(settings.security.get("trivy.scan_type"), "fs")
         self.assertEqual(settings.security.get("artifacts.directory"), ".barad/reports")
         self.assertEqual(settings.document["output"]["directory"], ".barad/reports")
-        for block in ("barad_dur", "dependency_track", "defectdojo"):
+        for block in ("dependency_track", "defectdojo"):
             self.assertFalse(settings.document["integrations"][block]["enabled"])
             self.assertIn("endpoint_env", settings.document["integrations"][block])
             self.assertIn("token_env", settings.document["integrations"][block])
@@ -184,7 +184,7 @@ class ConfigurationTests(CliTestCase):
 
     def invalid_scan(self):
         with mock.patch("barad.scan.TrivyRunner", FakeTrivy):
-            from support import invoke
+            from cli_support import invoke
 
             return invoke(["scan"], cwd=self.root)
 

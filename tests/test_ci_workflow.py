@@ -22,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-from support import REPO_ROOT
+from cli_support import REPO_ROOT
 from barad.config import load_settings, read_project_config
 
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "security.yml"
@@ -317,7 +317,8 @@ class DocumentationTests(unittest.TestCase):
         text = DOCS.read_text(encoding="utf-8")
         self.assertIn("config/ci.barad.yml", text)
         self.assertIn("barad run", text)
-        self.assertIn("trivy-runner", text)
+        self.assertIn("action/action.yml", text)
+        self.assertNotIn("trivy-runner", text)
         self.assertNotIn("still calls `barad_security`", text)
         self.assertNotIn("A future GitHub Action", text)
 

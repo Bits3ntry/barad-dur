@@ -1,7 +1,7 @@
 """Shared helpers for barad CLI contract tests (stdlib unittest only).
 
 The CLI root is placed on sys.path so tests run from a checkout without an
-install, exactly like `python -m unittest discover -s cli/tests`.
+install, exactly like `python -m unittest discover -s tests`.
 """
 import contextlib
 import io
@@ -13,8 +13,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-CLI_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = CLI_ROOT.parent
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CLI_ROOT = REPO_ROOT / "cli"
 if str(CLI_ROOT) not in sys.path:
     sys.path.insert(0, str(CLI_ROOT))
 

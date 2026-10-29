@@ -19,7 +19,7 @@ from barad_security.config import build_config
 from barad_security.errors import ConfigError
 
 CONFIG_FILENAME = ".barad.yml"
-INTEGRATIONS = ("barad_dur", "dependency_track", "defectdojo")
+INTEGRATIONS = ("dependency_track", "defectdojo")
 
 DEFAULT_EXCLUDES = [".git", ".venv", "node_modules", ".barad", ".barad-dur", "dist",
                     "build", ".secrets"]
@@ -40,9 +40,6 @@ DEFAULTS = {
     },
     "output": {"directory": ".barad/reports"},
     "integrations": {
-        "barad_dur": {
-            "enabled": False, "endpoint_env": "BARAD_DUR_URL", "token_env": "BARAD_DUR_TOKEN",
-        },
         "dependency_track": {
             "enabled": False, "endpoint_env": "DTRACK_URL", "token_env": "DTRACK_API_KEY",
             "auto_create": False, "wait_timeout_seconds": 30,

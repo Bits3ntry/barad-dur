@@ -52,10 +52,9 @@ def execute(args):
     checks['trivy'] = {'status': 'HEALTHY' if trivy_version else 'UNAVAILABLE',
                        'version': trivy_version, 'runner': runner}
     for name, path in (('dependency_track', '/api/v1/project?name=barad-health-check&version=0'),
-                       ('defectdojo', '/api/v2/test_types/?limit=1'),
-                       ('barad_dur', '/health')):
+                       ('defectdojo', '/api/v2/test_types/?limit=1')):
         block = settings.block(name)
-        enabled = block['enabled'] or (name == 'barad_dur' and settings.endpoint(name))
+        enabled = block['enabled']
         if not enabled:
             checks[name] = {'status': 'NOT CONFIGURED'}
             continue

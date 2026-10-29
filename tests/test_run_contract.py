@@ -2,7 +2,7 @@
 import json
 from unittest import mock
 
-from support import CliTestCase, FakeTrivy, invoke, cyclonedx
+from cli_support import CliTestCase, FakeTrivy, invoke, cyclonedx
 from barad_security.http import Response, HttpStatusError
 
 

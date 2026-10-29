@@ -1,6 +1,6 @@
 import unittest
 
-from support import CliTestCase, invoke
+from cli_support import CliTestCase, invoke
 
 
 class CommandSurfaceTests(CliTestCase):
@@ -25,7 +25,7 @@ class CommandSurfaceTests(CliTestCase):
 
     def test_run_uses_scan_when_optional_integrations_are_missing(self):
         from unittest import mock
-        from support import FakeTrivy
+        from cli_support import FakeTrivy
         with mock.patch('barad.scan.TrivyRunner', FakeTrivy):
             code, out, err = invoke(['run', str(self.root)])
         self.assertEqual((code, err), (0, ''))

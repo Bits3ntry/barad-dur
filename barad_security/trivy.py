@@ -306,9 +306,19 @@ class TrivyRunner:
             if self.logger:
                 self.logger.error("trivy", "report_unreadable", {"detail": str(error)})
             return outcome
-        if not isinstance(document, dict) or "Results" not in document:
+        if not isinstance(document, dict) or "SchemaVersion" not in document:
             outcome.error = {"code": "trivy_report_malformed",
-                             "detail": "the JSON report has no Results array"}
+                             "detail": "the JSON report has no SchemaVersion"}
+            if self.logger:
+                self.logger.error("trivy", "report_malformed", {})
+            return outcome
+        # Trivy emits no Results key when a valid filesystem target contains no
+        # supported artifacts. This is an empty successful scan, not malformed JSON.
+        if "Results" not in document:
+            document["Results"] = []
+        elif not isinstance(document["Results"], list):
+            outcome.error = {"code": "trivy_report_malformed",
+                             "detail": "the JSON report Results field is not an array"}
             if self.logger:
                 self.logger.error("trivy", "report_malformed", {})
             return outcome

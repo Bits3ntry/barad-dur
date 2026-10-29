@@ -3,7 +3,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from support import CliTestCase, FakeTrivy, cyclonedx, fixed_purl_sbom, graph_sbom
+from cli_support import CliTestCase, FakeTrivy, cyclonedx, fixed_purl_sbom, graph_sbom
 
 
 class ProjectAndInventoryTests(CliTestCase):
