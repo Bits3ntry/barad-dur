@@ -136,18 +136,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "barad_dur": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "enabled": {"type": "boolean"},
-            "required": {"type": "boolean"},
-            "endpoint_env": {"$ref": "#/definitions/envvar"},
-            "token_env": {"$ref": "#/definitions/envvar"},
-            "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 600},
-            "max_attempts": {"type": "integer", "minimum": 1, "maximum": 10}
-          }
-        },
         "dependency_track": {
           "type": "object",
           "additionalProperties": false,

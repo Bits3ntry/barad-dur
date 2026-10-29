@@ -47,6 +47,19 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertFalse((ROOT / "barad_security").is_dir())
         self.assertFalse((ROOT / "cli" / "barad" / "integrations").is_dir())
 
+    def test_core_configuration_rejects_the_removed_barad_api_adapter(self):
+        from barad.core.config import build_config
+        from barad.core.errors import ConfigError
+
+        document = {
+            "version": 1,
+            "project": {"name": "test", "service": "test", "path": "."},
+            "integrations": {"barad_dur": {"enabled": False}},
+        }
+
+        with self.assertRaises(ConfigError):
+            build_config(document, repo_root=ROOT)
+
 
 if __name__ == "__main__":
     unittest.main()

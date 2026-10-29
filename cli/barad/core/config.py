@@ -135,14 +135,6 @@ DEFAULTS = {
         "checksums": "sha256",
     },
     "integrations": {
-        "barad_dur": {
-            "enabled": False,
-            "required": False,
-            "endpoint_env": "BARAD_DUR_URL",
-            "token_env": "BARAD_DUR_TOKEN",
-            "timeout_seconds": 20,
-            "max_attempts": 3,
-        },
         "dependency_track": {
             "enabled": False,
             "required": False,
@@ -190,7 +182,7 @@ _INTEGRATION_ENV_KEYS = ("endpoint_env", "token_env")
 def _declared_env_names(document):
     """Every environment variable the configuration names as an integration input."""
     names = set()
-    for block in ("barad_dur", "dependency_track", "defectdojo"):
+    for block in ("dependency_track", "defectdojo"):
         settings = (document or {}).get("integrations", {}).get(block) if isinstance(document, dict) else None
         if not isinstance(settings, dict):
             defaults = DEFAULTS["integrations"].get(block, {})
@@ -483,7 +475,7 @@ def _check_semantics(config):
         raise ConfigError(
             "invalid configuration: dependency_track.publish_on_release requires sbom.enabled"
         )
-    for block in ("dependency_track", "defectdojo", "barad_dur"):
+    for block in ("dependency_track", "defectdojo"):
         settings = config.get(f"integrations.{block}", {}) or {}
         if settings.get("enabled") and not settings.get("endpoint_env"):
             raise ConfigError(f"invalid configuration: integrations.{block}.endpoint_env is required when enabled")
