@@ -1,7 +1,7 @@
-"""`.barad.yml`: secure defaults mapped onto `barad_security` validation.
+"""`.barad.yml`: secure defaults mapped onto `barad.core` validation.
 
 The CLI owns only a small, documented project file. It is translated into the
-existing `barad_security` configuration document, so the runner keeps one schema,
+existing `barad.core` configuration document, so the runner keeps one schema,
 one semantic checker and one environment-expansion policy. Credentials are never
 values in `.barad.yml`: integrations name the environment variable (`token_env`)
 that holds them, and an environment value overrides a non-secret `endpoint`
@@ -15,8 +15,8 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from barad_security.config import build_config
-from barad_security.errors import ConfigError
+from .core.config import build_config
+from .core.errors import ConfigError
 
 CONFIG_FILENAME = ".barad.yml"
 INTEGRATIONS = ("dependency_track", "defectdojo")

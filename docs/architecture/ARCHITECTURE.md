@@ -6,8 +6,8 @@ The repository has four active runtime boundaries: root Docker Compose, the inst
 
 ```text
 barad (pyproject.toml -> cli/barad/cli.py)
-  scan/run -> cli/barad/scan.py -> barad_security.trivy.TrivyRunner
-                                  -> barad_security.sbom / versioning / inventory
+  scan/run -> cli/barad/scan.py -> barad.core.trivy.TrivyRunner
+                                  -> barad.core.sbom / versioning / inventory
                                   -> cli/barad/store.py -> .barad/reports + .barad/state
   run -> integrations/dependency_track -> Dependency-Track API
       -> integrations/defectdojo       -> DefectDojo API
@@ -18,14 +18,14 @@ action/action.yml -> installs this checkout -> barad scan | run | health
 compose.yaml -> unified PostgreSQL, Dependency-Track, DefectDojo, Valkey, Trivy Server
 ```
 
-`cli/barad/integrations/` and `cli/barad/inventory.py` are compatibility exports only. The implementations live in `integrations/` and `barad_security/inventory.py`; no scanner, inventory, SBOM, version, evidence, or remote adapter has a second implementation.
+`cli/barad/core/` holds the single CLI implementation of scanning, SBOM validation, versioning, evidence, inventory, and HTTP. `integrations/` holds the only remote adapters; no compatibility wrapper or second implementation remains.
 
 ## Boundaries
 
 | Boundary | Owns | Does not own |
 |---|---|---|
 | `compose.yaml` | Persistent service topology and volumes. | CLI scans, application API, dashboards. |
-| `barad_security/` | Trivy mechanics, SBOM validation, identity/version resolution, safe HTTP, inventory normalization, evidence hashing. | CLI command parsing and remote workflow orchestration. |
+| `cli/barad/core/` | Trivy mechanics, SBOM validation, identity/version resolution, safe HTTP, inventory normalization, evidence hashing. | CLI command parsing and remote workflow orchestration. |
 | `cli/barad/` | Three commands, local evidence layout, scan/run orchestration, read-only health checks. | Remote adapter implementations. |
 | `integrations/` | Dependency-Track and DefectDojo API adapters. | Trivy execution or CLI argument parsing. |
 | `action/` | GitHub Actions dispatch to the installable CLI. | A separate scanning engine. |

@@ -3,7 +3,7 @@ import json
 from unittest import mock
 
 from cli_support import CliTestCase, FakeTrivy, invoke, cyclonedx
-from barad_security.http import Response, HttpStatusError
+from barad.core.http import Response, HttpStatusError
 
 
 class Remote:
@@ -106,8 +106,8 @@ integrations:
         from barad import scan
         with mock.patch.dict('os.environ', self.env), \
              mock.patch('barad.scan.TrivyRunner', FakeTrivy), \
-             mock.patch('barad.integrations.dependency_track.HttpClient', Remote), \
-             mock.patch('barad.integrations.defectdojo.HttpClient', Remote):
+             mock.patch('integrations.dependency_track.HttpClient', Remote), \
+             mock.patch('integrations.defectdojo.HttpClient', Remote):
             code, out, err = invoke(['run', *args], cwd=self.root)
         reports = list((self.root / '.barad/reports').glob('*/manifest.json'))
         manifest = json.loads(max(reports, key=lambda p: p.stat().st_mtime_ns).read_text()) if reports else None

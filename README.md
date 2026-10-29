@@ -24,13 +24,12 @@ python3 -m venv /tmp/barad-venv
 |---|---|---|
 | Infrastructure | `compose.yaml` | Unified PostgreSQL, Dependency-Track, DefectDojo, Valkey, Trivy Server, and on-demand Trivy. |
 | CLI | `cli/barad/` | The only command surface: `scan`, `run`, and `health`. |
-| Shared analysis core | `barad_security/` | Trivy invocation, SBOM validation, versioning, evidence identity, inventory normalization, HTTP safety. |
+| CLI core | `cli/barad/core/` | Trivy invocation, SBOM validation, versioning, evidence identity, inventory normalization, and HTTP safety. |
 | Integrations | `integrations/dependency_track/`, `integrations/defectdojo/` | Reusable remote adapters for project/version/SBOM and finding import/reimport. |
 | GitHub Action | `action/action.yml` | Composite adapter that installs this checkout and dispatches one of the same three commands. |
 | Tests | `tests/` | CLI, integration, workflow, evidence, and architectural contracts. |
 | Documentation | `docs/` | Current usage, architecture, and verification ledger. |
 
-The compatibility modules under `cli/barad/integrations/` only re-export the reusable adapters. They contain no adapter implementation, preserving existing Python import paths during migration.
 
 ## Compose and data safety
 

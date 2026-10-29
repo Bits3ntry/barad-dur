@@ -128,7 +128,7 @@ class ProjectAndInventoryTests(CliTestCase):
         self.assertEqual(second["inventory"]["comparison"], "unchanged")
 
     def test_remote_export_rewrites_metadata_root_without_inventory_change(self):
-        from barad.inventory import fingerprint
+        from barad.core.inventory import fingerprint
         local = graph_sbom()
         local['metadata']['component'] = {'bom-ref': 'local-root', 'name': '/scan'}
         local['dependencies'].append({'ref': 'local-root', 'dependsOn': ['ref-app']})

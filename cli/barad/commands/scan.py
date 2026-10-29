@@ -4,8 +4,8 @@ import os
 import sys
 from pathlib import Path
 
-from barad_security.errors import BaradError, ConfigError, UsageError
-from barad_security.gitctx import detect_git_context
+from ..core.errors import BaradError, ConfigError, UsageError
+from ..core.gitctx import detect_git_context
 
 from ..config import CONFIG_FILENAME, load_settings, read_project_config
 from ..project import derive_name, detect_ecosystems

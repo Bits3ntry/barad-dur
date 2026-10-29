@@ -30,9 +30,8 @@ CI_CONFIG = REPO_ROOT / "config" / "ci.barad.yml"
 DOCS = REPO_ROOT / "docs" / "CLI.md"
 
 PUBLISH_CREDENTIALS = ("DTRACK_URL", "DTRACK_API_KEY", "DOJO_URL", "DOJO_TOKEN")
-ALL_CREDENTIAL_NAMES = PUBLISH_CREDENTIALS + ("BARAD_DUR_URL", "BARAD_DUR_TOKEN")
-LEGACY_REFERENCES = ("barad_security", "barad-security sync", "requirements.txt",
-                     "./bin/barad-security")
+ALL_CREDENTIAL_NAMES = PUBLISH_CREDENTIALS
+LEGACY_REFERENCES = ("barad-security sync", "requirements.txt", "./bin/barad-security")
 
 
 def workflow_code():
@@ -319,7 +318,7 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("barad run", text)
         self.assertIn("action/action.yml", text)
         self.assertNotIn("trivy-runner", text)
-        self.assertNotIn("still calls `barad_security`", text)
+        self.assertNotIn("still calls a legacy runner", text)
         self.assertNotIn("A future GitHub Action", text)
 
 

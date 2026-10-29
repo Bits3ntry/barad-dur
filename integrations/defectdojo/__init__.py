@@ -1,7 +1,7 @@
 """DefectDojo Trivy Scan import and reimport adapter."""
 from urllib.parse import quote
 
-from barad_security.http import HttpClient, HttpStatusError, HttpTransportError, multipart, validate_endpoint
+from barad.core.http import HttpClient, HttpStatusError, HttpTransportError, multipart, validate_endpoint
 
 
 def synchronize(settings, manifest, sanitized_path):

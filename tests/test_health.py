@@ -2,7 +2,7 @@
 from unittest import mock
 
 from cli_support import CliTestCase, invoke
-from barad_security.http import Response, HttpStatusError
+from barad.core.http import Response, HttpStatusError
 
 
 class ReadOnlyClient:

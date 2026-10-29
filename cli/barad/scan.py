@@ -1,6 +1,6 @@
 """One scan: Trivy JSON and CycloneDX on every invocation, kept as local evidence.
 
-The command reuses `barad_security.TrivyRunner`, the CycloneDX validator, Git
+The command reuses `barad.core.TrivyRunner`, the CycloneDX validator, Git
 context and version resolution. It never treats a missing report, a failed
 scanner, or an unusable inventory as success, and it never deletes artifacts it
 managed to produce.
@@ -10,17 +10,17 @@ import platform
 from dataclasses import dataclass
 from pathlib import Path
 
-from barad_security import MANIFEST_SCHEMA_VERSION, __version__ as SECURITY_VERSION
-from barad_security.errors import ScannerError
-from barad_security.evidence import generate_run_id, sha256_file, utc_timestamp
-from barad_security.logs import Logger, Redactor
-from barad_security.sanitize import sanitize_trivy_report
-from barad_security.sbom import validate as validate_sbom
-from barad_security.trivy import TrivyRunner
-from barad_security.versioning import resolve_version
+from .core import MANIFEST_SCHEMA_VERSION, __version__ as SECURITY_VERSION
+from .core.errors import ScannerError
+from .core.evidence import generate_run_id, sha256_file, utc_timestamp
+from .core.logs import Logger, Redactor
+from .core.sanitize import sanitize_trivy_report
+from .core.sbom import validate as validate_sbom
+from .core.trivy import TrivyRunner
+from .core.versioning import resolve_version
 
 from . import __version__
-from .inventory import BASIS, compare, fingerprint
+from .core.inventory import BASIS, compare, fingerprint
 from .store import ScanStore
 
 REPORT = "security.json"
@@ -54,8 +54,7 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
         "started_at": started,
         "finished_at": None,
         "target": {"type": target_type, "value": target_value},
-        "scanner_versions": {"barad": __version__, "barad_security": SECURITY_VERSION,
-                             "trivy": None},
+        "scanner_versions": {"barad": __version__, "trivy": None},
         "counts": {},
         "errors": [],
         "warnings": [],

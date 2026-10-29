@@ -3,10 +3,10 @@ import base64
 import time
 from urllib.parse import quote
 
-from barad_security.http import HttpClient, HttpStatusError, HttpTransportError, validate_endpoint
-from barad_security.inventory import fingerprint
-from barad_security.sbom import validate as validate_sbom
-from barad_security.versioning import is_mutable_version
+from barad.core.http import HttpClient, HttpStatusError, HttpTransportError, validate_endpoint
+from barad.core.inventory import fingerprint
+from barad.core.sbom import validate as validate_sbom
+from barad.core.versioning import is_mutable_version
 
 
 def synchronize(settings, manifest, sbom_path, *, pending=None):

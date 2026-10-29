@@ -3,8 +3,8 @@ from unittest import TestCase, mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from barad_security.config import build_config
-from barad_security.trivy import TrivyRunner
+from barad.core.config import build_config
+from barad.core.trivy import TrivyRunner
 
 
 class JarRunnerTests(TestCase):
@@ -15,7 +15,7 @@ class JarRunnerTests(TestCase):
             (root / 'libs/app.jar').write_bytes(b'PK\x03\x04')
             config = build_config({'version': 1, 'project': {'name': 'demo', 'service': 'demo'},
                                    'trivy': {'target': 'libs/app.jar'}}, repo_root=root)
-            with mock.patch('barad_security.trivy.shutil.which', return_value='/usr/local/bin/docker'):
+            with mock.patch('barad.core.trivy.shutil.which', return_value='/usr/local/bin/docker'):
                 argv, cwd, mounted = TrivyRunner(config, None)._docker_command(
                     format_name='json', output_path=root/'output/security.json')
             self.assertIn(f'{root / "libs"}:/scan:ro', argv)
@@ -27,7 +27,7 @@ class JarRunnerTests(TestCase):
             root = Path(temp).resolve()
             config = build_config({'version': 1, 'project': {'name': 'demo', 'service': 'demo'}},
                                   repo_root=root)
-            with mock.patch('barad_security.trivy.shutil.which', return_value='/usr/local/bin/docker'):
+            with mock.patch('barad.core.trivy.shutil.which', return_value='/usr/local/bin/docker'):
                 argv, cwd, mounted = TrivyRunner(config, None)._docker_command(
                     format_name='json', output_path=root/'output/security.json')
             self.assertIn(f'{root}:/scan:ro', argv)

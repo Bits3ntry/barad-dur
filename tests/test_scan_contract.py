@@ -115,7 +115,7 @@ class ScanContractTests(CliTestCase):
         self.assertFalse(self.state_path.exists())
 
     def test_scanner_preflight_failure_still_leaves_a_manifest(self):
-        from barad_security.errors import ScannerError
+        from barad.core.errors import ScannerError
 
         FakeTrivy.preflight_error = ScannerError("trivy unavailable")
 

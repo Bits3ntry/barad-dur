@@ -6,10 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from barad_security import __version__ as security_version
-from barad_security.http import HttpClient, HttpStatusError, HttpTransportError, validate_endpoint
-from barad_security.trivy import TrivyRunner
-from barad_security.errors import ConfigError
+from ..core.http import HttpClient, HttpStatusError, HttpTransportError, validate_endpoint
+from ..core.trivy import TrivyRunner
+from ..core.errors import ConfigError
 
 from .. import __version__
 from ..config import CONFIG_FILENAME, load_settings, read_project_config
@@ -80,7 +79,7 @@ def execute(args):
         status, exit_code = 'DEGRADED', 4
     else:
         status, exit_code = 'HEALTHY', 0
-    result = {'status': status, 'checks': checks, 'versions': {'barad_security': security_version}}
+    result = {'status': status, 'checks': checks}
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:

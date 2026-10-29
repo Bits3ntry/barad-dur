@@ -2,7 +2,7 @@
 import argparse
 import sys
 
-from barad_security.errors import EXIT_FAILURE, BaradError
+from .core.errors import EXIT_FAILURE, BaradError
 
 from . import __version__
 from .commands import health, run, scan

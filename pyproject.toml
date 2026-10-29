@@ -18,8 +18,8 @@ barad = "barad.cli:main"
 
 [tool.setuptools.packages.find]
 where = [".", "cli"]
-include = ["barad*", "barad_security*", "integrations*"]
+include = ["barad*", "integrations*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-barad_security = ["schema/*.json"]
+barad = ["core/schema/*.json"]

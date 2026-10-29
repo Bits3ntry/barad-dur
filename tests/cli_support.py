@@ -103,7 +103,7 @@ def trivy_document():
 
 
 class FakeTrivy:
-    """Deterministic stand-in for barad_security.TrivyRunner."""
+    """Deterministic stand-in for barad.core.TrivyRunner."""
 
     sbom = cyclonedx()
     fail_scan = False
@@ -131,7 +131,7 @@ class FakeTrivy:
             raise FakeTrivy.preflight_error
 
     def scan_json(self, path):
-        from barad_security.trivy import TrivyOutcome
+        from barad.core.trivy import TrivyOutcome
 
         FakeTrivy.scan_calls += 1
         path = Path(path)
@@ -154,7 +154,7 @@ class FakeTrivy:
         )
 
     def generate_sbom(self, path):
-        from barad_security.trivy import TrivyOutcome
+        from barad.core.trivy import TrivyOutcome
 
         FakeTrivy.sbom_calls += 1
         path = Path(path)

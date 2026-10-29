@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from barad_security.trivy import TrivyRunner
+from barad.core.trivy import TrivyRunner
 
 
 class Config:

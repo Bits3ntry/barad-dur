@@ -1,8 +1,6 @@
 """CLI evidence layout: `.barad/reports/<scan-id>/` plus separate `.barad/state/`.
 
-The shared `barad_security` RunStore keeps its legacy `runs/<id>` layout and state
-placement untouched. The CLI therefore owns this small store, reusing only the
-hashing and identity helpers from the runner.
+The CLI owns its compact evidence layout and reuses its core hashing and identity helpers.
 
 A Trivy secret finding embeds the matched credential in the raw report, so the
 CLI treats its evidence as private: managed directories are 0700 and evidence
@@ -13,8 +11,8 @@ import os
 import secrets
 from pathlib import Path
 
-from barad_security.errors import EvidenceError
-from barad_security.evidence import sha256_file, utc_timestamp
+from .core.errors import EvidenceError
+from .core.evidence import sha256_file, utc_timestamp
 
 STATE_FILENAME = "local-inventory.json"
 
