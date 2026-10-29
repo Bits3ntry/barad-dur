@@ -1,0 +1,264 @@
+# BARAD-DÛR — single local stack (evaluation only: loopback bindings, no TLS, no SSO).
+#
+#   docker compose up -d                 # core platform: Dependency-Track + DefectDojo
+#   docker compose --profile tools run --rm trivy ...   # on-demand scanners
+#
+# Secrets come from the gitignored .env (see README). Never put them in this file.
+name: barad-dur
+
+x-dojo-env: &dojo-env
+  DD_DATABASE_URL: postgresql://defectdojo:${DD_DB_PASSWORD:?set DD_DB_PASSWORD in .env}@postgres:5432/defectdojo
+  DD_CELERY_BROKER_URL: redis://dojo-valkey:6379/0
+  DD_CACHE_URL: redis://dojo-valkey:6379/1
+  DD_SECRET_KEY: ${DD_SECRET_KEY:?set DD_SECRET_KEY in .env}
+  DD_CREDENTIAL_AES_256_KEY: ${DD_CREDENTIAL_AES_256_KEY:?set DD_CREDENTIAL_AES_256_KEY in .env}
+  DD_DATABASE_READINESS_TIMEOUT: "30"
+
+services:
+  # ──────────────────── PostgreSQL: one server, two apps ────────────────────
+  # Dependency-Track and DefectDojo share one PostgreSQL server but keep
+  # separate databases and separate roles: `dtrack` owns `dtrack`, `defectdojo`
+  # owns `defectdojo`. On the first initialization of the data volume,
+  # docker/postgres/init-restore.sh restores the verified dumps from the
+  # migration-backup volume and only then marks the cluster ready.
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      # Existing Dependency-Track initialization (role + database `dtrack`).
+      POSTGRES_DB: dtrack
+      POSTGRES_USER: dtrack
+      POSTGRES_PASSWORD: ${DT_DB_PASSWORD:?set DT_DB_PASSWORD in .env}
+      # Read only by init-restore.sh, to create the DefectDojo role. Never printed.
+      DD_DB_PASSWORD: ${DD_DB_PASSWORD:?set DD_DB_PASSWORD in .env}
+    volumes:
+      - postgres-db:/var/lib/postgresql
+      # Verified dumps; read-only, never written by the server.
+      - migration-backup:/migration-backup:ro
+      - ./docker/postgres/init-restore.sh:/docker-entrypoint-initdb.d/init-restore.sh:ro
+    # Reached by Dependency-Track on dt-internal and by DefectDojo on
+    # dojo-internal; each side keeps its own network isolation.
+    networks: [dt-internal, dojo-internal]
+    healthcheck:
+      # Fail closed: the marker is written only after both dumps are restored,
+      # and the entrypoint's temporary server (used during initialization)
+      # listens on the unix socket only, so TCP is unreachable until the real
+      # server starts. A restore that failed therefore keeps this service
+      # unhealthy on every later restart instead of exposing empty databases.
+      test:
+        - CMD-SHELL
+        - test -f /var/lib/postgresql/.migration-restore-complete && pg_isready -h 127.0.0.1 -U dtrack -d dtrack
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      # The dtrack dump is ~3 GB; allow a long first initialization.
+      start_period: 30m
+    restart: unless-stopped
+
+  # ───────────────────────── Dependency-Track ─────────────────────────
+  dt-apiserver:
+    image: ghcr.io/dependencytrack/apiserver:5.2.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DT_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dtrack
+      DT_DATASOURCE_USERNAME: dtrack
+      DT_DATASOURCE_PASSWORD: ${DT_DB_PASSWORD:?set DT_DB_PASSWORD in .env}
+    volumes:
+      - dt-data:/data
+    ports:
+      - "127.0.0.1:${DT_API_PORT:-18080}:8080"
+    # dt-internal for the database, edge for advisory-feed egress.
+    networks: [dt-internal, edge]
+    mem_limit: 2g
+    restart: unless-stopped
+
+  dt-frontend:
+    image: ghcr.io/dependencytrack/frontend:5.2.1
+    depends_on:
+      - dt-apiserver
+    environment:
+      API_BASE_URL: http://localhost:${DT_API_PORT:-18080}
+    ports:
+      - "127.0.0.1:${DT_WEB_PORT:-18081}:8080"
+    # OrbStack will not publish a port from an internal-only network.
+    networks: [dt-internal, edge]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ────────────────────────── DefectDojo CE ───────────────────────────
+  dojo-valkey:
+    image: valkey/valkey:9.1.2-alpine
+    volumes:
+      - dojo-valkey:/data
+    networks: [dojo-internal]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  dojo-initializer:
+    image: defectdojo/defectdojo-django:3.4.202
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dojo-valkey:
+        condition: service_healthy
+    entrypoint: ["/wait-for-it.sh", "postgres:5432", "--", "/entrypoint-initializer.sh"]
+    environment:
+      <<: *dojo-env
+      DD_ADMIN_USER: admin
+      DD_ADMIN_MAIL: admin@defectdojo.local
+      DD_ADMIN_FIRST_NAME: Admin
+      DD_ADMIN_LAST_NAME: User
+      DD_INITIALIZE: "true"
+    networks: [dojo-internal, edge]
+    restart: "no"
+
+  dojo-uwsgi:
+    image: defectdojo/defectdojo-django:3.4.202
+    depends_on:
+      dojo-initializer:
+        condition: service_completed_successfully
+    entrypoint: ["/wait-for-it.sh", "postgres:5432", "-t", "30", "--", "/entrypoint-uwsgi.sh"]
+    environment:
+      <<: *dojo-env
+      DD_DEBUG: "False"
+      DD_ALLOWED_HOSTS: "127.0.0.1,localhost"
+    volumes:
+      - dojo-media:/app/media
+    networks: [dojo-internal, edge]
+    restart: unless-stopped
+
+  dojo-celeryworker:
+    image: defectdojo/defectdojo-django:3.4.202
+    depends_on:
+      dojo-initializer:
+        condition: service_completed_successfully
+    entrypoint: ["/wait-for-it.sh", "postgres:5432", "-t", "30", "--", "/entrypoint-celery-worker.sh"]
+    environment: *dojo-env
+    volumes:
+      - dojo-media:/app/media
+    networks: [dojo-internal, edge]
+    restart: unless-stopped
+
+  dojo-celerybeat:
+    image: defectdojo/defectdojo-django:3.4.202
+    depends_on:
+      dojo-initializer:
+        condition: service_completed_successfully
+    entrypoint: ["/wait-for-it.sh", "postgres:5432", "-t", "30", "--", "/entrypoint-celery-beat.sh"]
+    environment: *dojo-env
+    networks: [dojo-internal, edge]
+    restart: unless-stopped
+
+  dojo-nginx:
+    image: defectdojo/defectdojo-nginx:3.4.202
+    depends_on:
+      dojo-uwsgi:
+        condition: service_started
+    environment:
+      DD_UWSGI_HOST: dojo-uwsgi
+      DD_UWSGI_PORT: "3031"
+    volumes:
+      - dojo-media:/usr/share/nginx/html/media:ro
+    ports:
+      - "127.0.0.1:${DOJO_PORT:-18082}:8080"
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ───────── Trivy server: Dependency-Track's vulnerability analyzer ─────────
+  # Dependency-Track 5.2.1 does not bundle Trivy; it talks to an external server in
+  # client/server mode. DT sends the token in the `Trivy-Token` header (verified in
+  # vuln-analyzer-trivy-5.2.1.jar), which matches Trivy's default --token-header.
+  # No published port: only containers on `edge` (Dependency-Track) can reach it.
+  trivy-server:
+    image: aquasec/trivy:0.76.1
+    command:
+      - server
+      - --listen
+      - 0.0.0.0:4954
+      - --token
+      - ${TRIVY_SERVER_TOKEN:?set TRIVY_SERVER_TOKEN in .env}
+      - --cache-dir
+      - /root/.cache/trivy
+    volumes:
+      - trivy-server-cache:/root/.cache/trivy
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4954/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    mem_limit: 1g
+    restart: unless-stopped
+
+  # ──────────────── Scanners: no UI, on-demand only ───────────────────
+  # Not started by `up`. Invoke with:
+  #   docker compose --profile tools run --rm trivy fs /scan
+  trivy:
+    image: aquasec/trivy:0.76.1
+    profiles: [tools]
+    volumes:
+      - trivy-cache:/root/.cache/trivy
+      - "${SCAN_ROOT:-.}:/scan:ro"
+      - "./artifacts:/output"
+    networks: [edge]
+    working_dir: /scan
+
+
+networks:
+  # Published UIs and outbound egress (image pulls, advisory feeds).
+  edge: {}
+  # No route to the internet; databases live here.
+  dt-internal:
+    internal: true
+  dojo-internal:
+    internal: true
+
+# Volume names are pinned explicitly so this project never orphans data it is
+# responsible for. External volumes must already exist: `up` fails loudly
+# instead of silently starting against empty storage.
+volumes:
+  # Unified PostgreSQL data. Created and owned by this Compose project.
+  postgres-db:
+    name: barad-dur_postgres-db
+  # Verified pg_dump archives taken before the cutover. External and read-only
+  # by contract: `compose down -v` must never be able to remove the only copy
+  # of the source data.
+  migration-backup:
+    name: barad-dur_migration-backup
+    external: true
+  # Rollback-only, external and no longer referenced by any service: these
+  # still hold the pre-unification data and are kept untouched so a rollback
+  # needs no re-import.
+  dt-db:
+    name: barad-dur_dt-db
+    external: true
+  dt-data:
+    name: barad-dur_dt-data
+  dojo-db:
+    name: barad-dur-dojo_dojo-db
+    external: true
+  dojo-media:
+    name: barad-dur-dojo_dojo-media
+  dojo-valkey:
+    name: barad-dur-dojo_dojo-valkey
+  trivy-server-cache:
+    name: barad-dur-trivy-server-cache
+  trivy-cache:
+    name: barad-dur-trivy-cache
+    # Shared vulnerability-DB cache created outside this project; adopt, never own.
+    external: true
