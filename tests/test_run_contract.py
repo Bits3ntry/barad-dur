@@ -22,6 +22,7 @@ class Remote:
     wrong_product = False
     findings_count = 1
     fail_dt_upload = False
+    dt_upload_error = None
 
     @classmethod
     def reset(cls):
@@ -36,6 +37,7 @@ class Remote:
         cls.wrong_product = False
         cls.findings_count = 1
         cls.fail_dt_upload = False
+        cls.dt_upload_error = None
 
     def __init__(self, *args, **kwargs):
         pass
@@ -53,6 +55,8 @@ class Remote:
                 raise HttpStatusError(404, b'not found', [], url)
             return self._ok(Remote.bom)
         if url.endswith('/api/v1/bom'):
+            if Remote.dt_upload_error is not None:
+                raise Remote.dt_upload_error
             if Remote.fail_dt_upload:
                 raise HttpStatusError(503, b'unavailable', [], url)
             Remote.uploaded = kwargs['json_body']['bom']
@@ -241,6 +245,18 @@ DOJO_TOKEN=dotenv-dojo-secret
         self.assertEqual(manifest['sync']['dependency_track']['status'], 'PUBLISHED')
         self.assertEqual(manifest['sync']['dependency_track']['reason'], 'remote_inventory_unverifiable')
 
+    def test_dt_validation_message_is_bounded_and_does_not_expose_payload(self):
+        message = 'token private-dt rejected: ' + ('x' * 300)
+        Remote.dt_upload_error = HttpStatusError(
+            400, json.dumps({'message': message}).encode('utf-8'), [], 'http://localhost/api/v1/bom'
+        )
+        code, out, err, manifest = self.run_cli('.')
+        detail = manifest['sync']['dependency_track']['detail']
+        self.assertEqual(code, 4)
+        self.assertIn('[redacted]', detail)
+        self.assertEqual(len(detail), 240)
+        self.assertNotIn('private-dt', detail + out + err + json.dumps(manifest))
+
     def test_dt_upload_failure_keeps_scan_and_dojo_import(self):
         Remote.fail_dt_upload = True
         code, out, err, manifest = self.run_cli('.')
@@ -249,6 +265,7 @@ DOJO_TOKEN=dotenv-dojo-secret
         self.assertEqual(manifest['sync']['defectdojo']['status'], 'PUBLISHED')
         self.assertEqual(manifest['scan']['status'], 'SUCCESS')
         self.assertEqual(manifest['sync']['dependency_track']['http_status'], 503)
+        self.assertNotIn('detail', manifest['sync']['dependency_track'])
 
     def test_partial_dojo_failure_keeps_scan_and_exits_four(self):
         Remote.fail_dojo = True

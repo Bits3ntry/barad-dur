@@ -1,5 +1,6 @@
 """Dependency-Track project, version, and CycloneDX SBOM synchronization."""
 import base64
+import json
 import time
 from urllib.parse import quote
 
@@ -139,5 +140,27 @@ def synchronize(settings, manifest, sbom_path, *, pending=None):
                 return result
             time.sleep(min(.5, max(deadline - time.monotonic(), 0)))
     except (HttpStatusError, HttpTransportError, ValueError, OSError) as error:
-        return {'status': 'FAILED', 'reason': 'remote_error',
-                'http_status': error.status if isinstance(error, HttpStatusError) else None}
+        result = {'status': 'FAILED', 'reason': 'remote_error',
+                  'http_status': error.status if isinstance(error, HttpStatusError) else None}
+        detail = _safe_validation_detail(error, settings.secret_values())
+        if detail:
+            result['detail'] = detail
+        return result
+
+
+def _safe_validation_detail(error, secrets):
+    """Expose only a bounded JSON `message`, never arbitrary response content."""
+    if not isinstance(error, HttpStatusError):
+        return None
+    try:
+        body = json.loads(error.body.decode('utf-8'))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    message = body.get('message') if isinstance(body, dict) else None
+    if not isinstance(message, str):
+        return None
+    detail = ' '.join(message.split())[:240]
+    for secret in secrets:
+        if secret:
+            detail = detail.replace(str(secret), '[redacted]')
+    return detail or None
