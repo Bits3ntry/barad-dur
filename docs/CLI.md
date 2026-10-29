@@ -23,7 +23,7 @@ python3 -m venv /tmp/barad-venv
 
 Evidence is anchored to the directory where you invoke `barad` (the workspace), not to the scanned target: scanning another project never writes into that project. Reports live in `<workspace>/.barad/reports/<project>/<version>/<scan-id>/` (or inside the `--out` directory with the same layout), state in `<workspace>/.barad/state/`, and the Trivy cache in `<workspace>/.barad-dur/cache/trivy/`.
 
-When the same project+version is scanned again and the folder already has evidence, the CLI asks: replace the folder `[r]` or create a `version_(1)` folder `[n]`. In non-interactive runs (CI, scripts, `--out` from automation) it never waits for input: it always creates the next `version_(n)` folder so no scan is silently deleted.
+Scan ids embed a UTC timestamp plus a random suffix, so re-scanning the same project+version simply adds another `<scan-id>/` folder next to the previous one. No scan evidence is ever replaced or deleted by a later run.
 
 ## Configuration
 

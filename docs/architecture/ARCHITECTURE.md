@@ -34,7 +34,7 @@ compose.yaml -> unified PostgreSQL, Dependency-Track, DefectDojo, Valkey, Trivy 
 
 - PostgreSQL remains one server with separate `dtrack` and `defectdojo` databases and roles. Existing backup and rollback volumes are external and are never removed by Compose.
 - Raw Trivy reports and execution logs are private evidence. The manifest, sanitized report, SBOM, and checksums are suitable for controlled sharing.
-- Evidence, state and the Trivy cache anchor to the invocation workspace (or the `--out`/`-O` directory for reports). Reports nest one level per project and one per resolved version, so repeated scans of the same project+version prompt to replace that folder or create `version_(n)`; non-interactive runs always suffix. Scanning a target never writes into the target; explicit `--out` inside the target remains possible by user choice.
+- Evidence, state and the Trivy cache anchor to the invocation workspace (or the `--out`/`-O` directory for reports). Reports nest one level per project and one per resolved version; each run appends a timestamped scan-id folder and never replaces prior evidence. Scanning a target never writes into the target; explicit `--out` inside the target remains possible by user choice.
 - `scan` creates artifacts but has no remote mutation. `run` preserves scan evidence if either adapter is unavailable or partial. `health` issues no writes.
 - Dependency-Track publication is verified by an exported normalized SBOM, not inferred from HTTP success.
 - DefectDojo reimport is bound to a stable test and Product; it never auto-closes historical findings.

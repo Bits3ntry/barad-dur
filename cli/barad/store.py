@@ -1,8 +1,8 @@
 """CLI evidence layout: `<reports>/<project>/<version>/<scan-id>/` plus `.barad/state/`.
 
-`<reports>` is the workspace reports directory (or the `--out` directory). When
-the same project version already holds evidence, the caller decides between
-replacing it or scanning into a suffixed `version_(n)` folder.
+`<reports>` is the workspace reports directory (or the `--out` directory).
+Scan-ids embed a UTC timestamp plus a random suffix, so repeated scans of the
+same project version simply add a new scan-id folder; no evidence is replaced.
 
 A Trivy secret finding embeds the matched credential in the raw report, so the
 CLI treats its evidence as private: managed directories are 0700 and evidence
@@ -12,7 +12,6 @@ import json
 import os
 import re
 import secrets
-import shutil
 from pathlib import Path
 
 from .core.errors import EvidenceError
@@ -52,27 +51,8 @@ class ScanStore:
         self.sync_path = self.state_dir / "remote-sync.json"
         self.log_path = self.run_dir / "execution.log"
 
-    def prepare(self, collision=None):
-        """Create evidence directories, resolving an existing project+version.
-
-        `collision(base_dir)` returns 'replace' (clear the existing folder) or
-        'suffix' (scan into `version_(n)`); without a handler an existing folder
-        is reused as-is because a fresh run-id never overwrites old evidence.
-        """
-        if self.project and self.evidence.is_dir() and any(self.evidence.iterdir()):
-            decision = (collision(self.evidence) if collision else "existing")
-            if decision == "replace":
-                shutil.rmtree(self.evidence)
-            elif decision == "suffix":
-                for index in range(1, 1000):
-                    candidate = self.output / self.project / f"{self.version}_({index})"
-                    if not candidate.exists():
-                        self.evidence = candidate
-                        self.run_dir = self.evidence / self.scan_id
-                        self.log_path = self.run_dir / "execution.log"
-                        break
-                else:
-                    raise EvidenceError("cannot allocate a suffixed evidence folder")
+    def prepare(self):
+        """Create the evidence directories (project/version/scan-id when known)."""
         _private_directory(self.root / ".barad")
         if self.output != self.root:
             _private_directory(self.output)

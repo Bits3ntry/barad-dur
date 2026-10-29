@@ -16,7 +16,7 @@ python3 -m venv /tmp/barad-venv
 /tmp/barad-venv/bin/barad run .
 ```
 
-`barad scan` writes `security.json`, `sbom.cdx.json`, and `manifest.json` into `.barad/reports/<project>/<version>/<scan-id>/` anchored to the directory where you run it, so a scanned project is never modified; `--out`/`-O DIR` chooses the reports directory. Re-scanning the same project+version either replaces that folder (interactive prompt) or creates `version_(1)`, `version_(2)`, and so on; non-interactive runs always create the suffixed folder. Raw `security.json` is private evidence; do not upload it. `barad run` uses the same scan and synchronizes only enabled integrations. `barad health` is read-only.
+`barad scan` writes `security.json`, `sbom.cdx.json`, and `manifest.json` into `.barad/reports/<project>/<version>/<scan-id>/` anchored to the directory where you run it, so a scanned project is never modified; `--out`/`-O DIR` chooses the reports directory. Scan ids carry a UTC timestamp, so re-scanning the same project+version simply adds a new scan-id folder; no evidence is ever replaced. Raw `security.json` is private evidence; do not upload it. `barad run` uses the same scan and synchronizes only enabled integrations. `barad health` is read-only.
 
 ## Architecture
 
