@@ -1,4 +1,5 @@
 """Public run workflow and remote inventory contract (no real services mutated)."""
+import base64
 import json
 import os
 import tempfile
@@ -212,6 +213,14 @@ DOJO_TOKEN=dotenv-dojo-secret
         self.assertEqual(manifest['sync']['defectdojo']['status'], 'FAILED')
         self.assertEqual(manifest['sync']['defectdojo']['reason'], 'test_product_mismatch')
         self.assertFalse(any(c[1].endswith('/api/v2/reimport-scan/') for c in Remote.calls))
+
+    def test_dt_upload_deduplicates_cyclonedx_dependency_edges(self):
+        FakeTrivy.sbom = cyclonedx(dependencies=[{'ref': 'pkg:pypi/demo@1.2.3',
+                                                  'dependsOn': ['pkg:pypi/a@1', 'pkg:pypi/a@1']}])
+        code, out, err, manifest = self.run_cli('.')
+        uploaded = json.loads(base64.b64decode(Remote.uploaded))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(uploaded['dependencies'][0]['dependsOn'], ['pkg:pypi/a@1'])
 
     def test_changed_inventory_uploads_even_with_same_version(self):
         self.assertEqual(self.run_cli('.')[0], 0)

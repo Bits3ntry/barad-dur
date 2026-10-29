@@ -102,7 +102,7 @@ def synchronize(settings, manifest, sbom_path, *, pending=None):
             except (HttpStatusError, HttpTransportError, ValueError):
                 return {**pending, 'reason': 'previous_processing_unverifiable'}
 
-        encoded = base64.b64encode(sbom_path.read_bytes()).decode('ascii')
+        encoded = base64.b64encode(_deduplicate_dependencies(sbom_path)).decode('ascii')
         uploader = HttpClient(timeout=block.get('timeout_seconds', 15), max_attempts=1)
         submitted = uploader.request('PUT', f'{endpoint}/api/v1/bom', headers=headers,
                                      json_body={'project': uuid, 'bom': encoded}).json()
@@ -146,6 +146,15 @@ def synchronize(settings, manifest, sbom_path, *, pending=None):
         if detail:
             result['detail'] = detail
         return result
+
+
+def _deduplicate_dependencies(sbom_path):
+    """Normalize CycloneDX dependency edges for Dependency-Track validation."""
+    document = json.loads(sbom_path.read_text(encoding='utf-8'))
+    for dependency in document.get('dependencies', []):
+        if isinstance(dependency, dict) and isinstance(dependency.get('dependsOn'), list):
+            dependency['dependsOn'] = list(dict.fromkeys(dependency['dependsOn']))
+    return json.dumps(document, separators=(',', ':')).encode('utf-8')
 
 
 def _safe_validation_detail(error, secrets):
