@@ -1,0 +1,23 @@
+# Barad-dûr legacy cleanup for CLI + Compose + CI
+Branch: feat/barad-security-workflow; delivery: auto-chain, chain_strategy=feature-branch-chain; forecast: >400 authored deletions/edits; no push/PR/merge.
+Test runner: .venv/bin/python -m unittest discover -s cli/tests -q; docker compose config --quiet; GitHub workflow structural checks (GitHub-hosted execution unavailable).
+
+## Specs
+S1: "ELIMINA TODO TODO TODO lo que no tenga que ver o sea legacy, veo demasiasfdas cosas que no tienen nada que ver"
+S2: "CLI + Compose + CI actualizado (recomendado)"; "Migrar CI a `barad`; retirar runner anterior, MCP y utilidades/documentos obsoletos. Conservar `barad_security` porque el CLI lo usa."
+S3: "Sí, borrar esas rutas definitivamente"; "`_docs/`, `defectdojo_mcp/`, `scripts/{dt,importer,sbom,scanners}/`, `requirements.txt` y `requirements-mcp.txt`"; "`compose.yaml`, `.barad/`, `.barad-dur/`, `.env`, `.secrets/` y `.venv/` se conservan."
+S4: "Never delete persistent Docker volumes or databases." "Do not remove historical scan data." "Never commit secrets." (continuing constraints from the original consolidation request)
+
+## Tasks
+T1 [S1-S4] delegated + parent deletion, done; CI commit d169daf, orphan script deletion 2a86287; 85 CLI tests, Compose config and independent verifier pass; hosted Actions unverified.
+T2 [S1-S2,S4] inline, pending; remove old runner entry/modules and config, keep imported barad_security library; regression checks and commit pending.
+T3 [S1-S4] inline, pending; remove obsolete tracked docs/examples/tests and old task document, revise current README/architecture/CLI docs and links; structural checks and commit pending.
+T4 [S1-S4] inline, pending; run final CLI/Compose/CI structural checks and independent high-risk verification; record exact proof, review slices, and close document.
+
+## Log
+L1: ELIMINA TODO TODO TODO lo que no tenga que ver o sea legacy, veo demasiasfdas cosas que no tienen nada que ver
+L2: User selected verbatim: "CLI + Compose + CI actualizado (recomendado)". Option description: "Migrar CI a `barad`; retirar runner anterior, MCP y utilidades/documentos obsoletos. Conservar `barad_security` porque el CLI lo usa." User then selected verbatim: "Sí, borrar esas rutas definitivamente" after explicit warning that the named untracked paths have no Git recovery. The protected paths in S3 stay untouched.
+L3: Initial map: cli/barad imports barad_security scanner/config/http/evidence/versioning/sanitizer and schema, so only standalone runner modules are legacy. Current .github/workflows/security.yml runs old run/sync with separate no-secret scan and trusted publish jobs; migrate trust boundaries without silently promoting PR findings or calling run with secrets on untrusted refs. Existing tree already has 52 tracked deletions and 9 untracked roots; compose.yaml is untracked and protected. _docs, scripts, and MCP untracked deletion is explicitly authorized. Previous feature document odd/tasks/barad-cli-v01.md remains available in Engram #7499 before cleanup.
+L4: CI plan assumption (technical, not a new user requirement): keep the credential-free PR scan job; run barad only on trusted default/release ref in a separate job with secrets and an explicit CI config. barad run rescans, so do not present this as the old artifact-only sync; preserve both jobs' evidence, never claim hosted CI execution locally. Remove legacy reusable-workflow parameters only with docs/tests.
+L5: CI worker observed RED 14 tests (6 failures, 4 errors), GREEN 21 tests; migrated workflow, explicit config and CLI guide committed as review slice ffd3082..d169daf (581 authored changed lines, cohesive workflow/config/tests/docs). Secrets only in trusted publish step; raw evidence excluded from uploads; missing credentials visible skip; publication failure propagates. The user authorized 29 untracked source/docs/requirements files for irreversible deletion; child harness denied destructive execution, so parent deleted the exact enumerated paths plus tracked scripts/security/demo-local.sh. After deletion, 85 CLI tests and Compose config exited 0. GitHub-hosted execution not available; no real CI publication claimed. Untracked deletions cannot appear in Git history.
+L6: Review slice d169daf..2a86287 removes orphaned tracked demo script (114 deletions), leaving protected paths intact. Native ASSESS item 2 was unassessable due pre-existing untracked compose; RDD off. Independent verifier T1 S1-S4 PASS with no blocker: focused 21, full 85, Compose config, diff checks, protected path and secret/artifact audits all passed. GitHub-hosted workflow execution remains UNVERIFIED and cannot be inferred from YAML/stub-shell tests.
