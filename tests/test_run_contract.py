@@ -1,5 +1,8 @@
 """Public run workflow and remote inventory contract (no real services mutated)."""
 import json
+import os
+import tempfile
+from pathlib import Path
 from unittest import mock
 
 from cli_support import CliTestCase, FakeTrivy, invoke, cyclonedx
@@ -112,6 +115,57 @@ integrations:
         reports = list((self.root / '.barad/reports').glob('**/manifest.json'))
         manifest = json.loads(max(reports, key=lambda p: p.stat().st_mtime_ns).read_text()) if reports else None
         return code, out, err, manifest
+
+    def test_workspace_dotenv_enables_an_explicit_profile_for_external_target(self):
+        external = tempfile.TemporaryDirectory()
+        self.addCleanup(external.cleanup)
+        target = Path(external.name) / 'councilbox-server'
+        target.mkdir()
+        (target / 'pyproject.toml').write_text(
+            '[project]\nname="councilbox-server"\nversion="1.0"\n', encoding='utf-8'
+        )
+        profile = self.write('config/local/councilbox-server.barad.yml', '''version: 1
+project:
+  name: poc
+integrations:
+  dependency_track:
+    enabled: true
+    endpoint_env: DTRACK_URL
+    token_env: DTRACK_API_KEY
+    auto_create: true
+    wait_timeout_seconds: 1
+  defectdojo:
+    enabled: true
+    endpoint_env: DOJO_URL
+    token_env: DOJO_TOKEN
+    auto_create_context: true
+    product_type_name: CBX
+    engagement_name: councilbox-server security
+''')
+        self.write('.env', '''DTRACK_URL=http://localhost:18080
+DTRACK_API_KEY=dotenv-dt-secret
+DOJO_URL=http://localhost:18082
+DOJO_TOKEN=dotenv-dojo-secret
+''')
+
+        from barad import scan
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch('barad.scan.TrivyRunner', FakeTrivy), \
+             mock.patch('integrations.dependency_track.HttpClient', Remote), \
+             mock.patch('integrations.defectdojo.HttpClient', Remote):
+            code, out, err = invoke(['run', str(target), '--config', str(profile)], cwd=self.root)
+
+        manifests = list((self.root / '.barad/reports').glob('**/manifest.json'))
+        manifest = json.loads(manifests[0].read_text(encoding='utf-8'))
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(manifest['sync']['dependency_track']['status'], 'PUBLISHED')
+        self.assertEqual(manifest['sync']['defectdojo']['status'], 'PUBLISHED')
+        self.assertTrue((self.root / '.barad/state/local-inventory.json').is_file())
+        self.assertFalse((target / '.barad').exists())
+        self.assertFalse((target / '.barad.yml').exists())
+        persisted = out + err + json.dumps(manifest)
+        self.assertNotIn('dotenv-dt-secret', persisted)
+        self.assertNotIn('dotenv-dojo-secret', persisted)
 
     def test_initial_run_creates_version_uploads_and_imports(self):
         code, out, err, manifest = self.run_cli('.')

@@ -12,6 +12,7 @@ from ..core.errors import ConfigError
 
 from .. import __version__
 from ..config import CONFIG_FILENAME, load_settings, read_project_config
+from ..dotenv import load_workspace_environment
 from ..project import derive_name, detect_ecosystems
 
 
@@ -25,11 +26,12 @@ def register(subparsers):
 def execute(args):
     root = Path.cwd().resolve()
     config_path = Path(args.config).expanduser().resolve() if args.config else root / CONFIG_FILENAME
+    environment = load_workspace_environment(root, os.environ)
     document, source = read_project_config(config_path if config_path.is_file() or args.config else None)
     project = document.get('project') if isinstance(document.get('project'), dict) else {}
     name, _ = derive_name(project.get('name'), None, root)
     settings = load_settings(document, source=source, root=root, project_name=name,
-                             ecosystems=detect_ecosystems(root), environ=os.environ)
+                             ecosystems=detect_ecosystems(root), environ=environment)
     checks = {'cli': {'status': 'HEALTHY', 'version': __version__},
               'configuration': {'status': 'HEALTHY', 'source': str(source) if source else 'defaults'}}
     git = shutil.which('git')

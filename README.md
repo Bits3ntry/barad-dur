@@ -46,7 +46,7 @@ Trivy Server is an internal Dependency-Track analyzer. The `trivy` service is an
 
 ## Configuration
 
-Project configuration is optional `.barad.yml`; credentials are environment variables, never YAML. See [CLI usage](docs/CLI.md) for the supported configuration and [architecture](docs/architecture/ARCHITECTURE.md) for publication invariants.
+Project configuration is optional `.barad.yml`; credentials are environment variables, never YAML. For local CLI use, Barad also reads the invocation workspace's `.env` without modifying the scanned target. See [CLI usage](docs/CLI.md) for the supported configuration and [architecture](docs/architecture/ARCHITECTURE.md) for publication invariants.
 
 ## Verification
 

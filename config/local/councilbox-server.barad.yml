@@ -1,0 +1,23 @@
+# Local CLI profile only. Pass it explicitly from the Barad workspace; it does
+# not belong in the scanned repository and it does not configure GitHub Actions.
+version: 1
+
+project:
+  name: councilbox-server
+
+integrations:
+  dependency_track:
+    enabled: true
+    endpoint_env: DTRACK_URL
+    token_env: DTRACK_API_KEY
+    auto_create: true
+    wait_timeout_seconds: 120
+
+  defectdojo:
+    enabled: true
+    endpoint_env: DOJO_URL
+    token_env: DOJO_TOKEN
+    product_name: councilbox-server
+    product_type_name: CBX
+    engagement_name: councilbox-server security
+    auto_create_context: true

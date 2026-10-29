@@ -8,6 +8,7 @@ from ..core.errors import BaradError, ConfigError, UsageError
 from ..core.gitctx import detect_git_context
 
 from ..config import CONFIG_FILENAME, load_settings, read_project_config
+from ..dotenv import load_workspace_environment
 from ..project import derive_name, detect_ecosystems
 from ..scan import run_scan
 
@@ -40,7 +41,7 @@ def perform(args):
     """Resolve a target and invoke the same scanning engine for scan and run."""
     settings, target_type, target_value, context, name_source = resolve(args)
     return run_scan(settings, target_type=target_type, target_value=target_value,
-                    git_context=context, name_source=name_source, environ=os.environ)
+                    git_context=context, name_source=name_source, environ=settings.environ)
 
 
 def resolve(args):
@@ -71,6 +72,7 @@ def resolve(args):
     else:
         root, target_value = _configured_root(configured.get("target") or ".", config_path, cwd)
     workspace = cwd
+    environment = load_workspace_environment(workspace, os.environ)
 
     output_override = _output_override(args.output, cwd)
     if root != search_root:
@@ -87,7 +89,7 @@ def resolve(args):
         root=root,
         project_name=name,
         ecosystems=ecosystems,
-        environ=os.environ,
+        environ=environment,
         output_override=output_override,
         target_override=target_value if target_type == 'fs' and target_value != '.' else None,
         workspace=workspace,

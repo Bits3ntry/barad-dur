@@ -1,4 +1,5 @@
 """Non-destructive public health contract."""
+import os
 from unittest import mock
 
 from cli_support import CliTestCase, invoke
@@ -43,6 +44,36 @@ class HealthTests(CliTestCase):
         self.assertIn('trivy: HEALTHY', out)
         self.assertEqual(ReadOnlyClient.calls, [])
         self.assertFalse((self.root / '.barad').exists())
+
+    def test_workspace_dotenv_configures_enabled_health_checks(self):
+        config = self.write_config('''version: 1
+scan:
+  runner: local
+integrations:
+  dependency_track:
+    enabled: true
+    endpoint_env: DTRACK_URL
+    token_env: DTRACK_API_KEY
+  defectdojo:
+    enabled: true
+    endpoint_env: DOJO_URL
+    token_env: DOJO_TOKEN
+''')
+        self.write('.env', '''DTRACK_URL=http://localhost:18080
+DTRACK_API_KEY=dotenv-dt-secret
+DOJO_URL=http://localhost:18082
+DOJO_TOKEN=dotenv-dojo-secret
+''')
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch('barad.commands.health.TrivyRunner.version', return_value='0.76.1'), \
+             mock.patch('barad.commands.health.HttpClient', ReadOnlyClient):
+            code, out, err = invoke(['health', '--config', str(config)], cwd=self.root)
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn('health: HEALTHY', out)
+        self.assertTrue(ReadOnlyClient.calls)
+        self.assertTrue(all(method == 'GET' for method, _, _ in ReadOnlyClient.calls))
+        self.assertNotIn('dotenv-dt-secret', out + err)
+        self.assertNotIn('dotenv-dojo-secret', out + err)
 
     def test_remote_auth_failure_is_degraded_without_secret_leak(self):
         config = self.write_config('''version: 1

@@ -56,6 +56,20 @@ integrations:
 
 Credentials are environment variables: `DTRACK_URL`, `DTRACK_API_KEY`, `DOJO_URL`, and `DOJO_TOKEN`. Endpoint environment variables override YAML endpoints. Tokens and secret values are rejected in `.barad.yml`.
 
+For the local CLI, `barad` automatically reads `<workspace>/.env` before it resolves a command. Explicit shell environment variables win over `.env`; `.env` values are never printed or written to evidence. The parser accepts only plain `KEY=VALUE` assignments (optional surrounding quotes and comments), deliberately without shell expansion or command substitution.
+
+### Local external repositories
+
+Keep local profiles in this Barad workspace and pass them explicitly; do not add `.barad.yml` or any Barad state to the repository being scanned. `config/local/councilbox-server.barad.yml` is the ready-to-use profile for Councilbox Server. Append the non-secret defaults from `config/local/barad.env.example` to this workspace's `.env`, then fill in only `DTRACK_API_KEY` and `DOJO_TOKEN`.
+
+```sh
+barad health --config config/local/councilbox-server.barad.yml
+barad run /absolute/path/to/councilbox-server \
+  --config config/local/councilbox-server.barad.yml
+```
+
+When invoked from the Barad workspace, reports and sync state remain under its `.barad/` directory. The external target is read-only. This profile is local CLI configuration; it does not configure the GitHub Action.
+
 ## Publication invariants
 
 Dependency-Track uses the exact project name and version. It creates a missing project/version only when `auto_create: true`, compares the exported remote CycloneDX inventory, and requires processing completion plus a matching export before reporting `PUBLISHED`. A local inventory snapshot is never remote-publication proof.
