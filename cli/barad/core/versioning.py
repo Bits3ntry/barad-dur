@@ -5,6 +5,7 @@ Supported sources (see `project.version.source`): `auto`, `package-json`,
 pyproject.toml, then the nearest Git tag and finally reports that the version is
 unresolved instead of guessing.
 """
+import hashlib
 import json
 import os
 import re
@@ -43,6 +44,17 @@ class VersionInfo:
 
 def is_mutable_version(value):
     return str(value or "").strip().lower() in _MUTABLE
+
+
+def branch_version(value, branch):
+    """Return a stable, collision-resistant remote version for one branch."""
+    base = str(value or "").strip()
+    name = str(branch or "").strip()
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower() or "branch"
+    if not base:
+        return None
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:10]
+    return f"{base}-branch-{slug[:48]}-{digest}"
 
 
 def _read_package_json(text):

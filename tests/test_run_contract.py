@@ -306,6 +306,58 @@ integrations:
                          'invalid_release_identity')
         self.assertFalse(any('/api/v1/' in c[1] for c in Remote.calls))
 
+    def test_temporary_branch_publishes_under_an_isolated_version_when_enabled(self):
+        self.write_config('''version: 1
+project:
+  name: poc
+integrations:
+  dependency_track:
+    enabled: true
+    auto_create: true
+    publish_branches: true
+    wait_timeout_seconds: 1
+    endpoint: http://localhost:18080
+  defectdojo:
+    enabled: true
+    endpoint: http://localhost:18082
+    auto_create_context: true
+    product_type_name: Barad CLI POC
+''')
+        from barad.core.gitctx import GitContext
+        from barad.core.versioning import branch_version
+        context = GitContext(repository_root=self.root, available=True,
+                             event='local', branch='feature/security-hardening')
+        with mock.patch('barad.commands.scan._git_context', return_value=context):
+            code, out, err, manifest = self.run_cli('.')
+
+        isolated = branch_version('1.0', 'feature/security-hardening')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(manifest['application_version']['value'], isolated)
+        self.assertEqual(manifest['application_version']['source'], 'pyproject+branch')
+        self.assertEqual(manifest['sync']['dependency_track']['status'], 'PUBLISHED')
+        self.assertIn(isolated, manifest['sync']['defectdojo']['test_title'])
+
+    def test_unicode_branch_has_an_isolated_remote_version(self):
+        from barad.core.versioning import branch_version
+
+        isolated = branch_version('1.0', '日本語')
+
+        self.assertIsNotNone(isolated)
+        self.assertNotEqual(isolated, '1.0')
+        self.assertRegex(isolated, r'^1\.0-branch-branch-[0-9a-f]{10}$')
+
+    def test_temporary_branch_stays_skipped_without_opt_in(self):
+        from barad.core.gitctx import GitContext
+        context = GitContext(repository_root=self.root, available=True,
+                             event='local', branch='feature/default-safety')
+        with mock.patch('barad.commands.scan._git_context', return_value=context):
+            code, out, err, manifest = self.run_cli('.')
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(manifest['application_version']['value'], '1.0')
+        self.assertEqual(manifest['sync']['dependency_track'],
+                         {'status': 'SKIPPED', 'reason': 'temporary_branch'})
+
     def test_pr_context_never_publishes_stable_version(self):
         self.env['GITHUB_EVENT_NAME'] = 'pull_request'
         code, out, err, manifest = self.run_cli('.')

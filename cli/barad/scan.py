@@ -37,14 +37,14 @@ class ScanResult:
 
 
 def run_scan(settings, *, target_type, target_value, git_context, name_source,
-             environ=None):
+             environ=None, application_version=None):
     config = settings.security
     workspace = settings.workspace or settings.root
     project_name = settings.document["project"]["name"]
     run_id = generate_run_id("scan")
-    application_version = resolve_version(
+    application_version = (application_version or resolve_version(
         config, environ=environ if environ is not None else settings.environ
-    ).public()
+    )).public()
     store = ScanStore(workspace, settings.document["output"]["directory"], run_id,
                       project=project_name,
                       version=application_version["value"]).prepare()

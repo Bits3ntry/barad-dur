@@ -17,7 +17,8 @@ def synchronize(settings, manifest, sbom_path, *, pending=None):
     event = git.get('event') or 'local'
     branch = git.get('branch')
     default = settings.environ.get('BARAD_DEFAULT_BRANCH', 'main')
-    if event == 'pr' or (branch and branch not in (default, 'master') and event != 'release'):
+    temporary = branch and branch not in (default, 'master') and event != 'release'
+    if event == 'pr' or (temporary and not block.get('publish_branches', False)):
         return {'status': 'SKIPPED', 'reason': 'temporary_branch'}
     version = manifest['application_version']['value']
     if not version:

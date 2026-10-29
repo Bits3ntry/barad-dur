@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from .commands.scan import resolve
 from .scan import SANITIZED_REPORT, SBOM, run_scan
 from .store import ScanStore
+from .core.versioning import branch_version, resolve_version
 from integrations import dependency_track, defectdojo
 
 EXIT_PARTIAL = 4
@@ -19,8 +20,9 @@ class RunResult:
 
 def run_workflow(args):
     settings, target_type, target, git, name_source = resolve(args)
+    version = _publication_version(settings, git)
     scan = run_scan(settings, target_type=target_type, target_value=target,
-                    git_context=git, name_source=name_source)
+                    git_context=git, name_source=name_source, application_version=version)
     manifest = scan.manifest
     if scan.exit_code:
         manifest['sync'] = {'dependency_track': {'status': 'SKIPPED', 'reason': 'scan_failed'},
@@ -54,6 +56,21 @@ def run_workflow(args):
     failed = any(result['status'] in ('FAILED', 'PENDING') for result in results.values())
     manifest['status'] = 'partial' if failed else 'completed'
     return _finish(scan, settings, manifest, EXIT_PARTIAL if failed else 0)
+
+
+def _publication_version(settings, git):
+    version = resolve_version(settings.security, environ=settings.environ)
+    branch = git.branch if git is not None else None
+    temporary = branch and branch not in (
+        settings.environ.get('BARAD_DEFAULT_BRANCH', 'main'), 'master'
+    )
+    if not temporary or not settings.block('dependency_track').get('publish_branches', False):
+        return version
+    isolated = branch_version(version.value, branch)
+    if isolated:
+        version.value = isolated
+        version.source = f'{version.source}+branch'
+    return version
 
 
 def _finish(scan, settings, manifest, code, error=None):

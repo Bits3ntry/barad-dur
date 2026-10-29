@@ -70,6 +70,8 @@ barad run /absolute/path/to/councilbox-server \
 
 When invoked from the Barad workspace, reports and sync state remain under its `.barad/` directory. The external target is read-only. This profile is local CLI configuration; it does not configure the GitHub Action.
 
+The Councilbox Server profile enables `dependency_track.publish_branches`. A local non-default branch is published as a separate, deterministic version such as `21.7.7-branch-feature-security-hardening-<hash>`; the branch slug plus hash prevents it from overwriting the stable `21.7.7` inventory. Its DefectDojo test title includes that same isolated version. Pull-request events remain blocked from Dependency-Track publication.
+
 ## Publication invariants
 
 Dependency-Track uses the exact project name and version. It creates a missing project/version only when `auto_create: true`, compares the exported remote CycloneDX inventory, and requires processing completion plus a matching export before reporting `PUBLISHED`. A local inventory snapshot is never remote-publication proof.

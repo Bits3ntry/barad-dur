@@ -42,7 +42,7 @@ DEFAULTS = {
     "integrations": {
         "dependency_track": {
             "enabled": False, "endpoint_env": "DTRACK_URL", "token_env": "DTRACK_API_KEY",
-            "auto_create": False, "wait_timeout_seconds": 30,
+            "auto_create": False, "wait_timeout_seconds": 30, "publish_branches": False,
         },
         "defectdojo": {
             "enabled": False, "endpoint_env": "DOJO_URL", "token_env": "DOJO_TOKEN",
@@ -58,7 +58,7 @@ _SCAN_KEYS = {"target_type", "target", "runner", "executable", "image", "scanner
               "severity", "timeout_seconds", "exclude_paths"}
 _OUTPUT_KEYS = {"directory"}
 _BLOCK_KEYS = {"enabled", "endpoint", "endpoint_env", "token_env", "required",
-               "auto_create", "wait_timeout_seconds", "auto_create_context", "reimport",
+               "auto_create", "wait_timeout_seconds", "publish_branches", "auto_create_context", "reimport",
                "product_name", "product_type_name", "engagement_name", "test_title_prefix", "timeout_seconds",
                "max_attempts"}
 _SECRET_KEYS = {"token", "password", "secret", "api_key", "apikey", "access_key"}
@@ -288,7 +288,7 @@ def _check_types(document):
     if "directory" in output and not isinstance(output["directory"], str):
         raise ConfigError("invalid configuration: output.directory must be a string")
     for name, block in _mapping(document, "integrations").items():
-        for key in ("enabled", "required", "auto_create", "auto_create_context", "reimport"):
+        for key in ("enabled", "required", "auto_create", "publish_branches", "auto_create_context", "reimport"):
             if key in block and not isinstance(block[key], bool):
                 raise ConfigError(
                     f"invalid configuration: integrations.{name}.{key} must be a boolean"
