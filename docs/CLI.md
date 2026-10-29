@@ -8,17 +8,20 @@
 python3 -m venv /tmp/barad-venv
 /tmp/barad-venv/bin/python -m pip install .
 /tmp/barad-venv/bin/barad health
-/tmp/barad-venv/bin/barad scan /path/to/project
+/tmp/barad-venv/bin/barad scan /path/to/project     # evidence in ./.barad/reports
+/tmp/barad-venv/bin/barad scan /path/to/project -O /tmp/evidence
 /tmp/barad-venv/bin/barad run /path/to/project
 ```
 
 | Command | Result | Remote effects |
 |---|---|---|
-| `barad scan [path]` | Creates `security.json`, `sbom.cdx.json`, and `manifest.json` in `.barad/reports/<scan-id>/`. | None. |
-| `barad run [path]` | Performs the same scan and synchronizes configured adapters. | Creates or updates only the configured Dependency-Track/DefectDojo records. |
+| `barad scan [path]` | Creates `security.json`, `sbom.cdx.json`, and `manifest.json` in `.barad/reports/<scan-id>/` inside the invocation directory. Use `--out DIR` / `-O DIR` to choose the directory. | None. |
+| `barad run [path]` | Performs the same scan and synchronizes configured adapters. Same `--out`/`-O` handling. | Creates or updates only the configured Dependency-Track/DefectDojo records. |
 | `barad health` | Checks local tools, configuration, and configured endpoints. | Authenticated GET requests only. |
 
 `security.json` can contain matched secrets. It remains owner-only, is not Git evidence, and is never sent to DefectDojo. The sanitized report is the only Trivy report the DefectDojo adapter imports.
+
+Evidence is anchored to the directory where you invoke `barad` (the workspace), not to the scanned target: scanning another project never writes into that project. It writes reports to `workspace/.barad/reports/<scan-id>/`, state to `workspace/.barad/state/`, and the Trivy cache to `workspace/.barad-dur/cache/trivy/`. `--out`/`-O` overrides the reports directory only; state stays in the workspace unless you point `--out` inside the workspace tree.
 
 ## Configuration
 

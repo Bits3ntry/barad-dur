@@ -464,9 +464,6 @@ def _check_semantics(config):
         if not config.path(related).exists():
             raise ConfigError(f"invalid configuration: project.related_paths entry does not exist: {related}")
 
-    artifacts_directory = config.get("artifacts.directory")
-    if Path(artifacts_directory).is_absolute():
-        raise ConfigError("invalid configuration: artifacts.directory must be repository-relative")
 
     _check_version_source(config)
 

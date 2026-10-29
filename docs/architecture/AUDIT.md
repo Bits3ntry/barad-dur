@@ -28,6 +28,11 @@ That project had no components in its CycloneDX SBOM, so the CLI correctly retur
 - Reinstalled the wheel from an external directory and completed `barad scan` against the existing isolated dependency project using its warm Trivy cache.
 - A fresh isolated cache could not complete the Trivy scan (`exit 1`); this is recorded as a cache/feed limitation, not a successful cold-cache scan.
 
+## 2026-10-29 external-workspace evidence
+
+- Added `--out`/`-O DIR` to `barad scan` and `barad run` (existing `--output` still recognized).
+- Default evidence, state, and Trivy cache anchor to the invocation directory, so scanning an external project leaves its tree untouched; a contract test covers it.
+
 ## Limits
 
 - The GitHub Actions workflow and composite action were structurally and behaviorally tested locally, but no GitHub-hosted workflow run was available in this environment.

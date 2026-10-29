@@ -20,9 +20,13 @@ STATE_FILENAME = "local-inventory.json"
 class ScanStore:
     def __init__(self, root, output_directory, scan_id):
         self.root = Path(root).resolve()
-        self.output = (self.root / output_directory).resolve()
-        if self.output != self.root and self.root not in self.output.parents:
-            raise ValueError("output directory escapes the project root")
+        self.output = Path(output_directory)
+        if not self.output.is_absolute():
+            self.output = self.root / output_directory
+        self.output = self.output.resolve()
+        if self.output == self.root / ".barad" / "state" or (
+                self.root / ".barad" / "state").resolve() in self.output.parents:
+            raise ValueError("output directory overlaps the workspace state")
         self.scan_id = scan_id
         self.run_dir = self.output / scan_id
         self.state_dir = self.root / ".barad" / "state"

@@ -70,6 +70,7 @@ class Settings:
     security: object
     source: Path = None
     root: Path = None
+    workspace: Path = None
     environ: dict = field(default_factory=dict)
     ecosystems: list = field(default_factory=list)
 
@@ -127,23 +128,39 @@ def read_project_config(path):
 
 
 def load_settings(document, *, source, root, project_name, ecosystems=(),
-                  environ=None, output_override=None, target_override=None):
-    """Merge defaults, resolve identity and build the validated runner config."""
+                  environ=None, output_override=None, target_override=None,
+                  workspace=None):
+    """Merge defaults, resolve identity and build the validated runner config.
+
+    `root` is the scan target: it anchors project identity, version resolution
+    and excluded paths. `workspace` (the invocation directory when different)
+    anchors evidence and the Trivy cache so external targets stay untouched.
+    """
     document = document or {}
     _check_keys(document)
     _check_types(document)
     merged = _merge(DEFAULTS, document)
     root = Path(root).resolve()
+    workspace = Path(workspace).resolve() if workspace is not None else root
     environment = dict(environ if environ is not None else os.environ)
 
     configured_name = merged["project"].get("name")
     if not configured_name or str(configured_name).strip().lower() == "auto":
         configured_name = project_name
     merged["project"]["name"] = configured_name
-    output_directory = output_override or merged["output"]["directory"]
-    _check_relative(output_directory, "output.directory")
-    _check_state_separation(output_directory)
-    merged["output"]["directory"] = Path(output_directory).as_posix()
+    if output_override:
+        output_directory = str(Path(output_override).expanduser().resolve())
+        _check_state_separation_absolute(output_directory, workspace, "--out")
+    else:
+        output_directory = merged["output"]["directory"]
+        _check_relative(output_directory, "output.directory")
+        _check_state_separation(output_directory)
+        output_directory = Path(output_directory).as_posix()
+    merged["output"]["directory"] = output_directory
+
+    cache_dir = ".barad-dur/cache/trivy"
+    if workspace != root:
+        cache_dir = str((workspace / ".barad-dur" / "cache" / "trivy").resolve())
 
     version = merged["project"].get("version") or {"source": "auto"}
     target_type = merged["scan"]["target_type"]
@@ -158,7 +175,7 @@ def load_settings(document, *, source, root, project_name, ecosystems=(),
             "executable": merged["scan"]["executable"],
             "image": merged["scan"]["image"],
             "cache_enabled": True,
-            "cache_dir": ".barad-dur/cache/trivy",
+            "cache_dir": cache_dir,
             "scan_type": target_type,
             "scanners": list(merged["scan"]["scanners"]),
             "severity": list(merged["scan"]["severity"]),
@@ -192,7 +209,7 @@ def load_settings(document, *, source, root, project_name, ecosystems=(),
     security = build_config(security_document, source=source, repo_root=root,
                             environ=environment)
     return Settings(document=merged, security=security, source=source, root=root,
-                    environ=environment, ecosystems=list(ecosystems))
+                    workspace=workspace, environ=environment, ecosystems=list(ecosystems))
 
 
 def _merge(base, override):
@@ -311,6 +328,16 @@ def _check_relative(value, label):
     path = Path(value)
     if path.is_absolute() or ".." in path.parts:
         raise ConfigError(f"invalid configuration: {label} must stay inside the project root")
+
+
+def _check_state_separation_absolute(absolute_output, workspace, label):
+    output = Path(absolute_output)
+    state = (workspace / ".barad" / "state").resolve()
+    if output == state or state in output.parents:
+        raise ConfigError(
+            f"invalid configuration: {label} must not overlap the workspace state "
+            f"directory: {state.as_posix()}"
+        )
 
 
 def _check_state_separation(output_directory):

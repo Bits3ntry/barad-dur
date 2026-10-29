@@ -90,7 +90,7 @@ class ScanContractTests(CliTestCase):
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(manifest['project']['target'], {'type': 'fs', 'value': 'app.jar'})
         self.assertEqual(FakeTrivy.instances[-1].scan_target(), 'app.jar')
-        self.assertEqual(run_dir.parent, (jar.parent / '.barad/reports').resolve())
+        self.assertEqual(run_dir.parent, self.default_output.resolve())
 
     def test_configured_jar_target_uses_its_project_root(self):
         self.write('libs/app.jar', 'placeholder jar bytes')
@@ -138,19 +138,16 @@ class ScanContractTests(CliTestCase):
         self.assertTrue((run_dir / "sbom.cdx.json").is_file())
         self.assertIn("inventory incomplete", err)
 
-    def test_output_outside_the_scan_root_is_rejected(self):
+    def test_output_outside_the_scan_root_is_supported(self):
         with tempfile.TemporaryDirectory() as outside:
-            code, out, err = invoke(
-                ["scan", str(self.root), "--output", outside], cwd=self.root
+            code, out, err, manifest, run_dir = self.scan(
+                "--output", outside, cwd=self.root
             )
 
-        self.assertEqual(code, 2)
-        self.assertEqual(out, "")
-        self.assertEqual(
-            err, f"error: output must stay inside the scan root: {Path(outside).resolve()}\n"
-        )
+            self.assertEqual(code, 0, err)
+            self.assertEqual(run_dir.parent, Path(outside).resolve())
 
-    def test_rejected_output_does_not_touch_state_reports_or_scanner(self):
+    def test_rejected_out_does_not_touch_state_reports_or_scanner(self):
         code, out, err, manifest, run_dir = self.scan(cwd=self.root)
         self.assertEqual(code, 0, err)
         state_before = self.state_path.read_bytes()
@@ -158,15 +155,12 @@ class ScanContractTests(CliTestCase):
                            len(FakeTrivy.instances))
         reports_before = sorted(self.default_output.iterdir())
 
-        with tempfile.TemporaryDirectory() as outside:
-            code, out, err, manifest, run_dir = self.scan(
-                str(self.root), "--output", outside, cwd=self.root
-            )
+        code, out, err, manifest, run_dir = self.scan(
+            "--out", ".barad/state", cwd=self.root
+        )
 
         self.assertEqual(code, 2)
-        self.assertEqual(
-            err, f"error: output must stay inside the scan root: {Path(outside).resolve()}\n"
-        )
+        self.assertIn("output must not overlap the state directory", err)
         self.assertEqual(self.state_path.read_bytes(), state_before)
         self.assertEqual(
             (FakeTrivy.scan_calls, FakeTrivy.sbom_calls, len(FakeTrivy.instances)),
@@ -195,15 +189,15 @@ class ScanContractTests(CliTestCase):
         self.assertEqual(sorted(self.default_output.iterdir()), reports_before)
 
     def test_scan_accepts_an_absolute_repository_path(self):
-        from cli_support import REPO_ROOT
-
         self.write("marker.txt", "demo\n")
 
-        code, out, err, manifest, run_dir = self.scan(str(self.root), cwd=REPO_ROOT)
+        with tempfile.TemporaryDirectory() as workspace:
+            code, out, err, manifest, run_dir = self.scan(str(self.root), cwd=Path(workspace))
 
         self.assertEqual(code, 0, err)
         self.assertEqual(manifest["project"]["target"], {"type": "fs", "value": "."})
-        self.assertEqual(run_dir.parent, self.default_output.resolve())
+        self.assertEqual(run_dir.parent, (Path(workspace) / ".barad" / "reports").resolve())
+        self.assertFalse((self.root / ".barad").exists())
 
     def test_both_reports_run_even_when_the_inventory_is_unchanged(self):
         self.scan(cwd=self.root)
@@ -226,3 +220,43 @@ class ScanContractTests(CliTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExternalWorkspaceTests(CliTestCase):
+    """Scanning another project must not write inside its tree."""
+
+    def test_external_scan_writes_evidence_in_the_invocation_directory(self):
+        target = self.root / "external"
+        target.mkdir()
+        (target / "pyproject.toml").write_text(
+            '[project]\nname = "external"\nversion = "3.0.0"\n', encoding="utf-8"
+        )
+        workspace = self.root / "workspace"
+        workspace.mkdir()
+
+        code, out, err, manifest, run_dir = self.scan(str(target), cwd=workspace)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(manifest["project"]["name"], "external")
+        self.assertEqual(run_dir.parent, (workspace / ".barad" / "reports").resolve())
+        self.assertTrue((workspace / ".barad" / "state" / "local-inventory.json").is_file())
+        self.assertFalse((target / ".barad").exists())
+        self.assertFalse((target / ".barad-dur").exists())
+        from barad.core.trivy import TrivyRunner
+        cache = FakeTrivy.instances[-1].config.data["trivy"]["cache_dir"]
+        self.assertEqual(Path(cache).resolve(),
+                         (workspace / ".barad-dur" / "cache" / "trivy").resolve())
+
+    def test_out_option_chooses_the_evidence_directory(self):
+        code, out, err, manifest, run_dir = self.scan("--out", str(self.root / "evidence"), cwd=self.root)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(run_dir.parent, (self.root / "evidence").resolve())
+        self.assertFalse(self.default_output.exists())
+
+    def test_out_short_flag_chooses_the_evidence_directory(self):
+        code, out, err, manifest, run_dir = self.scan("-O", "reports", cwd=self.root)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(run_dir.parent, (self.root / "reports").resolve())
+        self.assertFalse(self.default_output.exists())

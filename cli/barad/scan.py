@@ -39,16 +39,16 @@ class ScanResult:
 def run_scan(settings, *, target_type, target_value, git_context, name_source,
              environ=None):
     config = settings.security
-    root = settings.root
+    workspace = settings.workspace or settings.root
     project_name = settings.document["project"]["name"]
     run_id = generate_run_id("scan")
-    store = ScanStore(root, settings.document["output"]["directory"], run_id).prepare()
+    store = ScanStore(workspace, settings.document["output"]["directory"], run_id).prepare()
     logger = Logger(run_id, path=store.log_path, stream=None,
                     redactor=Redactor(settings.secret_values()))
     started = utc_timestamp()
     logger.info("scan", "started", {"target_type": target_type, "target": target_value})
 
-    trivy = TrivyRunner(config, logger, repo_root=root)
+    trivy = TrivyRunner(config, logger, repo_root=settings.root)
     scan = {
         "status": "RUNNING",
         "started_at": started,
@@ -168,7 +168,7 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
         path = store.artifact_path(name)
         if path.is_file():
             artifacts[name] = {
-                "path": _display(path, root),
+                "path": _display(path, workspace),
                 "sha256": sha256_file(path),
                 "size_bytes": path.stat().st_size,
                 "sensitivity": "local_only" if name in (REPORT, "execution.log")
@@ -180,8 +180,8 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "tool": {"name": "barad", "version": __version__},
         "run_id": run_id,
-        "run": {"id": run_id, "directory": _display(store.run_dir, root)},
-        "state": {"directory": _display(store.state_dir, root),
+        "run": {"id": run_id, "directory": _display(store.run_dir, workspace)},
+        "state": {"directory": _display(store.state_dir, workspace),
                   "file": "local-inventory.json", "publication": "not_asserted"},
         "status": status,
         "source": {
@@ -205,7 +205,7 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
         "inventory": inventory,
         "artifacts": artifacts,
         "config": {
-            "source": _display(settings.source, root) if settings.source else None,
+            "source": _display(settings.source, workspace) if settings.source else None,
             "fingerprint": config.fingerprint(),
         },
         "environment": {
@@ -255,8 +255,8 @@ def _display(path, root):
     path = Path(path).resolve()
     try:
         return path.relative_to(Path(root).resolve()).as_posix()
-    except ValueError:
-        return path.name
+    except ValueError:  # paths outside the workspace stay fully visible
+        return str(path)
 
 
 def _git_summary(context):

@@ -120,6 +120,11 @@ class TrivyRunner:
         return self.config.path(self.scan_target())
 
     def cache_path(self):
+        # The CLI may anchor the cache to an invocation workspace outside the
+        # scan target; absolute cache locations bypass repository containment.
+        candidate = Path(self.cache_dir)
+        if candidate.is_absolute():
+            return candidate
         return self.config.path(self.cache_dir)
 
     def _common_flags(self, *, format_name, include_scanners=True):

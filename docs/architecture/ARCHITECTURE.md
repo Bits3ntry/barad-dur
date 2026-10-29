@@ -8,7 +8,7 @@ The repository has four active runtime boundaries: root Docker Compose, the inst
 barad (pyproject.toml -> cli/barad/cli.py)
   scan/run -> cli/barad/scan.py -> barad.core.trivy.TrivyRunner
                                   -> barad.core.sbom / versioning / inventory
-                                  -> cli/barad/store.py -> .barad/reports + .barad/state
+                                  -> cli/barad/store.py -> workspace .barad/reports + .barad/state							  (workspace anchors evidence; the scan target is never written)
   run -> integrations/dependency_track -> Dependency-Track API
       -> integrations/defectdojo       -> DefectDojo API
   health -> local tool checks + authenticated GET diagnostics
@@ -34,6 +34,7 @@ compose.yaml -> unified PostgreSQL, Dependency-Track, DefectDojo, Valkey, Trivy 
 
 - PostgreSQL remains one server with separate `dtrack` and `defectdojo` databases and roles. Existing backup and rollback volumes are external and are never removed by Compose.
 - Raw Trivy reports and execution logs are private evidence. The manifest, sanitized report, SBOM, and checksums are suitable for controlled sharing.
+- Evidence, state and the Trivy cache anchor to the invocation workspace (or the `--out`/`-O` directory for reports). Scanning a target never writes into the target; explicit `--out` inside the target remains possible by user choice.
 - `scan` creates artifacts but has no remote mutation. `run` preserves scan evidence if either adapter is unavailable or partial. `health` issues no writes.
 - Dependency-Track publication is verified by an exported normalized SBOM, not inferred from HTTP success.
 - DefectDojo reimport is bound to a stable test and Product; it never auto-closes historical findings.

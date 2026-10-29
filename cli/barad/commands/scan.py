@@ -18,7 +18,8 @@ def register(subparsers):
     )
     parser.add_argument("path", nargs="?",
                         help="directory to scan (default: the configured scan target)")
-    parser.add_argument("--output", help="artifact directory (must stay inside the scan root)")
+    parser.add_argument("--output", "--out", "-O", dest="output",
+                        help="evidence directory (default: .barad/reports in the current directory)")
     parser.add_argument("--config", help="path to .barad.yml (default: discovered)")
     parser.add_argument("--json", action="store_true", help="print the evidence manifest as JSON")
     parser.set_defaults(execute=execute)
@@ -69,8 +70,9 @@ def resolve(args):
         root = config_path.parent if config_path else cwd
     else:
         root, target_value = _configured_root(configured.get("target") or ".", config_path, cwd)
+    workspace = cwd
 
-    output_override = _output_override(args.output, cwd, root)
+    output_override = _output_override(args.output, cwd)
     if root != search_root:
         context = _git_context(root)
     configured_name = document.get("project", {}).get("name") if isinstance(
@@ -88,6 +90,7 @@ def resolve(args):
         environ=os.environ,
         output_override=output_override,
         target_override=target_value if target_type == 'fs' and target_value != '.' else None,
+        workspace=workspace,
     )
     return settings, target_type, target_value, context, name_source
 
@@ -154,17 +157,16 @@ def _configured_root(configured, config_path, cwd):
     return candidate, "."
 
 
-def _output_override(value, cwd, root):
+def _output_override(value, cwd):
+    """Resolve `--out`/`-O` against the invocation workspace, never the scan target."""
     if value is None:
         return None
     output = Path(value).expanduser()
     output = (output if output.is_absolute() else cwd / output).resolve()
-    if output != root and root not in output.parents:
-        raise UsageError(f"output must stay inside the scan root: {output}")
-    state_dir = (root / ".barad" / "state").resolve()
+    state_dir = (cwd / ".barad" / "state").resolve()
     if output == state_dir or state_dir in output.parents:
         raise UsageError(f"output must not overlap the state directory: {state_dir}")
-    return output.relative_to(root).as_posix()
+    return str(output)
 
 
 def _print_summary(result):
