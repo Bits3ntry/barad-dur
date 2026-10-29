@@ -26,3 +26,4 @@ That project had no components in its CycloneDX SBOM, so the CLI correctly retur
 - The GitHub Actions workflow and composite action were structurally and behaviorally tested locally, but no GitHub-hosted workflow run was available in this environment.
 - This ledger does not validate production TLS, SSO, RBAC, backup restoration, image scanning, or JAR scanning.
 - The Compose stack remains a loopback-only evaluation environment. Persistent volumes and backup/rollback volumes were not altered.
+- The user elected to preserve the pre-existing legacy deletions without committing them. The recorded commits therefore rely on the current worktree deletion set for the 91-test layout; no pre-existing deletion was staged, reverted, or committed by this consolidation.
