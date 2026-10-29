@@ -33,6 +33,12 @@ That project had no components in its CycloneDX SBOM, so the CLI correctly retur
 - Added `--out`/`-O DIR` to `barad scan` and `barad run` (existing `--output` still recognized).
 - Default evidence, state, and Trivy cache anchor to the invocation directory, so scanning an external project leaves its tree untouched; a contract test covers it.
 
+## 2026-10-29 per-project evidence layout
+
+- Evidence moved from `.barad/reports/<scan-id>/` to `<reports>/<project>/<version>/<scan-id>/` with an `unresolved` folder when the version cannot be resolved yet.
+- Re-scanning the same project+version prompts to replace the folder or create `version_(n)`; without a TTY the CLI always creates `version_(n)`.
+- The same behavior applies to `barad run` and its publication records; DefectDojo/Dependency-Track remote logic is unchanged.
+
 ## Limits
 
 - The GitHub Actions workflow and composite action were structurally and behaviorally tested locally, but no GitHub-hosted workflow run was available in this environment.

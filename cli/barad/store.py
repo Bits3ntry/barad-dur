@@ -1,6 +1,8 @@
-"""CLI evidence layout: `.barad/reports/<scan-id>/` plus separate `.barad/state/`.
+"""CLI evidence layout: `<reports>/<project>/<version>/<scan-id>/` plus `.barad/state/`.
 
-The CLI owns its compact evidence layout and reuses its core hashing and identity helpers.
+`<reports>` is the workspace reports directory (or the `--out` directory). When
+the same project version already holds evidence, the caller decides between
+replacing it or scanning into a suffixed `version_(n)` folder.
 
 A Trivy secret finding embeds the matched credential in the raw report, so the
 CLI treats its evidence as private: managed directories are 0700 and evidence
@@ -8,7 +10,9 @@ files are 0600 on POSIX, both before and after the scanner runs.
 """
 import json
 import os
+import re
 import secrets
+import shutil
 from pathlib import Path
 
 from .core.errors import EvidenceError
@@ -17,8 +21,14 @@ from .core.evidence import sha256_file, utc_timestamp
 STATE_FILENAME = "local-inventory.json"
 
 
+def slug(value):
+    """Folder-safe fragment for project names and versions."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "")).strip("-." )
+    return cleaned[:120] or "unresolved"
+
+
 class ScanStore:
-    def __init__(self, root, output_directory, scan_id):
+    def __init__(self, root, output_directory, scan_id, project=None, version=None):
         self.root = Path(root).resolve()
         self.output = Path(output_directory)
         if not self.output.is_absolute():
@@ -28,16 +38,45 @@ class ScanStore:
                 self.root / ".barad" / "state").resolve() in self.output.parents:
             raise ValueError("output directory overlaps the workspace state")
         self.scan_id = scan_id
-        self.run_dir = self.output / scan_id
+        self.project = slug(project) if project else None
+        self.version = slug(version) if version else None
+        if self.project:
+            # Even an unresolved version gets its own folder so later scans of the
+            # same project never mix evidence.
+            self.evidence = self.output / self.project / (self.version or "unresolved")
+        else:
+            self.evidence = self.output
+        self.run_dir = self.evidence / scan_id
         self.state_dir = self.root / ".barad" / "state"
         self.state_path = self.state_dir / STATE_FILENAME
         self.sync_path = self.state_dir / "remote-sync.json"
         self.log_path = self.run_dir / "execution.log"
 
-    def prepare(self):
+    def prepare(self, collision=None):
+        """Create evidence directories, resolving an existing project+version.
+
+        `collision(base_dir)` returns 'replace' (clear the existing folder) or
+        'suffix' (scan into `version_(n)`); without a handler an existing folder
+        is reused as-is because a fresh run-id never overwrites old evidence.
+        """
+        if self.project and self.evidence.is_dir() and any(self.evidence.iterdir()):
+            decision = (collision(self.evidence) if collision else "existing")
+            if decision == "replace":
+                shutil.rmtree(self.evidence)
+            elif decision == "suffix":
+                for index in range(1, 1000):
+                    candidate = self.output / self.project / f"{self.version}_({index})"
+                    if not candidate.exists():
+                        self.evidence = candidate
+                        self.run_dir = self.evidence / self.scan_id
+                        self.log_path = self.run_dir / "execution.log"
+                        break
+                else:
+                    raise EvidenceError("cannot allocate a suffixed evidence folder")
         _private_directory(self.root / ".barad")
         if self.output != self.root:
             _private_directory(self.output)
+        _private_directory(self.evidence)
         _private_directory(self.state_dir)
         _private_directory(self.run_dir)
         _private_file(self.log_path)

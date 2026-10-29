@@ -1,10 +1,22 @@
 import hashlib
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
 
 from cli_support import CliTestCase, FakeTrivy, invoke
+
+
+def slug(value):
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "")).strip("-.")
+    return cleaned[:120] or "unresolved"
+
+
+def evidence_parent(manifest, reports_root):
+    """Reports root plus the project/version folder the CLI writes into."""
+    return (Path(reports_root) / slug(manifest["project"]["name"])
+            / slug(manifest["application_version"].get("value")))
 
 
 def digest(path):
@@ -34,10 +46,12 @@ class ScanContractTests(CliTestCase):
         self.assertTrue(manifest["scan"]["finished_at"])
         self.assertEqual(manifest["inventory"]["comparison"], "no_previous")
         self.assertIsNone(manifest["inventory"]["previous"])
-        self.assertEqual(run_dir.parent, self.default_output.resolve())
+        self.assertEqual(run_dir.parent, evidence_parent(manifest, self.default_output).resolve())
         self.assertEqual(run_dir.name, manifest["run"]["id"])
         self.assertEqual(
-            manifest["run"]["directory"], f".barad/reports/{manifest['run']['id']}"
+            manifest["run"]["directory"],
+            f".barad/reports/{slug(manifest['project']['name'])}"
+            f"/{slug(manifest['application_version'].get('value'))}/{manifest['run']['id']}",
         )
 
         report = run_dir / "security.json"
@@ -90,7 +104,7 @@ class ScanContractTests(CliTestCase):
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(manifest['project']['target'], {'type': 'fs', 'value': 'app.jar'})
         self.assertEqual(FakeTrivy.instances[-1].scan_target(), 'app.jar')
-        self.assertEqual(run_dir.parent, self.default_output.resolve())
+        self.assertEqual(run_dir.parent, evidence_parent(manifest, self.default_output).resolve())
 
     def test_configured_jar_target_uses_its_project_root(self):
         self.write('libs/app.jar', 'placeholder jar bytes')
@@ -98,7 +112,7 @@ class ScanContractTests(CliTestCase):
         code, out, err, manifest, run_dir = self.scan(cwd=self.root)
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(manifest['project']['target'], {'type': 'fs', 'value': 'libs/app.jar'})
-        self.assertEqual(run_dir.parent, self.default_output.resolve())
+        self.assertEqual(run_dir.parent, evidence_parent(manifest, self.default_output).resolve())
 
     def test_failed_scan_keeps_artifacts_and_exits_nonzero(self):
         FakeTrivy.fail_scan = True
@@ -145,7 +159,7 @@ class ScanContractTests(CliTestCase):
             )
 
             self.assertEqual(code, 0, err)
-            self.assertEqual(run_dir.parent, Path(outside).resolve())
+            self.assertEqual(run_dir.parent, evidence_parent(manifest, Path(outside)).resolve())
 
     def test_rejected_out_does_not_touch_state_reports_or_scanner(self):
         code, out, err, manifest, run_dir = self.scan(cwd=self.root)
@@ -196,7 +210,7 @@ class ScanContractTests(CliTestCase):
 
         self.assertEqual(code, 0, err)
         self.assertEqual(manifest["project"]["target"], {"type": "fs", "value": "."})
-        self.assertEqual(run_dir.parent, (Path(workspace) / ".barad" / "reports").resolve())
+        self.assertEqual(run_dir.parent, evidence_parent(manifest, Path(workspace) / ".barad" / "reports").resolve())
         self.assertFalse((self.root / ".barad").exists())
 
     def test_both_reports_run_even_when_the_inventory_is_unchanged(self):
@@ -238,7 +252,7 @@ class ExternalWorkspaceTests(CliTestCase):
 
         self.assertEqual(code, 0, err)
         self.assertEqual(manifest["project"]["name"], "external")
-        self.assertEqual(run_dir.parent, (workspace / ".barad" / "reports").resolve())
+        self.assertEqual(run_dir.parent, evidence_parent(manifest, workspace / ".barad" / "reports").resolve())
         self.assertTrue((workspace / ".barad" / "state" / "local-inventory.json").is_file())
         self.assertFalse((target / ".barad").exists())
         self.assertFalse((target / ".barad-dur").exists())
@@ -251,12 +265,72 @@ class ExternalWorkspaceTests(CliTestCase):
         code, out, err, manifest, run_dir = self.scan("--out", str(self.root / "evidence"), cwd=self.root)
 
         self.assertEqual(code, 0, err)
-        self.assertEqual(run_dir.parent, (self.root / "evidence").resolve())
+        self.assertEqual(run_dir.parent, evidence_parent(manifest, self.root / "evidence").resolve())
         self.assertFalse(self.default_output.exists())
 
     def test_out_short_flag_chooses_the_evidence_directory(self):
         code, out, err, manifest, run_dir = self.scan("-O", "reports", cwd=self.root)
 
         self.assertEqual(code, 0, err)
-        self.assertEqual(run_dir.parent, (self.root / "reports").resolve())
+        self.assertEqual(run_dir.parent, evidence_parent(manifest, self.root / "reports").resolve())
         self.assertFalse(self.default_output.exists())
+
+
+class EvidenceCollisionTests(CliTestCase):
+    """Same project+version either asks to replace or creates version_(n)."""
+
+    def _scan(self, cwd=None):
+        code, out, err, manifest, run_dir = self.scan(cwd=cwd or self.root)
+        self.assertEqual(code, 0, err)
+        return manifest, run_dir
+
+    def test_repeat_scan_without_a_terminal_creates_version_suffix(self):
+        from unittest import mock
+
+        manifest, first_dir = self._scan()
+        first_marker = first_dir / "manifest.json"
+
+        with mock.patch("builtins.input", side_effect=AssertionError("must not prompt")):
+            second, second_dir = self._scan()
+
+        self.assertNotEqual(first_dir, second_dir)
+        self.assertTrue((second_dir.parent.name.endswith("_(1)")))
+        self.assertTrue(first_marker.is_file())
+        self.assertTrue((second_dir / "manifest.json").is_file())
+        self.assertEqual(second_dir.parent.parent,
+                         evidence_parent(second, self.default_output).resolve().parent)
+        self.assertEqual(first_dir.parent.parent,
+                         evidence_parent(manifest, self.default_output).resolve().parent)
+
+    def test_interactive_replace_clears_the_existing_version_folder(self):
+        from unittest import mock
+
+        manifest, first_dir = self._scan()
+        stale = first_dir / "keep-me-out.json"
+        stale.write_text("{}\n", encoding="utf-8")
+
+        with mock.patch("builtins.input", return_value="r"), mock.patch(
+            "sys.stdin.isatty", return_value=True
+        ):
+            second, second_dir = self._scan()
+
+        self.assertEqual(first_dir.parent, second_dir.parent)
+        self.assertFalse(stale.exists())
+        self.assertTrue((second_dir / "manifest.json").is_file())
+        self.assertEqual(len(list(first_dir.parent.iterdir())), 1)
+
+    def test_interactive_non_replace_answer_creates_a_suffixed_folder(self):
+        from unittest import mock
+
+        manifest, first_dir = self._scan()
+
+        with mock.patch("builtins.input", return_value="n"), mock.patch(
+            "sys.stdin.isatty", return_value=True
+        ):
+            second, second_dir = self._scan()
+
+        self.assertNotEqual(first_dir, second_dir)
+        self.assertTrue((second_dir.parent.name.endswith("_(1)")))
+        self.assertTrue((first_dir / "manifest.json").is_file())
+        self.assertEqual(first_dir.parent.parent,
+                         evidence_parent(manifest, self.default_output).resolve().parent)

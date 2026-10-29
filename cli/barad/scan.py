@@ -7,6 +7,7 @@ managed to produce.
 """
 import json
 import platform
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,7 +43,14 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
     workspace = settings.workspace or settings.root
     project_name = settings.document["project"]["name"]
     run_id = generate_run_id("scan")
-    store = ScanStore(workspace, settings.document["output"]["directory"], run_id).prepare()
+    application_version = resolve_version(
+        config, environ=environ if environ is not None else settings.environ
+    ).public()
+    store = ScanStore(workspace, settings.document["output"]["directory"], run_id,
+                      project=project_name,
+                      version=application_version["value"]).prepare(
+        collision=_evidence_collision
+    )
     logger = Logger(run_id, path=store.log_path, stream=None,
                     redactor=Redactor(settings.secret_values()))
     started = utc_timestamp()
@@ -196,9 +204,7 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
             "ecosystems": list(settings.ecosystems),
             "target": {"type": target_type, "value": target_value},
         },
-        "application_version": resolve_version(
-            config, environ=environ if environ is not None else settings.environ
-        ).public(),
+        "application_version": application_version,
         "commit": git["commit"],
         "git": git,
         "scan": scan,
@@ -232,6 +238,20 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
                       "inventory incomplete")
         error = f"inventory incomplete: {detail}"
     return ScanResult(0 if status == "completed" else 1, manifest, store.run_dir, error)
+
+
+def _evidence_collision(base):
+    """Ask once when the project+version folder already holds evidence."""
+    if sys.stdin.isatty():
+        try:
+            print(f"evidence for this project+version already exists in {base}",
+                  file=sys.stderr)
+            answer = input("replace the folder [r] or create a new version_(n) folder [n]? ")
+        except (EOFError, KeyboardInterrupt):
+            return "suffix"
+        if answer.strip().lower() in ("r", "replace"):
+            return "replace"
+    return "suffix"
 
 
 def _problem(problems, scan, code, detail):

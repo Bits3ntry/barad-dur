@@ -30,7 +30,9 @@ def run_workflow(args):
     sanitized = scan.run_dir / SANITIZED_REPORT
     results = {}
     store = ScanStore(settings.workspace or settings.root,
-                      settings.document['output']['directory'], manifest['run_id'])
+                      settings.document['output']['directory'], manifest['run_id'],
+                      project=manifest['project']['name'],
+                      version=manifest['application_version']['value'])
     sync_key = f"{manifest['project']['name']}:{manifest['application_version']['value']}:{target_type}:{target}"
     for key, action, path in (
         ('dependency_track', dependency_track.synchronize, sbom),
@@ -56,7 +58,9 @@ def run_workflow(args):
 
 def _finish(scan, settings, manifest, code, error=None):
     store = ScanStore(settings.workspace or settings.root,
-                      settings.document['output']['directory'], manifest['run_id'])
+                      settings.document['output']['directory'], manifest['run_id'],
+                      project=manifest['project']['name'],
+                      version=manifest['application_version']['value'])
     store.write_json('manifest.json', manifest)
     store.write_checksums(list(manifest['artifacts']) + ['manifest.json'])
     return RunResult(code, manifest, scan.run_dir, error)

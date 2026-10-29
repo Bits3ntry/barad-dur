@@ -109,7 +109,7 @@ integrations:
              mock.patch('integrations.dependency_track.HttpClient', Remote), \
              mock.patch('integrations.defectdojo.HttpClient', Remote):
             code, out, err = invoke(['run', *args], cwd=self.root)
-        reports = list((self.root / '.barad/reports').glob('*/manifest.json'))
+        reports = list((self.root / '.barad/reports').glob('**/manifest.json'))
         manifest = json.loads(max(reports, key=lambda p: p.stat().st_mtime_ns).read_text()) if reports else None
         return code, out, err, manifest
 

@@ -95,9 +95,10 @@ class ConfigurationTests(CliTestCase):
         self.assertEqual(manifest["project"]["name"], "custom-project")
         self.assertEqual(manifest["project"]["name_source"], "config")
         self.assertEqual(manifest["config"]["source"], ".barad.yml")
-        self.assertEqual(run_dir.parent, (self.root / "reports").resolve())
+        from test_scan_contract import evidence_parent
+        self.assertEqual(run_dir.parent, evidence_parent(manifest, self.root / "reports").resolve())
         self.assertEqual(run_dir.name, manifest["run"]["id"])
-        self.assertEqual(run_dir.parent.parent, self.root.resolve())
+        self.assertEqual(run_dir.parent.parent.parent, (self.root / "reports").resolve())
         self.assertTrue(self.state_path.is_file())
         self.assertEqual(FakeTrivy.instances[-1].config.get("trivy.runner"), "local")
         self.assertEqual(FakeTrivy.instances[-1].config.exclude_paths(), ["vendor"])
@@ -110,7 +111,8 @@ class ConfigurationTests(CliTestCase):
         )
 
         self.assertEqual(code, 0, err)
-        self.assertEqual(run_dir.parent, (self.root / "out2").resolve())
+        from test_scan_contract import evidence_parent
+        self.assertEqual(run_dir.parent, evidence_parent(manifest, self.root / "out2").resolve())
         self.assertEqual(run_dir.name, manifest["run"]["id"])
         self.assertFalse((self.root / "reports").exists())
         self.assertTrue(self.state_path.is_file())

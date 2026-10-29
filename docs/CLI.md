@@ -21,7 +21,9 @@ python3 -m venv /tmp/barad-venv
 
 `security.json` can contain matched secrets. It remains owner-only, is not Git evidence, and is never sent to DefectDojo. The sanitized report is the only Trivy report the DefectDojo adapter imports.
 
-Evidence is anchored to the directory where you invoke `barad` (the workspace), not to the scanned target: scanning another project never writes into that project. It writes reports to `workspace/.barad/reports/<scan-id>/`, state to `workspace/.barad/state/`, and the Trivy cache to `workspace/.barad-dur/cache/trivy/`. `--out`/`-O` overrides the reports directory only; state stays in the workspace unless you point `--out` inside the workspace tree.
+Evidence is anchored to the directory where you invoke `barad` (the workspace), not to the scanned target: scanning another project never writes into that project. Reports live in `<workspace>/.barad/reports/<project>/<version>/<scan-id>/` (or inside the `--out` directory with the same layout), state in `<workspace>/.barad/state/`, and the Trivy cache in `<workspace>/.barad-dur/cache/trivy/`.
+
+When the same project+version is scanned again and the folder already has evidence, the CLI asks: replace the folder `[r]` or create a `version_(1)` folder `[n]`. In non-interactive runs (CI, scripts, `--out` from automation) it never waits for input: it always creates the next `version_(n)` folder so no scan is silently deleted.
 
 ## Configuration
 
