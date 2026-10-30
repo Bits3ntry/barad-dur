@@ -9,3 +9,6 @@ __pycache__/
 artifacts/
 backups/
 .barad/
+
+# Python build artifacts
+*.egg-info/
