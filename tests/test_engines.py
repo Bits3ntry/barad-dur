@@ -153,17 +153,13 @@ class LockfileTests(unittest.TestCase):
         )
         self.assertEqual(
             engine["binaries"]["macos-aarch64"],
-            {"asset": "opengrep-core_osx_aarch64.tar.gz",
-             "sha256": "cce019aba35ba0c79f74b22fc9e2f8562ca651d76d5a04d7dcc440f967e45930",
-             "archive": "tar.gz",
-             "entry": "opengrep-core"},
+            {"asset": "opengrep_osx_arm64",
+             "sha256": "a17c1881bb40e3214266a7a291cf4f2ae3bc56c1715628b5712d2ec816bc3e2d"},
         )
         self.assertEqual(
             engine["binaries"]["windows-x86"],
-            {"asset": "opengrep-core_windows_x86.zip",
-             "sha256": "5cd512bcd688e9cb1fe5203b742cbdeca05d144f807e4785815b782315169a83",
-             "archive": "zip",
-             "entry": "opengrep-core.exe"},
+            {"asset": "opengrep_windows_x86.exe",
+             "sha256": "132e606e071bdd3928286fddc893198a6106a90820d46e21197e0ace1a23e0c1"},
         )
 
     def test_packaged_lock_never_references_a_mutable_or_community_source(self):
