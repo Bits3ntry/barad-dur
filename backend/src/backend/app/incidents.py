@@ -12,7 +12,7 @@ import hashlib
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from backend.app import models
+from backend.app import lifecycle, models
 
 INGEST_KINDS = {"secret", "misconfiguration", "code-weakness"}
 INGEST_SOURCES = {"cli", "web", "ci", "api"}
@@ -117,6 +117,7 @@ def ingest_payload(session, org, project, project_version, payload: FindingsPayl
                 first_seen_at=now, last_seen_at=now, updated_at=now)
             session.add(finding)
             session.flush()
+            lifecycle.apply_lifecycle(session, org.id, finding)
             counters["created"] += 1
             # A brand-new finding is evaluated against every approved rule.
             applied = _apply_suppressions(session, finding, rules)

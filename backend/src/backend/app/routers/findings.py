@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.app import auth, ci, incidents, models, vulns
 from backend.app.db import get_session
+from backend.app.routers.identity import _audit as _audit_log
 
 router = APIRouter(prefix="/api/v1", tags=["findings"])
 
@@ -260,6 +261,9 @@ def approve_suppression(
         suppressed = incidents.approve_rule(session, rule, review.approver)
     except ValueError as error:
         raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from None
+    _audit_log(session, org.id, review.approver, "suppression.approved",
+               "suppression_rule", rule.id,
+               f"{rule.rule_id} @ {rule.path_pattern}")
     session.commit()
     return {"data": _rule_data(session, org, rule), "findings_suppressed": suppressed}
 
@@ -346,6 +350,10 @@ def list_findings(
             "cve_id": vulnerability.cve_id if vulnerability else None,
             "source_url": vulnerability.url if vulnerability else None,
             "component_purl": (component.purl or component.identity_key) if component else None,
+            "project_id": finding.project_id,
+            "priority": finding.priority,
+            "priority_reason": finding.priority_reason,
+            "sla_deadline": finding.sla_deadline.isoformat() if finding.sla_deadline else None,
             "first_seen_at": finding.first_seen_at.isoformat(),
             "last_seen_at": finding.last_seen_at.isoformat(),
         })

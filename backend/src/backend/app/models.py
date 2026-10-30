@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -172,6 +173,9 @@ class Finding(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), default="open")
     status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    priority: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
+    priority_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sla_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Scan context: multi-kind findings carry no component row, so the version
     # they were last seen in is stamped here (also used by list filters).
     last_seen_version_id: Mapped[str | None] = mapped_column(
@@ -189,7 +193,6 @@ class Finding(Base, TimestampMixin):
 class SuppressionRule(Base, TimestampMixin):
     """Tenant-level rule keyed on finding attributes, with an embedded
     approval workflow: a requester can never approve their own rule."""
-
     __tablename__ = "suppression_rules"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
@@ -223,6 +226,180 @@ class FindingSuppression(Base, TimestampMixin):
     rule_id: Mapped[str] = mapped_column(String(36), ForeignKey("suppression_rules.id"))
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     applied_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class PriorityRule(Base, TimestampMixin):
+    """Ordered classification rule: first match wins (their priority_rules
+    recipe, slimmed to attribute matches; scoring explanations stay honest)."""
+
+    __tablename__ = "priority_rules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    match_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    match_severities: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    match_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    priority: Mapped[str] = mapped_column(String(8))
+    reason: Mapped[str] = mapped_column(Text)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SlaPolicy(Base, TimestampMixin):
+    """Day buckets per priority class; one default policy per org."""
+
+    __tablename__ = "sla_policies"
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_sla_policies_org_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(255))
+    p0_days: Mapped[int] = mapped_column(Integer)
+    p1_days: Mapped[int] = mapped_column(Integer)
+    p2_days: Mapped[int] = mapped_column(Integer)
+    p3_days: Mapped[int] = mapped_column(Integer)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RemediationTask(Base, TimestampMixin):
+    """A unit of fix work carrying one or more findings (their
+    remediation_tasks: a finding belongs to at most one open task)."""
+
+    __tablename__ = "remediation_tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    title: Mapped[str] = mapped_column(String(512))
+    status: Mapped[str] = mapped_column(String(32), default="open", index=True)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RemediationFinding(Base, TimestampMixin):
+    """Task membership row; removed_at marks detach (audit without deleting)."""
+
+    __tablename__ = "remediation_findings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    task_id: Mapped[str] = mapped_column(String(36), ForeignKey("remediation_tasks.id"))
+    finding_id: Mapped[str] = mapped_column(String(36), ForeignKey("findings.id"))
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+ROLES = {"owner", "admin", "analyst", "viewer"}
+
+
+class OrgMember(Base, TimestampMixin):
+    """The POC identity surface: named members with a role. Authentication is
+    still the org's API key (ODIC/password flows are the post-POC backlog),
+    but membership carries the accountability side (added_by, role)."""
+
+    __tablename__ = "org_members"
+    __table_args__ = (
+        UniqueConstraint("org_id", "identity", name="uq_org_members_identity"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    identity: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(32), default="viewer")
+    added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuditLog(Base):
+    """Append-only per-org ledger with a tamper-evident chain: each entry
+    commits `hash = sha256(prev_hash | position | payload)`; the appender
+    chain rides a transaction so two writers can never fork the tail."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    actor: Mapped[str] = mapped_column(String(255), default="system")
+    action: Mapped[str] = mapped_column(String(255))
+    resource_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resource_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chain_position: Mapped[int] = mapped_column(Integer)
+    prev_hash: Mapped[str] = mapped_column(String(64))
+    hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KevEntry(Base):
+    """One CISA KEV row mirrored locally (catalog lives at cisa.gov)."""
+
+    __tablename__ = "kev_entries"
+
+    cve_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    date_added: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    due_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EpssScore(Base):
+    """One FIRST EPSS row mirrored locally (probability 0..1 + percentile)."""
+
+    __tablename__ = "epss_scores"
+
+    cve_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    epss: Mapped[str] = mapped_column(String(16))
+    percentile: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class VexStatement(Base, TimestampMixin):
+    """Our own VEX statement column for one finding (their vex_conclusions
+    concept, POC-slimmed: statement + status, no machine-signed docs yet)."""
+
+    __tablename__ = "vex_statements"
+    __table_args__ = (
+        Index("ix_vex_finding", "finding_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    finding_id: Mapped[str] = mapped_column(String(36), ForeignKey("findings.id"))
+    status: Mapped[str] = mapped_column(String(32))
+    statement: Mapped[str] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+ASSET_TYPES = {"domain", "ip", "url", "cidr"}
+
+
+class Asset(Base):
+    """One externally observable asset (their EASM inventory, POC-slimmed:
+    domains via certificate transparency, everything else manual for now)."""
+
+    __tablename__ = "assets"
+    __table_args__ = (
+        UniqueConstraint("org_id", "type", "value", name="uq_assets_triple"),
+        Index("ix_assets_type", "type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    type: Mapped[str] = mapped_column(String(32))
+    value: Mapped[str] = mapped_column(String(1024))
+    source: Mapped[str] = mapped_column(String(64))
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class CiPipeline(Base, TimestampMixin):

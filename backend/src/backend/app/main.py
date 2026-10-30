@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from backend.app.auth import create_key, require_org
 from backend.app.db import get_session, run_migrations
 from backend.app import models
-from backend.app.routers import ci, findings, inventory, scope, sbom
+from backend.app.routers import ci, easm, findings, identity, intelligence, inventory, lifecycle, scope, sbom
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -19,6 +19,10 @@ def create_app() -> FastAPI:
     app.include_router(findings.router)
     app.include_router(ci.router)
     app.include_router(scope.router)
+    app.include_router(lifecycle.router)
+    app.include_router(identity.router)
+    app.include_router(intelligence.router)
+    app.include_router(easm.router)
 
     @app.get("/healthz")
     def healthz(session: Session = Depends(get_session)):

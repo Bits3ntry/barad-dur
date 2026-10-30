@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 from urllib.parse import urlparse
 
-from backend.app import models
+from backend.app import lifecycle, models
 
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_DETAIL_URL = "https://api.osv.dev/v1/vulns"
@@ -194,7 +194,7 @@ def analyze(session, org_id: str, project: models.Project,
                        .filter_by(org_id=org_id, fingerprint=fingerprint)
                        .one_or_none())
             if finding is None:
-                session.add(models.Finding(
+                new_finding = models.Finding(
                     org_id=org_id, project_id=project.id, kind="vulnerability",
                     fingerprint=fingerprint, source="osv",
                     title=advisory.title, severity=advisory.severity,
@@ -205,7 +205,10 @@ def analyze(session, org_id: str, project: models.Project,
                     vulnerability_id=advisory.id,
                     last_seen_version_id=project_version.id,
                     first_seen_at=now, last_seen_at=now,
-                    updated_at=now,))
+                    updated_at=now)
+                session.add(new_finding)
+                session.flush()
+                lifecycle.apply_lifecycle(session, org_id, new_finding)
                 counters["findings_created"] += 1
             else:
                 finding.last_seen_at = now
