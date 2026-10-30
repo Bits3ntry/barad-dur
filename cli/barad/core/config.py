@@ -174,6 +174,14 @@ DEFAULTS = {
             "timeout_seconds": 30,
             "max_attempts": 2,
         },
+        "platform_api": {
+            "enabled": False,
+            "required": False,
+            "endpoint_env": "PLATFORM_API_URL",
+            "token_env": "PLATFORM_API_KEY",
+            "timeout_seconds": 30,
+            "max_attempts": 2,
+        },
     },
     "notifications": {"direct_slack": False},
 }
@@ -191,7 +199,7 @@ _INTEGRATION_ENV_KEYS = ("endpoint_env", "token_env")
 def _declared_env_names(document):
     """Every environment variable the configuration names as an integration input."""
     names = set()
-    for block in ("dependency_track", "defectdojo"):
+    for block in ("dependency_track", "defectdojo", "platform_api"):
         settings = (document or {}).get("integrations", {}).get(block) if isinstance(document, dict) else None
         if not isinstance(settings, dict):
             defaults = DEFAULTS["integrations"].get(block, {})
@@ -490,7 +498,7 @@ def _check_semantics(config):
         raise ConfigError(
             "invalid configuration: dependency_track.publish_on_release requires sbom.enabled"
         )
-    for block in ("dependency_track", "defectdojo"):
+    for block in ("dependency_track", "defectdojo", "platform_api"):
         settings = config.get(f"integrations.{block}", {}) or {}
         if settings.get("enabled") and not settings.get("endpoint_env"):
             raise ConfigError(f"invalid configuration: integrations.{block}.endpoint_env is required when enabled")
