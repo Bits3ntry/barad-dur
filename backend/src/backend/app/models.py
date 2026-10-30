@@ -170,7 +170,56 @@ class Finding(Base, TimestampMixin):
     vulnerability_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("vulnerabilities.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="open")
+    status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Scan context: multi-kind findings carry no component row, so the version
+    # they were last seen in is stamped here (also used by list filters).
+    last_seen_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_versions.id"), nullable=True, index=True)
+    tool: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    rule_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    line: Mapped[int | None] = mapped_column(Integer, nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SuppressionRule(Base, TimestampMixin):
+    """Tenant-level rule keyed on finding attributes, with an embedded
+    approval workflow: a requester can never approve their own rule."""
+
+    __tablename__ = "suppression_rules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True)
+    kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    rule_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    path_pattern: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    suppression_type: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    requested_by: Mapped[str] = mapped_column(String(255))
+    approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FindingSuppression(Base, TimestampMixin):
+    """Per-finding application row of an approved suppression rule."""
+
+    __tablename__ = "finding_suppressions"
+    __table_args__ = (
+        UniqueConstraint("finding_id", "rule_id", name="uq_finding_suppression_pair"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    finding_id: Mapped[str] = mapped_column(String(36), ForeignKey("findings.id"))
+    rule_id: Mapped[str] = mapped_column(String(36), ForeignKey("suppression_rules.id"))
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    applied_by: Mapped[str | None] = mapped_column(String(255), nullable=True)

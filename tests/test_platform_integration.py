@@ -127,6 +127,94 @@ def test_identity_mismatch_fails(monkeypatch, sbom_path):
     assert result["reason"] == "identity_mismatch"
 
 
+def test_findings_mapping_builds_v1_payload_without_match_lines(tmp_path):
+    """Secret match text never crosses the boundary; identities become relative."""
+    import json
+
+    import integrations.platform_api as adapter
+
+    manifest = {'source': {'target_type': 'fs', 'target': str(tmp_path)}}
+    sanitized = tmp_path / 'security.sanitized.json'
+    sanitized.write_text(json.dumps({
+        'Results': [{
+            'Class': 'secret', 'Type': 'aws', 'Target': 'settings.py',
+            'Secrets': [{
+                'RuleID': 'aws-access-key-id', 'Severity': 'CRITICAL',
+                'MatchData': [{'Lines': 'AKIA4TB7NIQKDXL9WP2X', 'Line': 2}],
+            }],
+        }, {
+            'Class': 'config', 'Type': 'dockerfile', 'Target': 'Dockerfile',
+            'Misconfigurations': [{
+                'ID': 'DS-0002', 'Severity': 'HIGH', 'Title': 'Image user should not be root',
+                'CauseMetadata': {'StartLine': 2},
+            }],
+        }]},))
+    sast = tmp_path / 'sast.json'
+    sast.write_text(json.dumps({'results': [{
+        'check_id': 'cli.barad.rules.python-subprocess-shell-true',
+        'path': str(tmp_path / 'app.py'), 'start': {'line': 6},
+        'extra': {'severity': 'ERROR', 'message': 'Avoid shell=True', 'lines': 'subprocess.run(cmd, shell=True)'},
+    }]}))
+
+    rows = (adapter._trivy_findings(sanitized, manifest)
+            + adapter._opengrep_findings(sast, manifest))
+    kinds = {row['kind'] for row in rows}
+    assert kinds == {'secret', 'misconfiguration', 'code-weakness'}
+    secret = rows[0]
+    assert secret['rule_id'] == 'aws-access-key-id' and secret['line'] == 2
+    blob = json.dumps(rows)
+    # Redaction contract: secret match text and SAST match lines never travel.
+    # The OpenGrep rule MESSAGE may explain the rule ("Avoid shell=True") but
+    # the matched source line must not.
+    assert 'AKIA4TB7NIQKDXL9WP2X' not in blob and 'subprocess.run(cmd' not in blob
+    opengrep = rows[-1]
+    assert opengrep['rule_id'] == 'python-subprocess-shell-true'
+    assert opengrep['path'] == 'app.py'  # relative to the scan target
+    assert opengrep['severity'] == 'HIGH'
+
+
+def test_findings_push_reports_ingest_counts(tmp_path, monkeypatch):
+    import json
+
+    import integrations.platform_api as adapter
+
+    manifest = {'source': {'target_type': 'fs', 'target': str(tmp_path)},
+                'project': {'name': 'fixture'},
+                'application_version': {'value': '1.2.0'}}
+    sanitized = tmp_path / 'security.sanitized.json'
+    sanitized.write_text(json.dumps({'Results': []}))
+    sast = tmp_path / 'sast.json'
+    sast.write_text(json.dumps({'results': [
+        {'check_id': 'r.x', 'path': str(tmp_path / 'a.py'), 'start': {'line': 1},
+         'extra': {'severity': 'ERROR', 'message': 'm', 'lines': 'one-liner'}}]}))
+
+    class _Stub:
+        def request(self, method, url, **kwargs):
+            self.planet = json.loads(kwargs['body'])
+            self.url = url
+            return type('R', (), {'json': lambda self: {
+                'status': 'ingested', 'project': 'fixture', 'version': '1.2.0',
+                'counts': {'received': 1, 'created': 1, 'refreshed': 0,
+                           'suppressed_by_rule': 0, 'skipped_missing_identity': 0}}})()
+
+    stub = _Stub()
+    monkeypatch.setattr(adapter, 'HttpClient', lambda **kwargs: stub)
+    settings = _Settings()
+    result = adapter.synchronize_findings(settings, manifest, sanitized, sast)
+    assert result['status'] == 'INGESTED'
+    assert result['counts']['created'] == 1
+    assert stub.planet['schema'] == 'barad-findings-v1'
+    assert '/api/v1/findings/ingest?source=cli&project=fixture&version=1.2.0' in stub.url
+
+
+def test_findings_push_skipped_when_sbom_disabled(monkeypatch, tmp_path):
+    import integrations.platform_api as adapter
+
+    settings = _Settings(enabled=False)
+    result = adapter.synchronize_findings(settings, {}, tmp_path / 'a', tmp_path / 'b')
+    assert result == {'status': 'NOT_CONFIGURED'}
+
+
 def test_remote_error_is_bounded_and_secret_redacted(monkeypatch, sbom_path):
     from barad.core.http import HttpStatusError, HttpTransportError
 

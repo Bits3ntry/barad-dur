@@ -203,11 +203,13 @@ def analyze(session, org_id: str, project: models.Project,
                            if advisory.cve_id else None,
                     component_id=component.id,
                     vulnerability_id=advisory.id,
+                    last_seen_version_id=project_version.id,
                     first_seen_at=now, last_seen_at=now,
                     updated_at=now,))
                 counters["findings_created"] += 1
             else:
                 finding.last_seen_at = now
+                finding.last_seen_version_id = project_version.id
                 finding.severity = advisory.severity
                 finding.title = advisory.title
                 finding.updated_at = now

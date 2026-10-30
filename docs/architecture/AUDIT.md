@@ -2,6 +2,28 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-30 F2 gate: multi-kind findings ingestion and suppression workflow (third milestone)
+
+Second gate fixture `/tmp/barad-f2-fixture` (an `app.py` matching two baseline OpenGrep rules, a `settings.py` with one AWS-format credential, a vulnerable `Dockerfile`), deployed stack fresh from migrations 0001→0003. Record:
+
+| Check | Result | Evidence |
+|---|---|---|
+| One `barad run` publishes both artifacts | PASS | Manifest sync: `platform_api.status=PUBLISHED (receipt_verified)` + nested `findings.status=INGESTED` with counters `{created: 6, received: 6}` — 1 secret (aws-access-key-id, CRITICAL), 3 misconfigurations (Dockerfile, Trivy DS-*), 2 code weaknesses (OpenGrep). |
+| Rescan dedup | PASS | Second consecutive run: `created=0, refreshed=6`. |
+| Redaction boundary | PASS | Only rule_id/path/line/severity/title cross the API; adapter tests pin that secret match text and SAST match lines never reach the payload. |
+| Suppression workflow | PASS | Rule creation (pending) → requester self-approval refused with 409 ("a requester cannot approve their own suppression rule") → a different reviewer approves → 1 finding suppressed; default view shows 5, full view 6 with the suppressed secret carrying the rule reason. |
+| New findings auto-evaluated | PASS | Backend test: an ingest arriving after a rule was approved is suppressed at creation time (`suppressed_by_rule=1`). |
+| Manual disposition | PASS | `PATCH /findings/{id}/status` to `acknowledged` with actor+reason; invalid status 422; suppressed findings refuse manual transitions other than reopening. |
+| Suites | PASS | 30 backend/adapter pytest (24 backend incl. 9 new F2 tests + 1 mapping/redaction test), CLI unittest suite OK. |
+
+Discovered and fixed during this gate:
+
+1. Model/migration drift again (`finding_suppressions.created_at` from TimestampMixin missing in the hand-written 0003): caught live at the first approval attempt. Since this platform DB is POC-scoped, the schema was dropped and re-migrated 0001→0003 from zero (user-approved), and the API key was re-issued quietly into the gate env.
+2. The version filter joined findings to components, which multi-kind findings have none of — listing returned 0 for every secret/misconfig/SAST row. Findings now carry `last_seen_version_id`, stamped at every ingest/analyze that still sees them (the slim equivalent of the reference platform's scan-context occurrence tracking); the version view filters on it.
+3. Operational lesson: TWO server processes kept binding 8090 across restarts, so re-verifications kept hitting the stale pre-patch server. The stale listener is discovered with `lsof -nP -iTCP:8090 -sTCP:LISTEN` and killed by PID; future gates check the listener before testing.
+
+Limits: suppression expiry is evaluated at application time (rules never re-trigger for existing findings after their expiry until a new finding matches); the sole-owner cooldown guard of the reference platform is deferred; rule audit trail stays implicit in rule columns until F3.
+
 ## 2026-10-30 F1 gate: OSV vulnerability engine (second milestone)
 
 Same gate fixture as F0; the platform API now answers `POST /api/v1/analyze` (normalize inventory → OSV querybatch → per-id detail fetch → catalog upsert → deduped findings). Record:

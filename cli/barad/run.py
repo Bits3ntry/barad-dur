@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 from .commands.scan import resolve
-from .scan import SANITIZED_REPORT, SBOM, run_scan
+from .scan import SANITIZED_REPORT, SBOM, SAST_REPORT, run_scan
 from .store import ScanStore
 from .core.versioning import branch_version, resolve_version
 from integrations import dependency_track, defectdojo, platform_api
@@ -31,6 +31,7 @@ def run_workflow(args):
         return _finish(scan, settings, manifest, scan.exit_code, scan.error)
     sbom = scan.run_dir / SBOM
     sanitized = scan.run_dir / SANITIZED_REPORT
+    sast = scan.run_dir / SAST_REPORT
     results = {}
     store = ScanStore(settings.workspace or settings.root,
                       settings.document['output']['directory'], manifest['run_id'],
@@ -54,6 +55,14 @@ def run_workflow(args):
                 results[key] = action(settings, manifest, path)
         except Exception:  # unexpected failures are bounded and never erase scan evidence
             results[key] = {'status': 'FAILED', 'reason': 'internal_integration_error'}
+        if (key == 'platform_api'
+                and results.get('platform_api', {}).get('status') == 'PUBLISHED'):
+            try:
+                results[key]['findings'] = platform_api.synchronize_findings(
+                    settings, manifest, sanitized, sast)
+            except Exception:  # same bound: evidence survives, sync reports failure
+                results[key]['findings'] = {'status': 'FAILED',
+                                            'reason': 'internal_integration_error'}
     manifest['sync'] = results
     failed = any(result['status'] in ('FAILED', 'PENDING') for result in results.values())
     manifest['status'] = 'partial' if failed else 'completed'
