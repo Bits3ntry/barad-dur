@@ -1,0 +1,2 @@
+[console_scripts]
+barad-platform = backend.app.cli:main

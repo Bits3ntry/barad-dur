@@ -1,0 +1,7 @@
+pyproject.toml
+barad_platform.egg-info/PKG-INFO
+barad_platform.egg-info/SOURCES.txt
+barad_platform.egg-info/dependency_links.txt
+barad_platform.egg-info/entry_points.txt
+barad_platform.egg-info/requires.txt
+barad_platform.egg-info/top_level.txt
