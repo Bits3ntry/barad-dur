@@ -281,8 +281,10 @@ class RemediationTask(Base, TimestampMixin):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class RemediationFinding(Base, TimestampMixin):
-    """Task membership row; removed_at marks detach (audit without deleting)."""
+class RemediationFinding(Base):
+    """Task membership row; removed_at marks detach (audit without deleting).
+    Deliberately no TimestampMixin: added_at is the timestamp of record (the
+    migration ships only added_at/removed_at)."""
 
     __tablename__ = "remediation_findings"
 

@@ -42,8 +42,16 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index("ix_vex_finding", "vex_statements", ["finding_id"])
-    op.add_column("vulnerabilities", sa.Column("cve_id", sa.String(32), nullable=True))
-    op.create_index("ix_vulnerabilities_cve", "vulnerabilities", ["cve_id"])
+    from sqlalchemy import inspect as sa_inspect
+
+    if "cve_id" not in {
+        col["name"] for col in sa_inspect(op.get_bind()).get_columns("vulnerabilities")
+    }:
+        op.add_column("vulnerabilities", sa.Column("cve_id", sa.String(32), nullable=True))
+    if "ix_vulnerabilities_cve" not in {
+        ix["name"] for ix in sa_inspect(op.get_bind()).get_indexes("vulnerabilities")
+    }:
+        op.create_index("ix_vulnerabilities_cve", "vulnerabilities", ["cve_id"])
 
 
 def downgrade() -> None:

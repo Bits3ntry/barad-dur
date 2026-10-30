@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react'
+import Lifecycle from './Lifecycle'
+import Members from './Members'
+import Assets from './Assets'
 import Components from './Components'
 import Findings from './Findings'
 import Pipelines from './Pipelines'
 import Settings from './Settings'
 import { api } from './api'
 
-const TABS = ['findings', 'components', 'pipelines']
+const TABS = ['findings', 'remediation', 'members', 'assets', 'components', 'pipelines']
 
 export default function App() {
   const [tab, setTab] = useState('findings')
@@ -43,9 +46,12 @@ export default function App() {
         <p className="error">{projectsError} — check settings.</p>
       )}
       {showingSettings && <Settings onClose={() => setShowingSettings(false)} />}
-      {!showingSettings && projectsError === '' && (
+      {!showingSettings && (
         <main>
           {tab === 'findings' && <Findings projects={projects} />}
+          {tab === 'remediation' && <Lifecycle />}
+          {tab === 'members' && <Members />}
+          {tab === 'assets' && <Assets />}
           {tab === 'components' && <Components projects={projects} />}
           {tab === 'pipelines' && <Pipelines />}
         </main>

@@ -1,7 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { VexSection } from './Vex'
 
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN', null]
+
+function slaCell(deadline) {
+  if (!deadline) return <span className="muted">no policy</span>
+  const days = Math.floor((new Date(deadline) - new Date()) / 86400000)
+  const cls = days < 0 ? 'sev-critical' : days <= 2 ? 'sev-high' : 'muted'
+  return <span className={cls}>{days < 0 ? `${-days}d overdue` : `${days}d left`}</span>
+}
 
 export default function Findings({ projects }) {
   const [state, setState] = useState({
@@ -44,10 +52,29 @@ export default function Findings({ projects }) {
     }
     try {
       const { data } = await api.get(`/api/v1/findings/${finding.id}`)
-      setState((s) => ({ ...s, detail: data }))
+      const enriched = { ...data }
+      if (data.cve_id) {
+        const [kev, epss] = await Promise.all([
+          api.get(`/api/v1/intel/kev/${data.cve_id}`).catch(() => null),
+          api.get(`/api/v1/intel/epss/${data.cve_id}`).catch(() => null),
+        ])
+        if (kev?.known_exploited) enriched.kev = kev.data
+        if (epss?.data) enriched.epss = epss.data
+      }
+      setState((s) => ({ ...s, detail: enriched }))
     } catch (error) {
       setState((s) => ({ ...s, error: String(error.message || error) }))
     }
+  }
+
+  async function createTask(row) {
+    const title = state.taskTitle?.trim()
+    if (!title) return
+    const task = (await api.post('/api/v1/remediation/tasks', { title, actor: 'console' })).data
+    await api.post(`/api/v1/remediation/tasks/${task.id}/findings`,
+      { finding_id: row.id, actor: 'console' })
+    setState((s) => ({ ...s, taskTitle: '' }))
+    setBump((n) => n + 1)
   }
 
   async function dispose(status) {
@@ -96,21 +123,23 @@ export default function Findings({ projects }) {
       {state.error && <p className="error">{state.error}</p>}
       <table>
         <thead>
-          <tr><th>sev</th><th>kind</th><th>title</th><th>rule / cve</th><th>path</th><th>status</th></tr>
+          <tr><th>prio</th><th>sev</th><th>kind</th><th>title</th><th>rule / cve</th><th>path</th><th>sla</th><th>status</th></tr>
         </thead>
         <tbody>
           {[...state.rows].sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity)).map((row) => (
             <React.Fragment key={row.id}>
               <tr className={state.detail?.id === row.id ? 'selected' : ''} onClick={() => openDetail(row)}>
+                <td><span className={`prio prio-${(row.priority || 'p3').toLowerCase()}`}>{row.priority || 'P3'}</span></td>
                 <td><span className={`sev sev-${(row.severity || 'NONE').toLowerCase()}`}>{row.severity || '—'}</span></td>
                 <td>{row.kind}</td>
                 <td className="title">{row.title}</td>
                 <td>{row.cve_id || row.rule_id || row.source_id || '—'}</td>
                 <td>{row.path || row.component_purl || '—'}</td>
+                <td>{slaCell(row.sla_deadline)}</td>
                 <td><span className={`status st-${row.status}`}>{row.status}</span></td>
               </tr>
               {state.detail?.id === row.id && (
-                <tr className="detail-row"><td colSpan={6}>
+                <tr className="detail-row"><td colSpan={8}>
                   <div className="detail">
                     <dl>
                       <dt>source</dt><dd>{state.detail.source_id || row.source} {state.detail.cve_id ? `(alias ${state.detail.cve_id})` : ''}</dd>
@@ -119,8 +148,23 @@ export default function Findings({ projects }) {
                       <dt>component</dt><dd>{state.detail.component_purl || '—'}</dd>
                       <dt>detail</dt><dd>{state.detail.detail || '—'}</dd>
                       <dt>reason</dt><dd>{state.detail.status_reason || '—'}</dd>
+                      <dt>priority</dt><dd>{state.detail.priority || 'P3'} — {state.detail.priority_reason || 'severity fallback'}</dd>
+                      <dt>sla</dt><dd>{slaCell(state.detail.sla_deadline)}</dd>
+                      <dt>intel</dt><dd>
+                        {state.detail.kev
+                          ? <span className="sev sev-critical">CISA KEV — exploited in the wild (since {state.detail.kev.date_added})</span>
+                          : <span className="muted">not in KEV</span>}
+                        {state.detail.epss && <span className="pill">EPSS {state.detail.epss.epss}</span>}
+                      </dd>
                       <dt>url</dt><dd>{state.detail.source_url && <a href={state.detail.source_url} target="_blank" rel="noreferrer">{state.detail.source_url}</a>}</dd>
                     </dl>
+                    <VexSection findingId={row.id} />
+                    <div className="bar">
+                      <input placeholder="remediation task title (creates + links)"
+                        value={state.taskTitle || ''}
+                        onChange={(e) => setState((s) => ({ ...s, taskTitle: e.target.value }))} />
+                      <button onClick={() => createTask(row)}>create task</button>
+                    </div>
                     <div className="actions">
                       <button onClick={() => dispose('acknowledged')}>acknowledge</button>
                       <button onClick={() => dispose('resolved')}>mark resolved</button>

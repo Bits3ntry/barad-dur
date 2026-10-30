@@ -2,6 +2,23 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Parity blocks 1–4 (B1–B4): lifecycle, identity/audit, intel catalog, EASM
+
+The four agreed parity blocks against the OpenCTM functional inventory. Every check ran live against the containerized API on :8090 and in the real browser console. Backend commit `1b344df` + UI commit.
+
+| Block | What landed | Live gate evidence |
+|---|---|---|
+| B1 lifecycle | Priority rules (ordered, rule > severity fallback, honest `priority_reason`), default SLA policy stamping deadlines, remediation tasks with the one-open-task-per-finding contract | Policy saved (7/15/30/60 days); rule `sev∈CRITICAL,HIGH→P0` reclassified 6 findings (P0 carried the org reason, MEDIUM fell back to P2); UI findings show `P0/P2` + "6d left"; detail→create task linked (`python-subprocess-shell-true (P0)`) and renders in the remediation tab |
+| B2 identity/audit | org_members (owner/admin/analyst/viewer; accountable actor required) + per-org hash-chained audit ledger (prev-hash + chain position, pg advisory lock on append) wired into approvals/remediation/VEX/EASM | Member santiago@councilbox.com added (admin); ledger verifies `chain_ok: true` in UI; tampering unit-tested (hash mismatch detected) |
+| B3 intelligence | KEV/EPSS local mirrors + public sync (catalog outages → 502), VEX statements per finding, grouped reconcile re-keying vulnerability findings onto CVE fingerprints | KEV/EPSS reads live (CVE-2024-35195 not known-exploited); reconcile idempotent (0); VEX `affected` statement posted; finding detail shows the intel row ("not in KEV") |
+| B4 EASM | assets table (domain/ip/url/cidr), manual adds, crt.sh certificate-transparency sweep with dedupe + last-seen | LIVE sweep of councilbox.com: **267 real subdomains** created (+seed row); resweep refreshes; assets tab lists real CT-logged names |
+
+Model/migration drift caught by the live gate (the 5th occurrence of the recipe family): `RemediationFinding` carried TimestampMixin columns the migration never ships — the model now drops the mixin (added_at is the timestamp of record); the audit append skips its Postgres-only `hashtext` lock on sqlite; `0007` guards its `vulnerabilities.cve_id` add behind a SQLAlchemy inspector check. Postgres-first migrations + sqlite create_all in tests keep surfacing these on both engines.
+
+New API surfaces: `/api/v1/remediation/*`, `/priority-rules`, `/sla/policies`, `/members`, `/audit`, `/vex`, `/intelligence/reconcile`, `/intel/{kev,epss}/:cve`, `/intel/sync`, `/assets`, `/assets/discover`. The console grows remediation/members/assets tabs; findings gain priority+SLA columns and intel/VEX/task rows in the detail. Suites after: 39 pytest + 151 unittest OK; vite build 53 kB gzip.
+
+Limits kept honest: no OIDC (API-key identity plane), priority rules stay attribute-only (KEV/EPSS read through to the UI but don't yet drive rules), VEX statements unsigned, EASM is CT-log domains only (no DNS probing, ports, or takeover checks) — post-POC backlog territory.
+
 ## 2026-10-30 F5 gate: packaging, docs and demo rehearsal (fifth milestone — POC closed)
 
 The platform API is now a Compose service (`platform-api`, built from `backend/Dockerfile`: digest-pinned `python:3.12-slim`, non-root, migrations at boot, loopback-only publish on 8090, `edge` network). Record:

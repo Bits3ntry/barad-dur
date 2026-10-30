@@ -111,3 +111,25 @@ dd { margin: 0; }
 .card form { display: grid; gap: 10px; }
 .card label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
 .card input { width: 100%; }
+
+/* priority classes + SLA cells */
+.prio { font-weight: 700; padding: 2px 8px; border-radius: 8px; font-size: 11px; }
+.prio-p0 { background: #7f1d1d; color: #fecaca; }
+.prio-p1 { background: #78350f; color: #fed7aa; }
+.prio-p2 { background: #374151; color: #d1d5db; }
+.prio-p3 { background: #1f2937; color: #6b7280; }
+.muted { color: var(--muted); font-size: 12px; }
+.muted-row { opacity: .55; }
+.section { font-size: 14px; margin: 18px 0 6px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: #1f2937; border: 1px solid var(--line);
+  border-radius: 9px; padding: 2px 8px; font-size: 11px; margin: 1px;
+}
+button.mini { padding: 0 6px; font-size: 11px; line-height: 1.6; }
+.vex-not_affected { color: #15803d; }
+.vex-affected { color: #b91c1c; }
+.vex-fixed { color: #0e7490; }
+.vex-under_investigation { color: #a16207; }
+.vex-row { padding: 2px 0; }
+.ok { color: #15803d; font-size: 12px; }
