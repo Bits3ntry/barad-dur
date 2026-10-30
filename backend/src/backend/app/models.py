@@ -223,3 +223,97 @@ class FindingSuppression(Base, TimestampMixin):
     rule_id: Mapped[str] = mapped_column(String(36), ForeignKey("suppression_rules.id"))
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     applied_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class CiPipeline(Base, TimestampMixin):
+    """One customer CI pipeline that reports to the platform (their ci_pipelines
+    concept, slimmed: identity + metadata, no OIDC trust in the POC)."""
+
+    __tablename__ = "ci_pipelines"
+    __table_args__ = (
+        UniqueConstraint("org_id", "provider", "repository", "workflow_path",
+                         name="uq_ci_pipelines_identity"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    provider: Mapped[str] = mapped_column(String(32), default="github")
+    repository: Mapped[str] = mapped_column(String(512))
+    workflow_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CiRun(Base, TimestampMixin):
+    """One CI pipeline execution that reported findings. The verdict is
+    computed fail-closed from the run's severity histogram; reason strings
+    are capped because the verdict renders in public CI logs."""
+
+    __tablename__ = "ci_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    pipeline_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("ci_pipelines.id"), nullable=True)
+    ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="running")
+    verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    verdict_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    findings_count: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CiRunFinding(Base, TimestampMixin):
+    """Run-to-finding attachment (their ci_run_findings bridge, simplified to
+    an id FK in the POC; the fingerprint bridge matters only under merging)."""
+
+    __tablename__ = "ci_run_findings"
+    __table_args__ = (
+        UniqueConstraint("run_id", "finding_id", name="uq_ci_run_findings_pair"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    run_id: Mapped[str] = mapped_column(String(36), ForeignKey("ci_runs.id"))
+    finding_id: Mapped[str] = mapped_column(String(36), ForeignKey("findings.id"))
+    severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class ScopeTarget(Base, TimestampMixin):
+    """What the organization may audit or analyze: static positive list."""
+
+    __tablename__ = "scope_targets"
+    __table_args__ = (
+        UniqueConstraint("org_id", "target_type", "value", name="uq_scope_targets_identity"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    target_type: Mapped[str] = mapped_column(String(32))
+    value: Mapped[str] = mapped_column(String(1024))
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ScopeExclusion(Base, TimestampMixin):
+    """Negative scope entries; resolved view subtracts these from targets."""
+
+    __tablename__ = "scope_exclusions"
+    __table_args__ = (
+        UniqueConstraint("org_id", "target_type", "value", name="uq_scope_exclusions_identity"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    target_type: Mapped[str] = mapped_column(String(32))
+    value: Mapped[str] = mapped_column(String(1024))
+    reason: Mapped[str] = mapped_column(Text)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -2,6 +2,28 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-30 F3 gate: CI registry with gate verdicts and static scope (fourth milestone)
+
+Deployed stack after migrating 0004. The gate simulates the GitHub Actions context locally (the hosted runner is unavailable in this environment, same limitation recorded on 2026-10-29): the CLI adapter detects `GITHUB_ACTIONS=true` and runs the full CI flow against the deployed API. Record:
+
+| Check | Result | Evidence |
+|---|---|---|
+| CI flow end-to-end | PASS | `barad run` inside simulated Actions env → adapter registered the run (`POST /api/v1/ci/runs`), pushed findings with `run_id` link (source=ci), then closed the run: `verdict=fail`, `findings_count=5`. |
+| Gate verdict correctness | PASS | Verdict `fail` with capped reasons from `GET /api/v1/ci/runs/{id}`: "gate: findings at or above HIGH" + `HIGH misconfiguration DS-0002 Dockerfile` + `HIGH code-weakness python-subprocess-shell-true app.py`. The AWS secret finding (suppressed) is EXCLUDED from the run attachment and from the verdict findings_count — approved suppressions must not fail a gate. |
+| Pipeline dedup | PASS | One `ci_pipelines` row for `councilbox/f2-fixture` + workflow identity across 2 registered runs; `GET /api/v1/ci/pipelines` lists it with `retired=false`. |
+| One-shot finishing | PASS | Second `finish` on a closed run → 409 "only running runs finish" (backend test). |
+| Failed scans fail closed | PASS | Backend test: `finish(status=failed)` → verdict `fail`, "CI run reported failure", regardless of findings. |
+| Static scope | PASS | `POST /api/v1/scope/targets` + exclusions (validated types: repository|service|host|domain|api; exclusion requires reason) → `GET /api/v1/scope/resolved` returns only non-excluded entries (2 of 3). |
+| Suites | PASS | 36 backend/adapter pytest (11 new F3 tests) plus adapter CI-context path exercised live through the CLI; CLI unittest suite OK. |
+
+Discovered and fixed during this gate:
+
+1. Another model/migration-class pitfall, but at the ORM level this time: models with an explicit `updated_at` column and models relying on nothing (TimestampMixin only provides `created_at`) mixed inconsistently — `CiPipeline`, `ScopeTarget` and `ScopeExclusion` were missing `updated_at`, which 0004 declares NOT NULL; caught by the live 500 on run registration (and by sqlite tests for the scope shorts). All three now declare it.
+2. `session_factory(autoflush=False)` swallowed same-request pending inserts: `attach_finding` added the bridge row but the verdict computation in the SAME request saw zero links. `attach_finding` now flushes explicitly — the pattern to copy for every helper that inserts and then chain-queries within one request.
+3. The CLI adapter now reads the run detail after finish so verdict reasons reach the Action log through the manifest.
+
+Limits: no OIDC trust (identity fields recorded, but the CI plane trusts the org's API key in the POC); gate policy thresholds are hard-coded (fail at HIGH+) without `ci_gate_policies` rows or overrides; scope is static lists without attestation letters or approvals; findings attach to the run at ingest time only (their fingerprint bridge under asset merging is deferred). A hosted-run execution of the Action remains unverified as on 2026-10-29.
+
 ## 2026-10-30 F2 gate: multi-kind findings ingestion and suppression workflow (third milestone)
 
 Second gate fixture `/tmp/barad-f2-fixture` (an `app.py` matching two baseline OpenGrep rules, a `settings.py` with one AWS-format credential, a vulnerable `Dockerfile`), deployed stack fresh from migrations 0001→0003. Record:

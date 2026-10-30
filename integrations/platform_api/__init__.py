@@ -77,8 +77,13 @@ def synchronize_findings(settings, manifest, sanitized_path, sast_path):
     secret match lines never travel (the sanitizer redacts them before this
     runs, and this function drops match text entirely — only rule id, path,
     line and severity cross the boundary). Returns an ingest receipt dict.
+
+    Inside a GitHub Actions context (GITHUB_ACTIONS=true) the function runs
+    the whole CI flow in order: register the run, push findings with the run
+    link, then close the run so the platform computes the gate verdict.
     """
     import json
+    import os
 
     block = settings.block('platform_api')
     if not block['enabled']:
@@ -101,20 +106,60 @@ def synchronize_findings(settings, manifest, sanitized_path, sast_path):
     headers = {'X-API-Key': token}
     client = HttpClient(timeout=block.get('timeout_seconds', 15),
                         max_attempts=block.get('max_attempts', 2))
-    url = (f'{endpoint}/api/v1/findings/ingest?source=cli'
-           f'&project={quote(name, safe="")}&version={quote(version, safe="")}')
+    result = {'status': 'INGESTED'}
+
+    run_id = None
+    ci_context = os.environ.get('GITHUB_ACTIONS') == 'true'
+    if ci_context:
+        registration = client.request(
+            'POST', f'{endpoint}/api/v1/ci/runs', headers=headers,
+            json_body={'provider': 'github',
+                       'repository': os.environ.get('GITHUB_REPOSITORY', ''),
+                       'workflow_path': os.environ.get('GITHUB_WORKFLOW', ''),
+                       'ref': os.environ.get('GITHUB_REF', ''),
+                       'commit_sha': os.environ.get('GITHUB_SHA', ''),
+                       'event': os.environ.get('GITHUB_EVENT_NAME', ''),
+                       'actor': os.environ.get('GITHUB_ACTOR', '')}).json()
+        run_id = (registration.get('data') or {}).get('id') if isinstance(registration, dict) else None
+        if not run_id:
+            return {'status': 'FAILED', 'reason': 'ci_run_registration_failed'}
+        result['ci_run_id'] = run_id
+        source = 'ci'
+    else:
+        source = 'cli'
+    query = (f'{endpoint}/api/v1/findings/ingest?source={source}'
+             f'&project={quote(name, safe="")}&version={quote(version, safe="")}')
+    if run_id:
+        query += f'&run_id={quote(run_id, safe="")}'
     payload = {'schema': 'barad-findings-v1', 'tool': 'trivy', 'findings': findings}
     # OpenGrep findings ride in the same payload; their records declare their
     # own tool override.
     try:
-        response = client.request('POST', url, headers=headers,
+        response = client.request('POST', query, headers=headers,
                                   body=json.dumps(payload).encode('utf-8'),
                                   content_type='application/json', idempotent=True)
         body = response.json()
         if not isinstance(body, dict) or not isinstance(body.get('counts'), dict):
             return {'status': 'FAILED', 'reason': 'invalid_ingest_response'}
-        return {'status': 'INGESTED', 'counts': body['counts'],
-                'project': body.get('project'), 'version': body.get('version')}
+        result.update(counts=body['counts'], project=body.get('project'),
+                      version=body.get('version'))
+        if run_id:
+            finish = client.request(
+                'POST', f'{endpoint}/api/v1/ci/runs/{quote(run_id, safe="")}/finish',
+                headers=headers, json_body={'status': 'succeeded'}).json()
+            summary = (finish.get('data') or {}) if isinstance(finish, dict) else {}
+            reasons = None
+            try:
+                detail = client.request(
+                    'GET', f'{endpoint}/api/v1/ci/runs/{quote(run_id, safe="")}',
+                    headers=headers).json()
+                reasons = (detail.get('data') or {}).get('verdict_reasons')
+            except (HttpStatusError, HttpTransportError, ValueError):
+                pass
+            result['ci_run'] = {'verdict': summary.get('verdict'),
+                                'findings_count': summary.get('findings_count'),
+                                'verdict_reasons': reasons}
+        return result
     except (HttpStatusError, HttpTransportError, ValueError, OSError) as error:
         result = {'status': 'FAILED', 'reason': 'remote_error',
                   'http_status': error.status if isinstance(error, HttpStatusError) else None}

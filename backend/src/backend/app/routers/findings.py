@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from backend.app import auth, incidents, models, vulns
+from backend.app import auth, ci, incidents, models, vulns
 from backend.app.db import get_session
 
 router = APIRouter(prefix="/api/v1", tags=["findings"])
@@ -58,22 +58,38 @@ def ingest_findings(
     version: str = Query(...),
     payload: incidents.FindingsPayload = None,
     source: str = Query(default="api"),
+    run_id: str | None = Query(default=None, description="CI run to attach findings to"),
     org: models.Organization = Depends(auth.require_org),
     session: Session = Depends(get_session),
 ):
     """Ingest a `barad-findings-v1` payload for one project version.
 
     Idempotent on per-kind fingerprints; new findings are evaluated against
-    approved suppression rules at creation time.
+    approved suppression rules at creation time. With `run_id`, created and
+    refreshed findings attach to that CI run for the gate verdict.
     """
     if source not in INGEST_SOURCES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid source")
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
     project_row, version_row = _resolve_or_404(session, org.id, project, version)
+    ci_run = None
+    if run_id:
+        ci_run = session.get(models.CiRun, run_id)
+        if ci_run is None or ci_run.org_id != org.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "ci run not found")
     counters = incidents.ingest_payload(session, org, project_row, version_row,
                                         payload, source=source)
     session.commit()
+    if ci_run is not None:
+        linked = (session.query(models.Finding)
+                  .filter(models.Finding.org_id == org.id,
+                          models.Finding.project_id == project_row.id,
+                          models.Finding.last_seen_version_id == version_row.id,
+                          models.Finding.status != "suppressed").all())
+        for finding in linked:
+            ci.attach_finding(session, ci_run, finding)
+        session.commit()
     return {"status": "ingested", "project": project_row.name,
             "version": version_row.version, "source": source, "counts": counters}
 
