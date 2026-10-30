@@ -1,5 +1,5 @@
 name: Barad-dur
-description: Installs this checkout and forwards scan, run, or health to the barad CLI.
+description: Installs Barad, whose CLI resolves its pinned OpenGrep engine, then forwards scan, run, or health.
 inputs:
   command:
     description: CLI command to execute: scan, run, or health.

@@ -11,9 +11,9 @@
 #              exist only in that single publish step, and a failed publication
 #              fails the job instead of being masked.
 #
-# Neither job uploads the raw Trivy report: `security.json` embeds secret
-# matches. Only the manifest, the sanitized report, the SBOM and the checksums
-# are preserved, per job, so both boundaries keep their own evidence.
+# Neither job uploads raw scanner output: `security.json` can embed secret
+# matches and `sast.json` can embed source excerpts. Only the manifest, the
+# sanitized Trivy report, the SBOM and the checksums are preserved, per job.
 #
 # Changes from the legacy runner workflow:
 #   * `python -m barad_security run/sync`, `--pending` reuse and the
@@ -45,10 +45,6 @@ on:
       DTRACK_URL:
         required: false
       DTRACK_API_KEY:
-        required: false
-      DOJO_URL:
-        required: false
-      DOJO_TOKEN:
         required: false
   pull_request:
   push:
@@ -147,12 +143,10 @@ jobs:
           BARAD_CONFIG: ${{ inputs.config-file || 'config/ci.barad.yml' }}
           DTRACK_URL: ${{ secrets.DTRACK_URL }}
           DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
-          DOJO_URL: ${{ secrets.DOJO_URL }}
-          DOJO_TOKEN: ${{ secrets.DOJO_TOKEN }}
         run: |
           set -uo pipefail
           missing=""
-          for name in DTRACK_URL DTRACK_API_KEY DOJO_URL DOJO_TOKEN; do
+          for name in DTRACK_URL DTRACK_API_KEY; do
             if [ -z "${!name:-}" ]; then
               missing="$missing $name"
             fi

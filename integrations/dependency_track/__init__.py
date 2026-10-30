@@ -53,8 +53,12 @@ def synchronize(settings, manifest, sbom_path, *, pending=None):
         if created:
             if not block.get('auto_create', False):
                 return {'status': 'FAILED', 'reason': 'project_missing_creation_disabled'}
+            body = {'name': name, 'version': version, 'active': True}
+            parent = _parent_reference(client, endpoint, headers, block.get('parent_name'))
+            if parent:
+                body['parent'] = parent
             response = client.request('PUT', f'{endpoint}/api/v1/project', headers=headers,
-                                      json_body={'name': name, 'version': version, 'active': True}).json()
+                                      json_body=body).json()
             uuid = response.get('uuid') if isinstance(response, dict) else None
         else:
             uuid = exact[0]['uuid']
@@ -146,6 +150,17 @@ def synchronize(settings, manifest, sbom_path, *, pending=None):
         if detail:
             result['detail'] = detail
         return result
+
+
+def _parent_reference(client, endpoint, headers, name):
+    if not name:
+        return None
+    response = client.request('GET', f'{endpoint}/api/v1/project?name={quote(name, safe="")}&excludeInactive=false', headers=headers).json()
+    rows = response.get('objects') if isinstance(response, dict) else response
+    matches = [row for row in rows if isinstance(row, dict) and row.get('name') == name and row.get('uuid')] if isinstance(rows, list) else []
+    if len(matches) != 1:
+        raise ValueError('parent_project_unresolved')
+    return {'uuid': matches[0]['uuid'], 'name': name}
 
 
 def _deduplicate_dependencies(sbom_path):

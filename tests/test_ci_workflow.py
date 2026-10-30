@@ -29,7 +29,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "security.yml"
 CI_CONFIG = REPO_ROOT / "config" / "ci.barad.yml"
 DOCS = REPO_ROOT / "docs" / "CLI.md"
 
-PUBLISH_CREDENTIALS = ("DTRACK_URL", "DTRACK_API_KEY", "DOJO_URL", "DOJO_TOKEN")
+PUBLISH_CREDENTIALS = ("DTRACK_URL", "DTRACK_API_KEY")
 ALL_CREDENTIAL_NAMES = PUBLISH_CREDENTIALS
 LEGACY_REFERENCES = ("barad-security sync", "requirements.txt", "./bin/barad-security")
 
@@ -137,6 +137,7 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertNotIn("trivy-runner", self.code)
         secrets = self.document["on"]["workflow_call"]["secrets"]
         self.assertEqual(set(secrets), set(PUBLISH_CREDENTIALS))
+        self.assertNotIn("DOJO_", self.code)
 
     def test_workflow_jobs_reference_the_explicit_ci_config(self):
         for job in self.jobs.values():
@@ -202,10 +203,11 @@ class CiConfigTests(unittest.TestCase):
     def setUp(self):
         self.document, self.source = read_project_config(CI_CONFIG)
 
-    def test_config_enables_integrations_without_committing_secrets(self):
+    def test_config_publishes_only_dependency_track_without_committing_secrets(self):
         integrations = self.document["integrations"]
         self.assertTrue(integrations["dependency_track"]["enabled"])
-        self.assertTrue(integrations["defectdojo"]["enabled"])
+        self.assertNotIn("defectdojo", integrations)
+        self.assertEqual(self.document["scan"]["scanners"], ["secret", "misconfig"])
         text = CI_CONFIG.read_text(encoding="utf-8")
         self.assertIsNone(re.search(r"https?://", text), "endpoints must come from the environment")
         for name in ("token", "api_key", "password", "secret"):
@@ -217,7 +219,7 @@ class CiConfigTests(unittest.TestCase):
                                  project_name="barad-dur", environ={})
         self.assertEqual(settings.document["output"]["directory"], ".barad/reports")
         self.assertFalse(settings.connection("dependency_track")["token_configured"])
-        self.assertFalse(settings.connection("defectdojo")["endpoint_configured"])
+        self.assertNotIn("defectdojo", self.document["integrations"])
         self.assertEqual(settings.secret_values(), [])
 
 
@@ -265,8 +267,7 @@ class StepScriptTests(unittest.TestCase):
         return completed
 
     def credentials(self):
-        return {"DTRACK_URL": "https://dtrack.invalid", "DTRACK_API_KEY": "private-dt",
-                "DOJO_URL": "https://dojo.invalid", "DOJO_TOKEN": "private-dojo"}
+        return {"DTRACK_URL": "https://dtrack.invalid", "DTRACK_API_KEY": "private-dt"}
 
     def test_scan_step_propagates_a_scan_failure(self):
         completed = self.run_step(self.scan_script, stub_exit=1)
@@ -287,10 +288,10 @@ class StepScriptTests(unittest.TestCase):
 
     def test_publish_step_skips_visibly_when_a_single_credential_is_missing(self):
         credentials = self.credentials()
-        credentials.pop("DOJO_TOKEN")
+        credentials.pop("DTRACK_API_KEY")
         completed = self.run_step(self.publish_script, credentials)
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("DOJO_TOKEN", completed.stdout)
+        self.assertIn("DTRACK_API_KEY", completed.stdout)
         self.assertFalse(self.argv_log.exists())
 
     def test_publish_step_rescans_inside_the_trusted_job(self):
@@ -300,7 +301,7 @@ class StepScriptTests(unittest.TestCase):
         self.assertEqual(argv[:2], ["run", "."])
         self.assertIn("--config", argv)
         self.assertTrue((self.directory / "publication.json").is_file())
-        self.assertNotIn("private-dojo", completed.stdout)
+        self.assertNotIn("private-dt", completed.stdout)
 
     def test_publish_step_propagates_a_publication_failure(self):
         completed = self.run_step(self.publish_script, self.credentials(), stub_exit=4)
@@ -311,12 +312,25 @@ class StepScriptTests(unittest.TestCase):
         self.assertEqual(names, list(PUBLISH_CREDENTIALS))
 
 
+class ActionEngineTests(unittest.TestCase):
+    def test_composite_action_delegates_opengrep_to_the_cli_engine_manager(self):
+        action = (REPO_ROOT / "action" / "action.yml").read_text(encoding="utf-8")
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertNotIn("install-opengrep.sh", action)
+        self.assertNotIn("Install OpenGrep", action)
+        self.assertNotIn("Install pinned OpenGrep", workflow)
+        self.assertIn("barad scan", action)
+        self.assertFalse((REPO_ROOT / "action" / "install-opengrep.sh").exists())
+
+
 class DocumentationTests(unittest.TestCase):
     def test_docs_describe_the_migrated_workflow(self):
         text = DOCS.read_text(encoding="utf-8")
         self.assertIn("config/ci.barad.yml", text)
         self.assertIn("barad run", text)
         self.assertIn("action/action.yml", text)
+        self.assertIn("OpenGrep", text)
         self.assertNotIn("trivy-runner", text)
         self.assertNotIn("still calls a legacy runner", text)
         self.assertNotIn("A future GitHub Action", text)

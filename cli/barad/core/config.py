@@ -109,11 +109,20 @@ DEFAULTS = {
         "cache_enabled": True,
         "cache_dir": ".barad-dur/cache/trivy",
         "scan_type": "fs",
-        "scanners": ["vuln", "secret", "misconfig"],
+        "scanners": ["secret", "misconfig"],
         "severity": ["UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"],
         "exclude_paths": [],
         "report_format": "json",
         "timeout_seconds": 900,
+    },
+    "opengrep": {
+        "enabled": True,
+        # The OpenGrep build is not configurable: `barad.core.engines` resolves the
+        # exact release pinned in `barad/resources/engines.lock.json`, verifies its
+        # SHA-256 and executes that absolute path.
+        "rules": None,
+        "exclude_paths": [],
+        "timeout_seconds": 600,
     },
     "sbom": {
         "enabled": True,
@@ -434,6 +443,15 @@ def _check_semantics(config):
     if not config.get("trivy.always_run", True):
         raise ConfigError(
             "invalid configuration: trivy.always_run must be true; Trivy runs on every execution"
+        )
+    if "vuln" in (config.get("trivy.scanners") or []):
+        raise ConfigError(
+            "invalid configuration: trivy.scanners must not include 'vuln'; "
+            "Dependency-Track owns dependency vulnerability analysis"
+        )
+    if not config.get("opengrep.enabled", True):
+        raise ConfigError(
+            "invalid configuration: opengrep.enabled must be true; the workflow requires OpenGrep SAST evidence"
         )
     if config.get("sbom.generator") != "trivy":
         raise ConfigError("invalid configuration: sbom.generator must be 'trivy' (no other generator is integrated)")

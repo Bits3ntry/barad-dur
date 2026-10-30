@@ -102,6 +102,77 @@ def trivy_document():
     }
 
 
+class FakeEngineManager:
+    """Deterministic stand-in for barad.core.engines.EngineManager.
+
+    `resolve` hands back an absolute path inside a private temporary directory, so
+    a scan test proves the runner invokes a resolved engine and never a PATH
+    lookup, without downloading anything.
+    """
+
+    instances = []
+    resolve_calls = 0
+    spec = {
+        "version": "1.33.1",
+        "platform": "linux-x86_64",
+        "asset": "opengrep_manylinux_x86",
+        "sha256": "0" * 64,
+        "url": "https://github.com/opengrep/opengrep/releases/download/v1.33.1/"
+               "opengrep_manylinux_x86",
+    }
+
+    def __init__(self, **kwargs):
+        self.logger = kwargs.get("logger")
+        self.environ = kwargs.get("environ") or {}
+        self.cache_dir = Path(tempfile.mkdtemp(prefix="barad-fake-engines-"))
+        self.path = self.cache_dir / "opengrep"
+        self.path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        self.path.chmod(0o755)
+        FakeEngineManager.instances.append(self)
+
+    def resolve(self, name="opengrep"):
+        FakeEngineManager.resolve_calls += 1
+        return self.path.resolve()
+
+    def engine(self, name="opengrep"):
+        from barad.core.engines import EngineSpec
+
+        return EngineSpec(name=name, **FakeEngineManager.spec)
+
+
+class FakeOpenGrep:
+    """Deterministic stand-in for barad.core.opengrep.OpenGrepRunner."""
+
+    instances = []
+    scan_calls = 0
+
+    def __init__(self, config, logger, *, repo_root=None):
+        self.config = config
+        self.logger = logger
+        self.repo_root = Path(repo_root)
+        FakeOpenGrep.instances.append(self)
+
+    def preflight(self):
+        return None
+
+    def scan_json(self, path):
+        from barad.core.opengrep import OpenGrepOutcome
+
+        FakeOpenGrep.scan_calls += 1
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "version": "1.33.1",
+            "results": [{"check_id": "barad.python.subprocess-shell-true",
+                         "extra": {"severity": "ERROR"}}],
+            "errors": [],
+        }), encoding="utf-8")
+        return OpenGrepOutcome(
+            status="success", exit_code=0, version="1.33.1", artifact=path.name,
+            counts={"total": 1, "error": 1, "warning": 0, "info": 0},
+        )
+
+
 class FakeTrivy:
     """Deterministic stand-in for barad.core.TrivyRunner."""
 
@@ -178,6 +249,10 @@ def reset_fake():
     FakeTrivy.fail_scan = False
     FakeTrivy.fail_sbom = False
     FakeTrivy.preflight_error = None
+    FakeEngineManager.instances = []
+    FakeEngineManager.resolve_calls = 0
+    FakeOpenGrep.instances = []
+    FakeOpenGrep.scan_calls = 0
     FakeTrivy.instances = []
     FakeTrivy.scan_calls = 0
     FakeTrivy.sbom_calls = 0
@@ -211,7 +286,8 @@ class CliTestCase(unittest.TestCase):
         self.state_path = self.root / ".barad" / "state" / "local-inventory.json"
 
     def scan(self, *argv, cwd=None, output=None):
-        with mock.patch("barad.scan.TrivyRunner", FakeTrivy):
+        with mock.patch("barad.scan.TrivyRunner", FakeTrivy), \
+             mock.patch("barad.scan.OpenGrepRunner", FakeOpenGrep):
             code, out, err = invoke(["scan", *argv], cwd=cwd)
         manifest = None
         run_dir = None

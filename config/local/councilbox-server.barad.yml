@@ -11,6 +11,7 @@ integrations:
     endpoint_env: DTRACK_URL
     token_env: DTRACK_API_KEY
     auto_create: true
+    # parent_name: OVAC  # Optional: create below this unique Dependency-Track parent.
     wait_timeout_seconds: 120
     publish_branches: true
 

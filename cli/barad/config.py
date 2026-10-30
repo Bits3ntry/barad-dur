@@ -33,9 +33,15 @@ DEFAULTS = {
         "runner": "docker",
         "executable": "trivy",
         "image": "aquasec/trivy:0.76.1",
-        "scanners": ["vuln", "secret", "misconfig"],
+        "scanners": ["secret", "misconfig"],
         "severity": ["UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"],
         "timeout_seconds": 900,
+        "exclude_paths": list(DEFAULT_EXCLUDES),
+    },
+    "sast": {
+        "enabled": True,
+        "rules": None,
+        "timeout_seconds": 600,
         "exclude_paths": list(DEFAULT_EXCLUDES),
     },
     "output": {"directory": ".barad/reports"},
@@ -51,15 +57,16 @@ DEFAULTS = {
     },
 }
 
-_TOP_LEVEL = {"version", "project", "scan", "output", "integrations"}
+_TOP_LEVEL = {"version", "project", "scan", "sast", "output", "integrations"}
 _PROJECT_KEYS = {"name", "version"}
 _VERSION_KEYS = {"source", "path", "key", "value", "env"}
 _SCAN_KEYS = {"target_type", "target", "runner", "executable", "image", "scanners",
               "severity", "timeout_seconds", "exclude_paths"}
+_SAST_KEYS = {"enabled", "rules", "timeout_seconds", "exclude_paths"}
 _OUTPUT_KEYS = {"directory"}
 _BLOCK_KEYS = {"enabled", "endpoint", "endpoint_env", "token_env", "required",
                "auto_create", "wait_timeout_seconds", "publish_branches", "auto_create_context", "reimport",
-               "product_name", "product_type_name", "engagement_name", "test_title_prefix", "timeout_seconds",
+               "product_name", "product_type_name", "engagement_name", "test_title_prefix", "parent_name", "timeout_seconds",
                "max_attempts"}
 _SECRET_KEYS = {"token", "password", "secret", "api_key", "apikey", "access_key"}
 
@@ -184,6 +191,12 @@ def load_settings(document, *, source, root, project_name, ecosystems=(),
             "timeout_seconds": merged["scan"]["timeout_seconds"],
         },
         "sbom": {"enabled": True, "generator": "trivy", "format": "cyclonedx"},
+        "opengrep": {
+            "enabled": bool(merged["sast"]["enabled"]),
+            "rules": merged["sast"]["rules"],
+            "exclude_paths": list(merged["sast"]["exclude_paths"]),
+            "timeout_seconds": merged["sast"]["timeout_seconds"],
+        },
         "artifacts": {
             "directory": Path(output_directory).as_posix(),
             "preserve_reports": True,
@@ -240,6 +253,9 @@ def _check_keys(document):
     for key in _mapping(document, "scan"):
         if key not in _SCAN_KEYS:
             raise ConfigError(f"unknown configuration key: scan.{key}")
+    for key in _mapping(document, "sast"):
+        if key not in _SAST_KEYS:
+            raise ConfigError(f"unknown configuration key: sast.{key}")
     for key in _mapping(document, "output"):
         if key not in _OUTPUT_KEYS:
             raise ConfigError(f"unknown configuration key: output.{key}")
@@ -284,6 +300,18 @@ def _check_types(document):
     timeout = scan.get("timeout_seconds")
     if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, int)):
         raise ConfigError("invalid configuration: scan.timeout_seconds must be an integer")
+    sast = _mapping(document, "sast")
+    if "enabled" in sast and not isinstance(sast["enabled"], bool):
+        raise ConfigError("invalid configuration: sast.enabled must be a boolean")
+    if "rules" in sast and sast["rules"] is not None and not isinstance(sast["rules"], str):
+        raise ConfigError("invalid configuration: sast.rules must be a string")
+    if "timeout_seconds" in sast and (isinstance(sast["timeout_seconds"], bool)
+                                    or not isinstance(sast["timeout_seconds"], int)):
+        raise ConfigError("invalid configuration: sast.timeout_seconds must be an integer")
+    excludes = sast.get("exclude_paths")
+    if excludes is not None and (not isinstance(excludes, list)
+                                 or not all(isinstance(item, str) and item for item in excludes)):
+        raise ConfigError("invalid configuration: sast.exclude_paths must be a list of non-empty strings")
     output = _mapping(document, "output")
     if "directory" in output and not isinstance(output["directory"], str):
         raise ConfigError("invalid configuration: output.directory must be a string")
@@ -307,7 +335,7 @@ def _check_types(document):
             if key in block and (isinstance(block[key], bool) or not isinstance(block[key], int)
                                  or block[key] < 1 or block[key] > (10 if key == "max_attempts" else 600)):
                 raise ConfigError(f"invalid configuration: integrations.{name}.{key} must be a positive bounded integer")
-        for key in ("product_name", "product_type_name", "engagement_name", "test_title_prefix"):
+        for key in ("product_name", "product_type_name", "engagement_name", "test_title_prefix", "parent_name"):
             if key in block and not isinstance(block[key], str):
                 raise ConfigError(f"invalid configuration: integrations.{name}.{key} must be a string")
 

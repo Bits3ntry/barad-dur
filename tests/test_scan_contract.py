@@ -1,11 +1,12 @@
 import hashlib
 import json
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from cli_support import CliTestCase, FakeTrivy, invoke
+from cli_support import CliTestCase, FakeEngineManager, FakeOpenGrep, FakeTrivy, invoke
 
 
 def slug(value):
@@ -74,6 +75,74 @@ class ScanContractTests(CliTestCase):
         state = json.loads(self.state_path.read_text(encoding="utf-8"))
         self.assertNotIn("publication", json.dumps(state))
         self.assertNotIn("published", json.dumps(state))
+
+    def test_scan_records_private_opengrep_sast_evidence(self):
+        from unittest import mock
+
+        with mock.patch("barad.scan.TrivyRunner", FakeTrivy), \
+             mock.patch("barad.scan.OpenGrepRunner", FakeOpenGrep):
+            code, out, err = invoke(["scan"], cwd=self.root)
+
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("scan", out)
+        reports = list((self.root / ".barad" / "reports").glob("**/manifest.json"))
+        self.assertEqual(len(reports), 1)
+        manifest = json.loads(reports[0].read_text(encoding="utf-8"))
+        run_dir = reports[0].parent
+        self.assertEqual(manifest["scan"]["scanner_versions"]["opengrep"], "1.33.1")
+        self.assertEqual(manifest["scan"]["counts"]["sast"], {
+            "total": 1, "error": 1, "warning": 0, "info": 0,
+        })
+        self.assertEqual(manifest["artifacts"]["sast.json"]["sensitivity"], "local_only")
+        self.assertTrue((run_dir / "sast.json").is_file())
+        self.assertEqual(FakeOpenGrep.scan_calls, 1)
+        self.assertEqual(FakeTrivy.instances[-1].config.get("trivy.scanners"),
+                         ["secret", "misconfig"])
+
+    def test_scan_invokes_the_pinned_engine_by_its_absolute_path(self):
+        from unittest import mock
+
+        commands = []
+
+        def fake_run(argv, **_kwargs):
+            commands.append(list(argv))
+            if argv[1:] == ["--version"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="OpenGrep 1.33.1\n", stderr="")
+            if "--json-output" not in argv:
+                # Unrelated subprocess use (for example Git probing) stays harmless.
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+            report = Path(argv[argv.index("--json-output") + 1])
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(json.dumps({
+                "version": "1.33.1",
+                "results": [{"check_id": "barad.python.subprocess-shell-true",
+                             "extra": {"severity": "ERROR"}}],
+                "errors": [],
+            }), encoding="utf-8")
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        with mock.patch("barad.scan.TrivyRunner", FakeTrivy), \
+             mock.patch("barad.core.opengrep.EngineManager", FakeEngineManager), \
+             mock.patch("barad.core.opengrep.subprocess.run", side_effect=fake_run):
+            code, out, err = invoke(["scan"], cwd=self.root)
+
+        self.assertEqual((code, err), (0, ""))
+        reports = list((self.root / ".barad" / "reports").glob("**/manifest.json"))
+        self.assertEqual(len(reports), 1)
+        manifest = json.loads(reports[0].read_text(encoding="utf-8"))
+        engine = FakeEngineManager.instances[-1]
+        scan_commands = [argv for argv in commands if argv[1:2] == ["scan"]]
+        self.assertEqual(len(scan_commands), 1)
+        self.assertEqual(scan_commands[0][0], str(engine.path.resolve()))
+        self.assertTrue(Path(scan_commands[0][0]).is_absolute())
+        self.assertEqual(FakeEngineManager.resolve_calls, 1)
+        self.assertEqual(manifest["scan"]["scanner_versions"]["opengrep"], "1.33.1")
+        self.assertEqual(manifest["scan"]["engines"]["opengrep"]["sha256"],
+                         FakeEngineManager.spec["sha256"])
+        self.assertEqual(manifest["scan"]["engines"]["opengrep"]["asset"],
+                         "opengrep_manylinux_x86")
+        self.assertTrue((reports[0].parent / "sast.json").is_file())
 
     def test_missing_scan_path_is_rejected_with_exact_message(self):
         missing = self.root / "missing"

@@ -1,0 +1,12 @@
+# Local-only Dependency-Track publication for Shutter repositories.
+# Invoke from Barad-d-r with an explicit external target path.
+version: 1
+
+integrations:
+  dependency_track:
+    enabled: true
+    endpoint_env: DTRACK_URL
+    token_env: DTRACK_API_KEY
+    auto_create: true
+    parent_name: SHUTTER
+    wait_timeout_seconds: 120

@@ -1,0 +1,62 @@
+# Barad-dûr's versioned SAST baseline.  It intentionally contains source-code
+# security rules only: dependency CVEs belong to Dependency-Track, while Trivy
+# retains secret and misconfiguration checks.
+rules:
+  - id: python-subprocess-shell-true
+    message: Avoid shell=True; pass an argument list to subprocess instead.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      category: security
+      technology: [python]
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$FUNC(..., shell=True, ...)
+          - pattern: subprocess.$FUNC(..., shell = True, ...)
+
+  - id: python-unsafe-yaml-load
+    message: Use yaml.safe_load instead of yaml.load for untrusted input.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      category: security
+      technology: [python]
+    pattern: yaml.load(...)
+
+  - id: javascript-eval
+    message: Avoid eval; it executes attacker-controlled JavaScript.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      technology: [javascript, typescript]
+    pattern: eval(...)
+
+  - id: javascript-child-process-exec
+    message: Avoid child_process.exec with interpolated input; prefer an argument array.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      technology: [javascript, typescript]
+    pattern-either:
+      - pattern: require("child_process").exec(...)
+      - pattern: child_process.exec(...)
+
+  - id: java-runtime-exec
+    message: Avoid Runtime.exec with constructed command strings.
+    severity: WARNING
+    languages: [java]
+    metadata:
+      category: security
+      technology: [java]
+    pattern: $RUNTIME.exec(...)
+
+  - id: java-unsafe-deserialization
+    message: Avoid ObjectInputStream.readObject on untrusted data.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      category: security
+      technology: [java]
+    pattern: $STREAM.readObject()

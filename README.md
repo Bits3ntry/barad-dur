@@ -1,6 +1,6 @@
 # BARAD-DÛR
 
-Barad-dûr is a local security-analysis foundation: one persistent Docker Compose stack, one installable Trivy CLI, and reusable Dependency-Track and DefectDojo adapters. It is a loopback-only evaluation environment, not a production deployment.
+Barad-dûr is a local security-analysis foundation: one persistent Docker Compose stack, an installable Trivy and OpenGrep CLI, and a reusable Dependency-Track adapter. It is a loopback-only evaluation environment, not a production deployment.
 
 ## Quick path
 
@@ -16,7 +16,7 @@ python3 -m venv /tmp/barad-venv
 /tmp/barad-venv/bin/barad run .
 ```
 
-`barad scan` writes `security.json`, `sbom.cdx.json`, and `manifest.json` into `.barad/reports/<project>/<version>/<scan-id>/` anchored to the directory where you run it, so a scanned project is never modified; `--out`/`-O DIR` chooses the reports directory. Scan ids carry a UTC timestamp, so re-scanning the same project+version simply adds a new scan-id folder; no evidence is ever replaced. Raw `security.json` is private evidence; do not upload it. `barad run` uses the same scan and synchronizes only enabled integrations. `barad health` is read-only.
+`barad scan` writes Trivy `security.json`, `sbom.cdx.json`, OpenGrep `sast.json`, and `manifest.json` into `.barad/reports/<project>/<version>/<scan-id>/` anchored to the directory where you run it, so a scanned project is never modified; `--out`/`-O DIR` chooses the reports directory. Scan ids carry a UTC timestamp, so re-scanning the same project+version simply adds a new scan-id folder; no evidence is ever replaced. Raw `security.json` and `sast.json` are private evidence; do not upload them. Trivy checks secrets and misconfigurations, Dependency-Track owns dependency vulnerabilities from the SBOM, and OpenGrep owns SAST. `barad run` uses the same scan and synchronizes only enabled integrations. `barad health` is read-only.
 
 ## Architecture
 
@@ -24,9 +24,9 @@ python3 -m venv /tmp/barad-venv
 |---|---|---|
 | Infrastructure | `compose.yaml` | Unified PostgreSQL, Dependency-Track, DefectDojo, Valkey, Trivy Server, and on-demand Trivy. |
 | CLI | `cli/barad/` | The only command surface: `scan`, `run`, and `health`. |
-| CLI core | `cli/barad/core/` | Trivy invocation, SBOM validation, versioning, evidence identity, inventory normalization, and HTTP safety. |
-| Integrations | `integrations/dependency_track/`, `integrations/defectdojo/` | Reusable remote adapters for project/version/SBOM and finding import/reimport. |
-| GitHub Action | `action/action.yml` | Composite adapter that installs this checkout and dispatches one of the same three commands. |
+| CLI core | `cli/barad/core/` | Trivy invocation and SBOM validation, OpenGrep SAST execution, versioning, evidence identity, inventory normalization, and HTTP safety. |
+| Integrations | `integrations/dependency_track/` | Reusable remote adapter for project/version/SBOM. |
+| GitHub Action | `action/action.yml` | Composite adapter that installs the CLI; its EngineManager resolves the same pinned OpenGrep engine as local execution. |
 | Tests | `tests/` | CLI, integration, workflow, evidence, and architectural contracts. |
 | Documentation | `docs/` | Current usage, architecture, and verification ledger. |
 

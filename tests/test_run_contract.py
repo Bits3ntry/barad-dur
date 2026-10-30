@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
-from cli_support import CliTestCase, FakeTrivy, invoke, cyclonedx
+from cli_support import CliTestCase, FakeOpenGrep, FakeTrivy, invoke, cyclonedx
 from barad.core.http import Response, HttpStatusError
 
 
@@ -114,6 +114,7 @@ integrations:
         from barad import scan
         with mock.patch.dict('os.environ', self.env), \
              mock.patch('barad.scan.TrivyRunner', FakeTrivy), \
+             mock.patch('barad.scan.OpenGrepRunner', FakeOpenGrep), \
              mock.patch('integrations.dependency_track.HttpClient', Remote), \
              mock.patch('integrations.defectdojo.HttpClient', Remote):
             code, out, err = invoke(['run', *args], cwd=self.root)
@@ -156,6 +157,7 @@ DOJO_TOKEN=dotenv-dojo-secret
         from barad import scan
         with mock.patch.dict(os.environ, {}, clear=True), \
              mock.patch('barad.scan.TrivyRunner', FakeTrivy), \
+             mock.patch('barad.scan.OpenGrepRunner', FakeOpenGrep), \
              mock.patch('integrations.dependency_track.HttpClient', Remote), \
              mock.patch('integrations.defectdojo.HttpClient', Remote):
             code, out, err = invoke(['run', str(target), '--config', str(profile)], cwd=self.root)

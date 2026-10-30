@@ -22,6 +22,11 @@ class ConfigurationTests(CliTestCase):
 
         self.assertEqual(settings.security.get("trivy.runner"), "docker")
         self.assertEqual(settings.security.get("trivy.scan_type"), "fs")
+        self.assertEqual(settings.document["scan"]["scanners"], ["secret", "misconfig"])
+        self.assertTrue(settings.document["sast"]["enabled"])
+        self.assertIsNone(settings.document["sast"].get("executable"))
+        self.assertIsNone(settings.security.get("opengrep.executable"))
+        self.assertIsNone(settings.security.get("opengrep.rules"))
         self.assertEqual(settings.security.get("artifacts.directory"), ".barad/reports")
         self.assertEqual(settings.document["output"]["directory"], ".barad/reports")
         for block in ("dependency_track", "defectdojo"):
@@ -37,6 +42,28 @@ class ConfigurationTests(CliTestCase):
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
         self.assertEqual(err, "error: unknown configuration key: scan.danger\n")
+
+    def test_dependency_vulnerability_scanner_is_rejected(self):
+        self.write_config("version: 1\nscan:\n  scanners: [vuln]\n")
+
+        code, out, err = self.invalid_scan()
+
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertEqual(
+            err,
+            "error: invalid configuration: trivy.scanners.0: value 'vuln' is not one of "
+            "secret, misconfig, license\n",
+        )
+
+    def test_preinstalled_opengrep_executable_is_no_longer_configurable(self):
+        self.write_config("version: 1\nsast:\n  executable: opengrep\n")
+
+        code, out, err = self.invalid_scan()
+
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertEqual(err, "error: unknown configuration key: sast.executable\n")
 
     def test_malformed_scan_list_is_rejected(self):
         self.write_config("version: 1\nscan:\n  exclude_paths: vendor\n")

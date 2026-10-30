@@ -1,0 +1,2 @@
+[console_scripts]
+barad = barad.cli:main

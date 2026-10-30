@@ -21,6 +21,7 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("barad scan", action)
         self.assertIn("barad run", action)
         self.assertIn("barad health", action)
+        self.assertNotIn("install-opengrep.sh", action)
         self.assertNotIn("barad_security", action)
 
     def test_cli_configuration_has_only_the_two_supported_remote_adapters(self):
@@ -39,9 +40,11 @@ class ArchitectureContractTests(unittest.TestCase):
 
     def test_active_packages_are_limited_to_cli_and_integrations(self):
         from barad.core import TrivyRunner
+        from barad.core.opengrep import OpenGrepRunner
         from integrations import dependency_track, defectdojo
 
         self.assertTrue(callable(TrivyRunner))
+        self.assertTrue(callable(OpenGrepRunner))
         self.assertTrue(callable(dependency_track.synchronize))
         self.assertTrue(callable(defectdojo.synchronize))
         self.assertFalse((ROOT / "barad_security").is_dir())

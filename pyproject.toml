@@ -22,4 +22,4 @@ include = ["barad*", "integrations*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-barad = ["core/schema/*.json"]
+barad = ["core/schema/*.json", "resources/*.json", "rules/*.yml"]

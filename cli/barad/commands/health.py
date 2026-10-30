@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from ..core.engines import EngineManager
 from ..core.http import HttpClient, HttpStatusError, HttpTransportError, validate_endpoint
 from ..core.trivy import TrivyRunner
 from ..core.errors import ConfigError
@@ -52,6 +53,7 @@ def execute(args):
         trivy_version = TrivyRunner(settings.security, None).version()
     checks['trivy'] = {'status': 'HEALTHY' if trivy_version else 'UNAVAILABLE',
                        'version': trivy_version, 'runner': runner}
+    checks['opengrep'] = EngineManager(environ=environment).inspect('opengrep')
     for name, path in (('dependency_track', '/api/v1/project?name=barad-health-check&version=0'),
                        ('defectdojo', '/api/v2/test_types/?limit=1')):
         block = settings.block(name)
@@ -74,10 +76,11 @@ def execute(args):
         except (HttpStatusError, HttpTransportError, ValueError) as error:
             checks[name] = {'status': 'DEGRADED', 'reason': 'authentication_or_connection_failed',
                             'http_status': error.status if isinstance(error, HttpStatusError) else None}
-    if checks['trivy']['status'] != 'HEALTHY':
+    if any(checks[name]['status'] != 'HEALTHY' for name in ('trivy', 'opengrep')):
         status, exit_code = 'UNAVAILABLE', 1
     elif any(check['status'] != 'HEALTHY' for key, check in checks.items()
-             if key not in ('cli', 'configuration', 'trivy') and check['status'] != 'NOT CONFIGURED'):
+             if key not in ('cli', 'configuration', 'trivy', 'opengrep')
+             and check['status'] != 'NOT CONFIGURED'):
         status, exit_code = 'DEGRADED', 4
     else:
         status, exit_code = 'HEALTHY', 0

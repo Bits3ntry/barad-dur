@@ -16,6 +16,7 @@ from .core.evidence import generate_run_id, sha256_file, utc_timestamp
 from .core.logs import Logger, Redactor
 from .core.sanitize import sanitize_trivy_report
 from .core.sbom import validate as validate_sbom
+from .core.opengrep import OpenGrepRunner
 from .core.trivy import TrivyRunner
 from .core.versioning import resolve_version
 
@@ -26,6 +27,7 @@ from .store import ScanStore
 REPORT = "security.json"
 SANITIZED_REPORT = "security.sanitized.json"
 SBOM = "sbom.cdx.json"
+SAST_REPORT = "sast.json"
 
 
 @dataclass
@@ -54,12 +56,14 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
     logger.info("scan", "started", {"target_type": target_type, "target": target_value})
 
     trivy = TrivyRunner(config, logger, repo_root=settings.root)
+    opengrep = OpenGrepRunner(config, logger, repo_root=settings.root)
     scan = {
         "status": "RUNNING",
         "started_at": started,
         "finished_at": None,
         "target": {"type": target_type, "value": target_value},
-        "scanner_versions": {"barad": __version__, "trivy": None},
+        "scanner_versions": {"barad": __version__, "trivy": None, "opengrep": None},
+        "engines": {},
         "counts": {},
         "errors": [],
         "warnings": [],
@@ -67,7 +71,7 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
     }
     problems = []
     preflight_failed = False
-    json_ok = sbom_ok = False
+    json_ok = sbom_ok = sast_ok = False
 
     try:
         trivy.preflight()
@@ -100,6 +104,28 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
             if not sbom_ok:
                 detail = (inventory_outcome.error or {}).get("detail") or "no CycloneDX inventory"
                 _problem(problems, scan, "inventory_failed", detail)
+
+    try:
+        opengrep.preflight()
+    except ScannerError as error:
+        _problem(problems, scan, error.kind, error.message)
+        logger.error("opengrep", "preflight_failed", {"detail": error.message})
+    else:
+        try:
+            sast = opengrep.scan_json(store.artifact_path(SAST_REPORT))
+        except ScannerError as error:
+            _problem(problems, scan, error.kind, error.message)
+        else:
+            scan["scanner_versions"]["opengrep"] = sast.version
+            scan["counts"]["sast"] = dict(sast.counts)
+            engine = dict((sast.parameters or {}).get("engine") or {})
+            if engine:
+                # Provenance of the verified binary: version, platform and digest.
+                scan["engines"]["opengrep"] = engine
+            sast_ok = sast.successful
+            if not sast_ok:
+                detail = (sast.error or {}).get("detail") or "no valid OpenGrep JSON report"
+                _problem(problems, scan, "sast_failed", detail)
 
     unprotected = store.protect_evidence()
     scan["evidence_protection"] = {
@@ -145,15 +171,17 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
                 for issue in validation.problems:
                     _problem(problems, scan, issue["code"], issue["detail"])
 
-    if json_ok and sbom_ok and inventory["fingerprint"]:
+    if json_ok and sbom_ok and sast_ok and inventory["fingerprint"]:
         status, scan_status = "completed", "SUCCESS"
-    elif json_ok and sbom_ok:
+    elif json_ok and sbom_ok and sast_ok:
         status, scan_status = "incomplete", "INCOMPLETE"
     else:
         status, scan_status = "failed", "FAILED"
     scan["status"] = scan_status
     scan["finished_at"] = utc_timestamp()
-    logger.info("scan", "finished", {"status": status, "json": json_ok, "sbom": sbom_ok})
+    logger.info("scan", "finished", {
+        "status": status, "json": json_ok, "sbom": sbom_ok, "sast": sast_ok,
+    })
 
     if status == "completed":
         store.record_inventory(project_name, _target_key(target_type, target_value), {
@@ -169,14 +197,14 @@ def run_scan(settings, *, target_type, target_value, git_context, name_source,
         })
 
     artifacts = {}
-    for name in (REPORT, SANITIZED_REPORT, SBOM, "execution.log"):
+    for name in (REPORT, SANITIZED_REPORT, SBOM, SAST_REPORT, "execution.log"):
         path = store.artifact_path(name)
         if path.is_file():
             artifacts[name] = {
                 "path": _display(path, workspace),
                 "sha256": sha256_file(path),
                 "size_bytes": path.stat().st_size,
-                "sensitivity": "local_only" if name in (REPORT, "execution.log")
+                "sensitivity": "local_only" if name in (REPORT, SAST_REPORT, "execution.log")
                 else "redacted" if name == SANITIZED_REPORT else "shareable",
             }
 

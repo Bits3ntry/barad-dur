@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "engines": {
+    "opengrep": {
+      "version": "1.33.1",
+      "release_tag": "v1.33.1",
+      "base_url": "https://github.com/opengrep/opengrep/releases/download",
+      "binaries": {
+        "linux-x86_64": {
+          "asset": "opengrep_manylinux_x86",
+          "sha256": "46e8133cc490f9f50518061590ce2f6be5a08afaeda034471c0ceda4b3899808"
+        },
+        "linux-aarch64": {
+          "asset": "opengrep_manylinux_aarch64",
+          "sha256": "d1433f63a90b8bc0b6ad4b498a13b372b856ce9a754a43484ba4920fe2d76dcf"
+        },
+        "macos-aarch64": {
+          "asset": "opengrep-core_osx_aarch64.tar.gz",
+          "sha256": "cce019aba35ba0c79f74b22fc9e2f8562ca651d76d5a04d7dcc440f967e45930",
+          "archive": "tar.gz",
+          "entry": "opengrep-core"
+        },
+        "windows-x86": {
+          "asset": "opengrep-core_windows_x86.zip",
+          "sha256": "5cd512bcd688e9cb1fe5203b742cbdeca05d144f807e4785815b782315169a83",
+          "archive": "zip",
+          "entry": "opengrep-core.exe"
+        }
+      }
+    }
+  }
+}

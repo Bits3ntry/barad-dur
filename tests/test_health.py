@@ -20,11 +20,35 @@ class ReadOnlyClient:
         return Response(200, body=b'[]' if '/api/v1/' in url else b'{"count": 1}')
 
 
+class FakeEngineManager:
+    result = {
+        'status': 'HEALTHY', 'version': '1.33.1', 'platform': 'linux-x86_64',
+        'cached': True,
+    }
+    inspect_calls = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def inspect(self, name):
+        self.__class__.inspect_calls += 1
+        self.__class__.last_name = name
+        return dict(self.__class__.result)
+
+    def resolve(self, *_args, **_kwargs):
+        raise AssertionError('health must not install an engine')
+
+
 class HealthTests(CliTestCase):
     def setUp(self):
         super().setUp()
         ReadOnlyClient.calls = []
         ReadOnlyClient.fail = False
+        FakeEngineManager.result = {
+            'status': 'HEALTHY', 'version': '1.33.1', 'platform': 'linux-x86_64',
+            'cached': True,
+        }
+        FakeEngineManager.inspect_calls = 0
         self.write('pyproject.toml', '[project]\nname="demo"\nversion="1.0"\n')
 
     def check(self, *, env=None, trivy='0.76.1', config=None):
@@ -32,6 +56,7 @@ class HealthTests(CliTestCase):
         argv = ['health'] + (['--config', str(config)] if config else [])
         with mock.patch.dict('os.environ', env), \
              mock.patch('barad.commands.health.TrivyRunner.version', return_value=trivy), \
+             mock.patch('barad.commands.health.EngineManager', FakeEngineManager), \
              mock.patch('barad.commands.health.HttpClient', ReadOnlyClient):
             return invoke(argv, cwd=self.root)
 
@@ -42,6 +67,9 @@ class HealthTests(CliTestCase):
         self.assertIn('dependency_track: NOT CONFIGURED', out)
         self.assertIn('defectdojo: NOT CONFIGURED', out)
         self.assertIn('trivy: HEALTHY', out)
+        self.assertIn('opengrep: HEALTHY (1.33.1)', out)
+        self.assertEqual(FakeEngineManager.inspect_calls, 1)
+        self.assertEqual(FakeEngineManager.last_name, 'opengrep')
         self.assertEqual(ReadOnlyClient.calls, [])
         self.assertFalse((self.root / '.barad').exists())
 
@@ -66,6 +94,7 @@ DOJO_TOKEN=dotenv-dojo-secret
 ''')
         with mock.patch.dict(os.environ, {}, clear=True), \
              mock.patch('barad.commands.health.TrivyRunner.version', return_value='0.76.1'), \
+             mock.patch('barad.commands.health.EngineManager', FakeEngineManager), \
              mock.patch('barad.commands.health.HttpClient', ReadOnlyClient):
             code, out, err = invoke(['health', '--config', str(config)], cwd=self.root)
         self.assertEqual((code, err), (0, ''))
@@ -90,6 +119,20 @@ integrations:
         self.assertNotIn('private-token', out + err)
         self.assertTrue(ReadOnlyClient.calls)
         self.assertTrue(all(method == 'GET' for method, _, _ in ReadOnlyClient.calls))
+        self.assertFalse((self.root / '.barad').exists())
+
+    def test_missing_opengrep_cache_is_unavailable_without_installing(self):
+        FakeEngineManager.result = {
+            'status': 'UNAVAILABLE', 'version': '1.33.1', 'platform': 'darwin-aarch64',
+            'cached': False, 'reason': 'engine_not_cached_or_verified',
+        }
+
+        code, out, err = self.check()
+
+        self.assertEqual((code, err), (1, ''))
+        self.assertIn('health: UNAVAILABLE', out)
+        self.assertIn('opengrep: UNAVAILABLE', out)
+        self.assertEqual(FakeEngineManager.inspect_calls, 1)
         self.assertFalse((self.root / '.barad').exists())
 
     def test_missing_scanner_is_unavailable(self):

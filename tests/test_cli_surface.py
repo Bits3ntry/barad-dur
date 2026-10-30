@@ -25,8 +25,9 @@ class CommandSurfaceTests(CliTestCase):
 
     def test_run_uses_scan_when_optional_integrations_are_missing(self):
         from unittest import mock
-        from cli_support import FakeTrivy
-        with mock.patch('barad.scan.TrivyRunner', FakeTrivy):
+        from cli_support import FakeOpenGrep, FakeTrivy
+        with mock.patch('barad.scan.TrivyRunner', FakeTrivy), \
+             mock.patch('barad.scan.OpenGrepRunner', FakeOpenGrep):
             code, out, err = invoke(['run', str(self.root)])
         self.assertEqual((code, err), (0, ''))
         self.assertIn('run ', out)
@@ -34,7 +35,11 @@ class CommandSurfaceTests(CliTestCase):
 
     def test_health_diagnostic_is_a_public_command(self):
         from unittest import mock
-        with mock.patch('barad.commands.health.TrivyRunner.version', return_value='0.76.1'):
+        with mock.patch('barad.commands.health.TrivyRunner.version', return_value='0.76.1'), \
+             mock.patch('barad.commands.health.EngineManager.inspect', return_value={
+                 'status': 'HEALTHY', 'version': '1.33.1', 'platform': 'linux-x86_64',
+                 'cached': True,
+             }):
             code, out, err = invoke(['health'], cwd=self.root)
         self.assertEqual((code, err), (0, ''))
         self.assertIn('health: HEALTHY', out)

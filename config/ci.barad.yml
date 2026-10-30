@@ -6,9 +6,9 @@
 #   * `publish` — trusted default-branch/release refs only; `barad run` rescans
 #     and then synchronizes the enabled integrations.
 #
-# No secret value lives here. Each integration names the environment variable
-# that holds its credential, and the endpoint comes from the environment too
-# (`DTRACK_URL`, `DOJO_URL`), so no internal hostname is committed.
+# No secret value lives here. Dependency-Track names the environment variables
+# that hold its credentials, so no internal hostname is committed. OpenGrep
+# writes local SAST evidence only; it has no remote publication target.
 #
 # The workflow passes the repository root positionally (`barad run . --config
 # config/ci.barad.yml`) on purpose: a config file under `config/` would
@@ -24,7 +24,7 @@ scan:
   target_type: fs
   runner: docker
   image: aquasec/trivy:0.76.1
-  scanners: [vuln, secret, misconfig]
+  scanners: [secret, misconfig]
 
 output:
   directory: .barad/reports
@@ -36,10 +36,3 @@ integrations:
     token_env: DTRACK_API_KEY
     auto_create: true
     wait_timeout_seconds: 120
-  defectdojo:
-    enabled: true
-    endpoint_env: DOJO_URL
-    token_env: DOJO_TOKEN
-    auto_create_context: true
-    product_type_name: Barad CI
-    engagement_name: barad-dur CI
