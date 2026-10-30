@@ -1,4 +1,5 @@
 """F0 acceptance tests: auth, SBOM ingestion, idempotency, inventory listing."""
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -6,7 +7,7 @@ from pathlib import Path
 import pytest
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_ROOT.parent))
+sys.path.insert(0, str(BACKEND_ROOT / "src"))
 
 from backend.app.auth import create_key  # noqa: E402
 from backend.app import models  # noqa: E402
@@ -104,7 +105,8 @@ def test_ingest_creates_receipt_and_inventory(client):
     # c2 is a root child AND nested under c1 (diamond): direct stays True,
     # the tree parent records the nested parent.
     assert urllib_row["parent_purl"] == "pkg:pypi/requests@2.32.3"
-    no_purl = by_purl["ref:c3"]
+    no_purl = by_purl["nonpurl:" + hashlib.sha256(
+        b"nonpurl:weirdlib-no-purl:9.9").hexdigest()]
     assert no_purl["purl"] is None and no_purl["is_direct"] is False
     assert no_purl["parent_purl"] is None  # c3 appears in no dependency edge
 
@@ -156,3 +158,20 @@ def test_unknown_project_version_404(client):
                           params={"project": "missing", "version": "1.0"},
                           headers={"X-API-Key": client.key})
     assert response.status_code == 404
+
+
+def test_purl_less_identity_is_stable_across_bom_ref_changes(client):
+    """Trivy mints a random bom-ref per run: identity must not follow it."""
+    first = json.loads(json.dumps(SBOM))
+    first["components"][2]["bom-ref"] = "run-uuid-a"
+    second = json.loads(json.dumps(SBOM))
+    second["components"][2]["bom-ref"] = "run-uuid-b"
+    r1 = _post(client, first)
+    r2 = _post(client, second)
+    assert r1.status_code == 201 and r2.status_code == 201
+    assert r2.json()["receipt"]["counts"]["components_created"] == 0
+    assert r2.json()["receipt"]["counts"]["components_received"] == 3
+    listed = client.get("/api/v1/components",
+                        params={"project": "poc-fixture", "version": "0.1.0"},
+                        headers={"X-API-Key": client.key})
+    assert listed.json()["total"] == 3

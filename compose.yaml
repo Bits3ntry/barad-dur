@@ -36,8 +36,15 @@ services:
       - migration-backup:/migration-backup:ro
       - ./docker/postgres/init-restore.sh:/docker-entrypoint-initdb.d/init-restore.sh:ro
     # Reached by Dependency-Track on dt-internal and by DefectDojo on
-    # dojo-internal; each side keeps its own network isolation.
-    networks: [dt-internal, dojo-internal]
+    # dojo-internal; each side keeps its own network isolation. `edge` is
+    # attached only because a loopback publish requires a routing network
+    # (OrbStack refuses port publishes from internal-only networks).
+    networks: [dt-internal, dojo-internal, edge]
+    ports:
+      # POC platform API (backend/) reaches this server from the host during
+      # F0. Loopback-only by design: no exposure beyond the local machine, in
+      # line with the evaluation-only posture of this stack.
+      - "127.0.0.1:15443:5432"
     healthcheck:
       # Fail closed: the marker is written only after both dumps are restored,
       # and the entrypoint's temporary server (used during initialization)

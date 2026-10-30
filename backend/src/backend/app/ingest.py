@@ -19,12 +19,20 @@ class SbomDocumentError(ValueError):
 REQUIRED_KEYS = {"name"}
 
 
-def identity_key(purl: str | None, bom_ref: str | None) -> str:
+def identity_key(purl: str | None, name: str | None, version: str | None) -> str:
+    """Stable identity recipe for dedup across re-scans.
+
+    Trivy mints a random `bom-ref` per run for purl-less components (e.g. the
+    manifest pseudo-component), so bom-ref identity would duplicate on every
+    scan. Purl-less identity therefore keys on name+version, mirroring the
+    reference platform's per-kind fingerprint recipes.
+    """
     if purl:
         return purl
-    if bom_ref:
-        return f"ref:{bom_ref}"
-    raise SbomDocumentError("component missing both purl and bom-ref")
+    if name:
+        digest = hashlib.sha256(f"nonpurl:{name}:{version or ''}".encode("utf-8")).hexdigest()
+        return f"nonpurl:{digest}"
+    raise SbomDocumentError("component missing both purl and name")
 
 
 def _property_strings(component: dict) -> str | None:
@@ -107,7 +115,8 @@ def parse(document: dict) -> dict:
         # A root child that is ALSO a nested child (diamond) keeps its nested
         # parent for the tree view while staying direct in the list view.
         rows.append({
-            "identity_key": identity_key(purl, bom_ref if isinstance(bom_ref, str) and bom_ref else None),
+            "identity_key": identity_key(
+                purl, name, entry.get("version") if isinstance(entry.get("version"), str) else None),
             "purl": purl,
             "bom_ref": bom_ref if isinstance(bom_ref, str) and bom_ref else None,
             "name": name,

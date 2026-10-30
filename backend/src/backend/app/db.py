@@ -38,13 +38,17 @@ def get_session() -> Iterator[Session]:
 
 
 def run_migrations() -> None:
-    """Alembic upgrade head, driven from the installable package."""
+    """Alembic upgrade head, driven from the installable package.
+
+    Migrations live at the checkout root (backend/migrations), one level above
+    the src layout: parents = [app, backend, src, project root].
+    """
+    from pathlib import Path
+
     from alembic import command
     from alembic.config import Config
 
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parents[3]
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "migrations"))
     config.set_main_option("sqlalchemy.url", database_url())

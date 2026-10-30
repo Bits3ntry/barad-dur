@@ -24,6 +24,6 @@ test = ["pytest>=8", "httpx>=0.27"]
 barad-platform = "backend.app.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["backend*"]
 namespaces = false

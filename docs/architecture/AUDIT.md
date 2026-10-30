@@ -2,6 +2,29 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-30 F0 gate: platform API SBOM ingestion (POC first milestone)
+
+Isolated fixture `/tmp/barad-platform-gate` (requirements.txt with `requests==2.32.3`, `urllib3==2.2.1`, `app.py`, version-source pyproject), platform API at 127.0.0.1:8090, database `barad_platform` on the existing Compose PostgreSQL (loopback publish 15443). Record:
+
+| Check | Result | Evidence |
+|---|---|---|
+| Compose validation with the F0 changes | PASS | `docker compose config --quiet` exited 0 in both the worktree and the live deployment checkout. |
+| Migrations to real PostgreSQL | PASS | `barad-platform migrate` applied `0001_core`; seven tables listed via psql. |
+| Readiness and auth | PASS | `GET /healthz` → `{"status":"ok"}`; unauthenticated `GET /api/v1/projects` → 401. |
+| End-to-end publication | PASS | `barad run` on the fixture: `scan: SUCCESS`, `platform_api: PUBLISHED (receipt_verified)`; manifest sync shows the receipt import id and matched component counts. |
+| Inventory via API | PASS | `GET /api/v1/components?project=platform-gate-fixture&version=0.1.0` returns 3 rows (requests, urllib3, the requirements.txt pseudo-component) with purl/version/identity. |
+| Rescan stability | PASS | Second consecutive `barad run`: receipt counters `components_created=0`, `links_created=0`; database keeps exactly 3 components and 3 version links after the pre-fix data was truncated (user-approved). |
+| Automated suites after the fixes | PASS | 151 CLI unittests; 15 pytest (9 backend acceptance incl. the identity-stability test, 6 adapter contract). |
+| Live OpenGrep on macOS | PASS (after fix) | Full-CLI asset produced `sast.json` with exit 0 and 0 findings on the benign fixture; `security.sanitized.json + sbom.cdx.json` written. |
+
+Discovered live and fixed during this gate:
+
+1. `engines.lock.json` pointed macOS/Windows to the `opengrep-core` OCaml asset, which does not accept the runner's full-CLI argv (Linux was already pinned to the full CLI). Both now pin the official full-CLI assets with upstream digests, and `--no-progress-bar` (a semgrep-only flag) was replaced with `--disable-version-check`, keeping the scan boundary credential-free.
+2. The CLI's SBOM upload 422ed twice: the SBOM is delivered as raw bytes (`application/octet-stream`) and `project`/`version` travel as query overrides because Trivy SBOMs omit `metadata.component.version`.
+3. Trivy mints a random `bom-ref` per run for purl-less pseudo-components; identity is now the documented `nonpurl:sha256(name:version)` recipe instead of the raw bom-ref, so rescans dedup instead of duplicating.
+
+Limits: the platform API runs as a checkout process with a live dev server (container packaging stays F5); Dependency-Track and DefectDojo remain `NOT_CONFIGURED` in this gate (the fixture enables only `platform_api`); the live deployment checkout at `/Volumes/980PRO/.../Barad-d-r` received the compose port publish + edge attachment directly (same change mirrored in this worktree) — the two trees stay in sync only until this branch merges.
+
 ## 2026-10-29 consolidation verification
 
 | Check | Result | Evidence |
