@@ -94,6 +94,31 @@ def ingest_findings(
             "version": version_row.version, "source": source, "counts": counters}
 
 
+@router.get("/findings/{finding_id}")
+def get_finding(finding_id: str,
+                org: models.Organization = Depends(auth.require_org),
+                session: Session = Depends(get_session)):
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    component = session.get(models.Component, finding.component_id) \
+        if finding.component_id else None
+    vulnerability = session.get(models.Vulnerability, finding.vulnerability_id) \
+        if finding.vulnerability_id else None
+    return {"data": {
+        "id": finding.id, "kind": finding.kind, "status": finding.status,
+        "status_reason": finding.status_reason, "severity": finding.severity,
+        "title": finding.title, "detail": finding.detail,
+        "tool": finding.tool, "rule_id": finding.rule_id,
+        "path": finding.path, "line": finding.line,
+        "fingerprint": finding.fingerprint, "first_seen_at": finding.first_seen_at.isoformat(),
+        "component_purl": (component.purl or component.identity_key) if component else None,
+        "source_id": vulnerability.source_id if vulnerability else None,
+        "cve_id": vulnerability.cve_id if vulnerability else None,
+        "source_url": vulnerability.url if vulnerability else None,
+    }}
+
+
 class FindingStatusPatch(BaseModel):
     status: str
     reason: str | None = Field(default=None, max_length=1024)
@@ -276,14 +301,20 @@ def list_findings(
         query = query.filter(models.Finding.status == status_filter)
     if project or version:
         if not (project and version):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                "project and version filters go together")
-        project_version = _resolve(session, org.id, project, version)
-        if project_version is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
-        # Scan context: the finding's stamp is refreshed on every ingest/scan
-        # that still sees it, so the version view shows what that scan found.
-        query = query.filter(models.Finding.last_seen_version_id == project_version.id)
+            # Project-only filter is a legitimate view: every version's
+            # findings, no completeness requirement on the pair.
+            project_row = (session.query(models.Project)
+                           .filter_by(org_id=org.id, slug=project).one_or_none())
+            if project_row is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+            query = query.filter(models.Finding.project_id == project_row.id)
+        else:
+            project_version = _resolve(session, org.id, project, version)
+            if project_version is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
+            # Scan context: the finding's stamp is refreshed on every ingest/scan
+            # that still sees it, so the version view shows what that scan found.
+            query = query.filter(models.Finding.last_seen_version_id == project_version.id)
     if kind:
         query = query.filter(models.Finding.kind == kind)
     rows = query.order_by(models.Finding.last_seen_at.desc()).all()

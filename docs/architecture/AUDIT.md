@@ -2,6 +2,24 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-30 F4 gate: minimal console (F0–F3 surfaces in a browser)
+
+`frontend/`: Vite + React 18 in plain JavaScript (no TypeScript, per the agreed stack), four sections only (findings+detail, components+SBOM upload, pipelines/runs, connection settings), one list per domain, no charts (150-line CSS, no chart library; production bundle 50 kB gzip). Verified in a real browser session against the deployed API through the Vite dev proxy:
+
+| Check | Result | Evidence |
+|---|---|---|
+| Production build | PASS | `npm run build` → dist (156.98 kB js / 50.09 kB gzip, 0 errors). |
+| Findings tab | PASS | 5 rows (default view hides the suppressed AWS secret), severity badges sorted CRITICAL→Low, kind/cve/rule/path columns; `include suppressed` → 6 (5 open + 1 suppressed with reason). |
+| Finding detail | PASS | Row click expands: source (`cli`), tool, location (`app.py:6`), component purl, detail text, status reason, advisory link, and disposition buttons (acknowledge / mark resolved / reopen). |
+| Components tab | PASS | 2 components with purl/license/manifest/direct; SBOM upload through the same `postRaw` path as the file input returned a 201 receipt and refreshed the table (`created=0` dedup on equal content). |
+| Pipelines tab | PASS | 1 pipeline deduped, 2 runs; verdict badge `FAIL` on the runs; row expands to gate reason lines and the run's findings. |
+| API drift caught by the UI | FIXED | The UI's own traffic exposed two backend contract gaps: (1) `GET /api/v1/findings/{id}` did not exist — added; (2) filtering findings by project without version was a 400 although the platform legitimately supports a project-wide view — now a valid filter (project → all versions' findings; version → `last_seen_version_id` scope). Both re-verified through the browser. |
+| Cross-origin posture | FIXED | Settings now document that an empty URL uses the dev proxy (same-origin) and a full URL addresses a remote deployment; the earlier hard requirement of a URL caused CORS failures that the settings panel hid. |
+
+Limits: the console stores its key in the browser's localStorage (single-org POC posture); the disposition flow uses a browser `prompt` as its minimal reason input; no CI-gate override UI; Vite dev server is the F4 delivery shape and production serving stays F5 (documented).
+
+Earlier gates: F3 (2026-10-30), F2 (2026-10-30), F1 (2026-10-30), F0 (2026-10-30), consolidation 2026-10-29.
+
 ## 2026-10-30 F3 gate: CI registry with gate verdicts and static scope (fourth milestone)
 
 Deployed stack after migrating 0004. The gate simulates the GitHub Actions context locally (the hosted runner is unavailable in this environment, same limitation recorded on 2026-10-29): the CLI adapter detects `GITHUB_ACTIONS=true` and runs the full CI flow against the deployed API. Record:

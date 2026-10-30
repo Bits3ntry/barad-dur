@@ -12,3 +12,5 @@ backups/
 # Python build artifacts
 *.egg-info/
 .barad/
+frontend/node_modules/
+frontend/dist/

@@ -1,0 +1,55 @@
+import React, { useEffect, useState } from 'react'
+import Components from './Components'
+import Findings from './Findings'
+import Pipelines from './Pipelines'
+import Settings from './Settings'
+import { api } from './api'
+
+const TABS = ['findings', 'components', 'pipelines']
+
+export default function App() {
+  const [tab, setTab] = useState('findings')
+  const [projects, setProjects] = useState([])
+  const [projectsError, setProjectsError] = useState('')
+  const [showingSettings, setShowingSettings] = useState(true)
+  const [, forceRender] = useState(0)
+
+  useEffect(() => {
+    const { key } = api.settings()
+    setShowingSettings(!key)
+  }, [])
+
+  useEffect(() => {
+    setProjectsError('')
+    api.get('/api/v1/projects')
+      .then((data) => setProjects(data.data))
+      .catch((error) => setProjectsError(String(error.message || error)))
+  }, [showingSettings === false])
+
+  return (
+    <div className="app">
+      <header>
+        <h1>BARAD-DÛR <span className="subtitle">vulnerability management</span></h1>
+        <nav>
+          {TABS.map((name) => (
+            <button key={name} className={`tab ${tab === name ? 'active' : ''}`} onClick={() => setTab(name)}>
+              {name}
+            </button>
+          ))}
+          <button className="tab" onClick={() => setShowingSettings(true)}>settings</button>
+        </nav>
+      </header>
+      {projectsError && !showingSettings && (
+        <p className="error">{projectsError} — check settings.</p>
+      )}
+      {showingSettings && <Settings onClose={() => setShowingSettings(false)} />}
+      {!showingSettings && projectsError === '' && (
+        <main>
+          {tab === 'findings' && <Findings projects={projects} />}
+          {tab === 'components' && <Components projects={projects} />}
+          {tab === 'pipelines' && <Pipelines />}
+        </main>
+      )}
+    </div>
+  )
+}
