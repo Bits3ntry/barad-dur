@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -123,3 +124,53 @@ class VersionComponent(Base, TimestampMixin):
     is_direct: Mapped[bool] = mapped_column(Boolean, default=False)
     parent_purl: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     manifest_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+
+class Vulnerability(Base, TimestampMixin):
+    """Global advisory catalog entry (no org scope), keyed by source id."""
+
+    __tablename__ = "vulnerabilities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    source_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    source: Mapped[str] = mapped_column(String(32), default="osv")
+    cve_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cvss_vector: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    published: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    modified: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Finding(Base, TimestampMixin):
+    """One weakness/failure-of-one-component, deduped by fingerprint recipe.
+
+    The fingerprint hashes the identity recipe (kind + org + project + the
+    component identity + the advisory id for vulnerability kind), mirroring the
+    reference platform's per-kind strategies; statuses (suppress/approve)
+    arrive with F2.
+    """
+
+    __tablename__ = "findings"
+    __table_args__ = (UniqueConstraint("org_id", "fingerprint", name="uq_findings_org_fingerprint"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"))
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(128), index=True)
+    source: Mapped[str] = mapped_column(String(32))
+    title: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    detail: Mapped[str] = mapped_column(Text, nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    component_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("components.id"), nullable=True)
+    vulnerability_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("vulnerabilities.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="open")
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

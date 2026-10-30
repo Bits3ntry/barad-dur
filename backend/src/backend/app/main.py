@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from backend.app.auth import create_key, require_org
 from backend.app.db import get_session, run_migrations
 from backend.app import models
-from backend.app.routers import inventory, sbom
+from backend.app.routers import findings, inventory, sbom
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -16,6 +16,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Barad-dûr platform", version="0.1.0")
     app.include_router(sbom.router)
     app.include_router(inventory.router)
+    app.include_router(findings.router)
 
     @app.get("/healthz")
     def healthz(session: Session = Depends(get_session)):

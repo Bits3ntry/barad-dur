@@ -2,6 +2,27 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-30 F1 gate: OSV vulnerability engine (second milestone)
+
+Same gate fixture as F0; the platform API now answers `POST /api/v1/analyze` (normalize inventory → OSV querybatch → per-id detail fetch → catalog upsert → deduped findings). Record:
+
+| Check | Result | Evidence |
+|---|---|---|
+| Migration 0002 to real PostgreSQL | PASS | `findings` + `vulnerabilities` created; an earlier version of 0002 (missing `vulnerabilities.created_at` vs the model's TimestampMixin) was caught live by the first analyze call and re-applied cleanly after downgrade. |
+| Full-chain: manual SBOM upload → analyze | PASS | `POST /api/v1/sbom?source=web&project=…&version=…` (201) then `POST /api/v1/analyze`: 22 advisories found for requests 2.32.3 + urllib3 2.2.1, 22 findings created, 22 detail fetches, `truncated=false`. |
+| Findings carry sources | PASS | `GET /api/v1/findings`: CVE list includes CVE-2024-37891 (MODERATE), CVE-2024-47081, CVE-2025-50181/50182, CVE-2025-66418; severity histogram 6 HIGH / 5 MODERATE / 11 unlabeled. |
+| Reanalysis idempotency | PASS | Second analyze: `findings_created=0`, `findings_refreshed=22`, `details_fetched=0` — the `modified`-timestamp short-circuit skips detail fetches whose advisory the catalog already holds. |
+| Failure containment (tests) | PASS | OSV outage marks the analyze `status=error` with a bounded reason and existing findings survive (stubbed test). |
+| Automated suites | PASS | 21 backend/adapter pytest (15 backend incl. 6 new F1 tests, 6 platform_api adapter); CLI unittest suite still OK. |
+
+Discovered and fixed during this gate:
+
+1. OSV `querybatch` answers **only `{id, modified}`** (a change list, not advisory records). The engine therefore fetches full details per id from `GET /v1/vulns/{id}` with a `modified`-stamp short-circuit against the local catalog, and reports `details_fetched`/`detail_errors` honestly. The tests pin at the querybatch shape.
+2. Tz-safe timestamp comparison (`same_timestamp`): SQLite stores naive datetimes while OSV stamps carry `Z` — equality needed UTC normalization or the short-circuit refetched everything on every run.
+3. Severity labels: 11 of 22 advisories ship no `database_specific.severity`; the finding keeps `severity=None` honestly until a CVSS-vector scorer lands (F2 candidate), rather than guessing.
+
+Limits: analysis runs synchronously on request (POC scale: 2 network calls + 22 detail gets); the same CVE reached through two advisory ids (PYSEC + GHSA) yields two findings sharing a component — a catalog-level reconcile (their `vulnmatch`) is deferred to F2; severity comes only from `database_specific.severity` labels today.
+
 ## 2026-10-30 F0 gate: platform API SBOM ingestion (POC first milestone)
 
 Isolated fixture `/tmp/barad-platform-gate` (requirements.txt with `requests==2.32.3`, `urllib3==2.2.1`, `app.py`, version-source pyproject), platform API at 127.0.0.1:8090, database `barad_platform` on the existing Compose PostgreSQL (loopback publish 15443). Record:
