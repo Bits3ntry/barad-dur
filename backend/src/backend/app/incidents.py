@@ -17,6 +17,9 @@ from backend.app import models
 INGEST_KINDS = {"secret", "misconfiguration", "code-weakness"}
 INGEST_SOURCES = {"cli", "web", "ci", "api"}
 INGEST_TOOLS = {"trivy", "opengrep", "other"}
+# One CLI sanitized report is tens of findings; a large CI upload is hundreds.
+# 1000 keeps a single request bounded without punishing real reports.
+MAX_FINDINGS_PER_INGEST = 1000
 
 
 class IngestedFinding(BaseModel):
@@ -88,6 +91,8 @@ def error_of(exception: ValidationError) -> str:
 def ingest_payload(session, org, project, project_version, payload: FindingsPayload,
                    *, source: str) -> dict:
     findings = payload.findings
+    if len(findings) > MAX_FINDINGS_PER_INGEST:
+        raise ValueError(f"ingest carries {len(findings)} findings; limit is {MAX_FINDINGS_PER_INGEST}")
     counters = {"received": len(findings), "created": 0, "refreshed": 0,
                 "suppressed_by_rule": 0, "skipped_missing_identity": 0}
     rules = _approved_rules(session, org.id)

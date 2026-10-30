@@ -1,5 +1,7 @@
 # POC scope — frozen (10-day plan)
 
+Status: **delivered through F5** (F0 platform core, F1 OSV engine, F2 multi-kind findings + suppressions, F3 CI registry + scope, F4 console, F5 packaging + docs). Record per gate in `docs/architecture/AUDIT.md`; the post-POC backlog moved to `docs/PLATFORM.md`.
+
 This document governs the vulnerability-management POC. Scope is frozen on D1; changes require amending this file. Stack decision (user-agreed): Python backend, React JS frontend (no TypeScript). Reference concepts come from `docs/openctem-data-model.md`; no OpenCTM source is copied.
 
 ## What the POC delivers

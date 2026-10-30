@@ -40,15 +40,25 @@ def get_session() -> Iterator[Session]:
 def run_migrations() -> None:
     """Alembic upgrade head, driven from the installable package.
 
-    Migrations live at the checkout root (backend/migrations), one level above
-    the src layout: parents = [app, backend, src, project root].
+    The project root is the nearest directory (walking up from the module file
+    and then the working directory) that holds `alembic.ini`: checkouts put it
+    next to `migrations/`, and the container image copies them into the workdir.
     """
     from pathlib import Path
 
     from alembic import command
     from alembic.config import Config
 
-    root = Path(__file__).resolve().parents[3]
+    candidates: list[Path] = [Path.cwd(), Path(__file__).resolve()]
+    roots: list[Path] = []
+    for candidate in candidates:
+        current = candidate.resolve()
+        for parent in [current, *current.parents]:
+            if parent not in roots and (parent / "alembic.ini").is_file():
+                roots.append(parent)
+    if not roots:
+        raise RuntimeError("alembic.ini not found from cwd nor the package module")
+    root = roots[0]
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "migrations"))
     config.set_main_option("sqlalchemy.url", database_url())

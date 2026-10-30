@@ -27,6 +27,7 @@ python3 -m venv /tmp/barad-venv
 | CLI core | `cli/barad/core/` | Trivy invocation and SBOM validation, OpenGrep SAST execution, versioning, evidence identity, inventory normalization, and HTTP safety. |
 | Integrations | `integrations/dependency_track/` | Reusable remote adapter for project/version/SBOM. |
 | GitHub Action | `action/action.yml` | Composite adapter that installs the CLI; its EngineManager resolves the same pinned OpenGrep engine as local execution. |
+| Platform POC | `backend/` + `frontend/` + `compose.yaml` (`platform-api`) | The vulnerability-management POC: FastAPI service, React (JS) console and CI registry; see [docs/PLATFORM.md](docs/PLATFORM.md) for the 5-command quickstart and [architecture/AUDIT.md](docs/architecture/AUDIT.md) for the gate ledger. |
 | Tests | `tests/` | CLI, integration, workflow, evidence, and architectural contracts. |
 | Documentation | `docs/` | Current usage, architecture, and verification ledger. |
 

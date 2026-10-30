@@ -2,6 +2,22 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-30 F5 gate: packaging, docs and demo rehearsal (fifth milestone — POC closed)
+
+The platform API is now a Compose service (`platform-api`, built from `backend/Dockerfile`: digest-pinned `python:3.12-slim`, non-root, migrations at boot, loopback-only publish on 8090, `edge` network). Record:
+
+| Check | Result | Evidence |
+|---|---|---|
+| Packaging build | PASS | `docker compose build platform-api` succeeds; container healthy with `GET /healthz → {"status":"ok"}`; finds inventory via the same API key (5 findings listed through the container). |
+| Migration resolution in the container | FIX | First boot failed: `run_migrations` resolved the project root from the installed module location (site-packages) and missed `alembic.ini`; it now searches upward from cwd and the module path — checkout and container both work. |
+| Ownership handoff | PASS | Host dev server killed; the container took over port 8090 exclusively (the list of active listeners checked first, per the F4 lesson). |
+| Demo rehearsal through the containerized API | PASS | Fresh `barad run` → `PUBLISHED (receipt_verified)`; analyze and views answered through the container; UI end-to-end again in the browser (findings 5 default / components / verdict badge). The fixture had moved to `pyyaml==6.0.1`, so `analyze` matched **0 advisories** — the honest no-CVE case, plus the still-present 4 gate findings refreshed (rehearsal validated both paths). |
+| Ingest limits | PASS | `MAX_FINDINGS_PER_INGEST=1000` enforced server-side with a bounded 422 (ingest limit), documented. |
+| Docs | PASS | `docs/PLATFORM.md` (5-command quickstart, four delivery surfaces, post-POC backlog), README architecture row, `poc-scope.md` status flip to delivered. |
+| Suites after packaging | PASS | 151 CLI unittests including the gitignore contract (frontend artifacts kept without breaking the `.barad/`-last invariant); 36 backend/adapter pytest. |
+
+Limits of the POC as delivered: the CI plane trusts the org API key (no OIDC), gate thresholds/hard-coded, no SLA/ticketing/audit-chain, static scope, single org. The full backlog lives in `docs/PLATFORM.md`.
+
 ## 2026-10-30 F4 gate: minimal console (F0–F3 surfaces in a browser)
 
 `frontend/`: Vite + React 18 in plain JavaScript (no TypeScript, per the agreed stack), four sections only (findings+detail, components+SBOM upload, pipelines/runs, connection settings), one list per domain, no charts (150-line CSS, no chart library; production bundle 50 kB gzip). Verified in a real browser session against the deployed API through the Vite dev proxy:

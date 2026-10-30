@@ -78,8 +78,12 @@ def ingest_findings(
         ci_run = session.get(models.CiRun, run_id)
         if ci_run is None or ci_run.org_id != org.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "ci run not found")
-    counters = incidents.ingest_payload(session, org, project_row, version_row,
-                                        payload, source=source)
+    try:
+        counters = incidents.ingest_payload(session, org, project_row, version_row,
+                                            payload, source=source)
+    except ValueError as error:
+        # ingest_payload raises only for bounded-limit violations.
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(error)) from None
     session.commit()
     if ci_run is not None:
         linked = (session.query(models.Finding)

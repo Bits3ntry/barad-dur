@@ -212,6 +212,26 @@ services:
     mem_limit: 1g
     restart: unless-stopped
 
+  # ──────────────── Platform API (F0-F5 POC service) ────────────────
+  platform-api:
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Barad's DB contract: one server, separate database and role. The
+      # password lives in the deployment .env as `barad_db_password` (written
+      # by the F0 bootstrap).
+      PLATFORM_DATABASE_URL: postgresql+psycopg://barad:${barad_db_password:?set barad_db_password in .env}@postgres:5432/barad_platform
+    ports:
+      # Console + CLI reach the API from the host; loopback-only.
+      - "127.0.0.1:${PLATFORM_API_PORT:-8090}:8090"
+    networks: [edge]
+    mem_limit: 512m
+    restart: unless-stopped
+
   # ──────────────── Scanners: no UI, on-demand only ───────────────────
   # Not started by `up`. Invoke with:
   #   docker compose --profile tools run --rm trivy fs /scan
