@@ -46,7 +46,12 @@ picture) | `todo`. Anything else is NOT implemented.
 - **BL-045 Evidence vault** — objective: findings carry evidence refs (redacted
   boundary preserved); **P1** | deps BL-040.
 - **BL-055cf Gate policies** — objective: gate thresholds/hard_rules into
-  policy table with overrides + approval; **P1** | env gate stays fallback.
+  policy table with overrides + approval; status `landed` (BL-055: org/project
+  gate policies, deterministic evaluator with severity/KEV/license rules,
+  audited; console tab; 6 tests + live gate).
+- **BL-040b SARIF + baselines** — status `partial` (ingest + version diff via
+  occurrences landed with 4 tests; inline code/diff viewer and PR status
+  publishing still pending).
 - **KEV→priority automation** — objective: rule type `intel.kev` in priority
   rules; **P0** (few hours, direct value) | AC: known-exploited CVE → P0
   reclassification + reclass counter; T: pytest with stubbed KEV fetch; status

@@ -141,11 +141,23 @@ def _record_occurrence(session, org_id: str, finding: models.Finding,
                        item, now) -> None:
     """One occurrence row per sighting; identical repeats stay one row via
     the (finding, sighting_key) pair (idempotent ingest)."""
+    record_occurrence(
+        session, org_id, finding, project_version_id, tool, source,
+        kind=item.kind, rule_id=item.rule_id, path=item.path, line=item.line,
+        detail=item.detail, now=now)
+
+
+def sighting_key(kind, rule_id, path, line, tool, source, version_id) -> str:
     sighting = {
-        "v": "1", "kind": item.kind, "rule": item.rule_id, "path": item.path,
-        "line": item.line, "tool": tool, "source": source, "ver": project_version_id,
+        "v": "1", "kind": kind, "rule": rule_id, "path": path,
+        "line": line, "tool": tool, "source": source, "ver": version_id,
     }
-    key = hashlib.sha256(json.dumps(sighting, sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(sighting, sort_keys=True).encode()).hexdigest()
+
+
+def record_occurrence(session, org_id, finding, project_version_id, tool,
+                      source, *, kind, rule_id, path, line, detail, now) -> None:
+    key = sighting_key(kind, rule_id, path, line, tool, source, project_version_id)
     existing = (session.query(models.Occurrence)
                 .filter_by(finding_id=finding.id, sighting_key=key).one_or_none())
     if existing is not None:
@@ -154,7 +166,7 @@ def _record_occurrence(session, org_id: str, finding: models.Finding,
         org_id=org_id, finding_id=finding.id,
         project_version_id=project_version_id,
         tool=tool, source=source, sighting_key=key,
-        evidence=item.detail, seen_at=now, created_at=now))
+        evidence=detail, seen_at=now, created_at=now))
 
 
 def _approved_rules(session, org_id: str) -> list[models.SuppressionRule]:

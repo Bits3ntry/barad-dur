@@ -23,16 +23,17 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | Remediation tasks | COMPLETE | one-open-task contract |
 | License management | COMPLETE | BL-060 (`9139ecf`): inventory, policies, evaluator, exceptions, console tab, live gate |
 | CI registry + fail-closed gate | PARTIAL | runs/verdicts; policies hard-coded threshold |
-| Quality Gates / policies engine | MISSING | BL-055 |
-| SAST (OpenGrep) execution | COMPLETE (CLI) | engine pinned; no SARIF ingest/PR view |
-| PR review / inline code view | MISSING | BL-040b |
+| Quality Gates / policies engine | COMPLETE (v1) | BL-055: severity/KEV/license rules, org+project scopes, deterministic + audited |
+| SAST (OpenGrep) execution | COMPLETE (CLI) | engine pinned |
+| SARIF ingest + version diff | COMPLETE | BL-040b part 1; inline viewer/PR status pending |
+| PR review / inline code view | PARTIAL | diff+findings API ready; viewer UI pending (BL-040b part 2) |
 | Pentest management | MISSING | BL-070 |
 | Jira bidirectional | MISSING | BL-050 |
 | Regression suites | MISSING | BL-080 |
 | EASM probing (DNS/TLS/tech) | MISSING | BL-090 (crt.sh only) |
 | Scanner orchestration / Shauron contract | PARTIAL | contract drafted; no job queue/workers |
-| Dashboards / reporting | MISSING | BL-110 |
-| Console pages | PARTIAL | 9 tabs; no licenses/dashboard/pentest pages |
+| Dashboards / reporting | COMPLETE (v1) | BL-110: real-data summary + project posture + console tab |
+| Console pages | PARTIAL | 11 tabs; no pentest pages yet |
 | Docker deployment | COMPLETE | compose + console service |
 | Backups / observability | PARTIAL | migrations yes; no scheduled dumps/metrics |
 

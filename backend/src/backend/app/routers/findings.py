@@ -11,7 +11,7 @@ from backend.app.routers.identity import _audit as _audit_log
 
 router = APIRouter(prefix="/api/v1", tags=["findings"])
 
-ALLOWED_STATUSES = {"open", "acknowledged", "false_positive", "accepted_risk"}
+ALLOWED_STATUSES = {"open", "acknowledged", "resolved", "false_positive", "accepted_risk"}
 INGEST_SOURCES = incidents.INGEST_SOURCES
 
 

@@ -756,3 +756,28 @@ class LicenseException(Base, TimestampMixin):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── BL-055: quality gate policies ───────────────
+
+class GatePolicy(Base, TimestampMixin):
+    """Deterministic, versioned gate: severity threshold plus optional KEV and
+    license-denial blocks. Project policies override org policies."""
+
+    __tablename__ = "gate_policies"
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_gate_policies_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(255))
+    scope_type: Mapped[str] = mapped_column(String(16), default="org")
+    scope_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    max_severity: Mapped[str] = mapped_column(String(16), default="HIGH")
+    block_kev: Mapped[bool] = mapped_column(Boolean, default=False)
+    block_license_denied: Mapped[bool] = mapped_column(Boolean, default=False)
+    include_suppressed: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

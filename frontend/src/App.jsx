@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import Audit from './Audit'
+import Dashboard from './Dashboard'
+import Gates from './Gates'
 import Grants from './Grants'
 import Licenses from './Licenses'
 import Lifecycle from './Lifecycle'
@@ -11,10 +13,10 @@ import Pipelines from './Pipelines'
 import Settings from './Settings'
 import { api } from './api'
 
-const TABS = ['findings', 'grants', 'audit', 'licenses', 'remediation', 'members', 'assets', 'components', 'pipelines']
+const TABS = ['dashboard', 'findings', 'gates', 'licenses', 'grants', 'audit', 'remediation', 'members', 'assets', 'components', 'pipelines']
 
 export default function App() {
-  const [tab, setTab] = useState('findings')
+  const [tab, setTab] = useState('dashboard')
   const [projects, setProjects] = useState([])
   const [projectsError, setProjectsError] = useState('')
   const [showingSettings, setShowingSettings] = useState(true)
@@ -51,10 +53,12 @@ export default function App() {
       {showingSettings && <Settings onClose={() => setShowingSettings(false)} />}
       {!showingSettings && (
         <main>
+          {tab === 'dashboard' && <Dashboard projects={projects} />}
           {tab === 'findings' && <Findings projects={projects} />}
+          {tab === 'gates' && <Gates projects={projects} />}
+          {tab === 'licenses' && <Licenses projects={projects} />}
           {tab === 'grants' && <Grants />}
           {tab === 'audit' && <Audit />}
-          {tab === 'licenses' && <Licenses projects={projects} />}
           {tab === 'remediation' && <Lifecycle />}
           {tab === 'members' && <Members />}
           {tab === 'assets' && <Assets />}

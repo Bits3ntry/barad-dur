@@ -2,6 +2,23 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 BL-055 quality gates + BL-040b SARIF + BL-110 dashboards
+
+| Item | Result | Evidence |
+|---|---|---|
+| BL-055 gate policies | PASS live | org/project-scoped, deterministic verdicts: severity threshold (default HIGH), optional KEV block, optional license-denial block, suppressed findings excluded by default, policies audited. Live: `release-gate` evaluated on f2-fixture@1.2.0 → `fail` (2 open ≥ HIGH), KEV rule pass, license rule pass; project policy overrides org (test). |
+| BL-055 tests | PASS | 6 in `test_bl055_gates.py`: threshold fail→pass after resolution, custom threshold, suppression exclusion, project override, KEV block, tenant isolation + audit. |
+| BL-040b SARIF ingest | PASS live | `POST /api/v1/sarif` ingests SARIF runs into the findings pipeline (rule/path/line identity, `security-severity` property → CRITICAL), creates occurrence rows via the shared sighting recipe, idempotent re-ingest (`created:1` then `existing:1`); live gate created the `py.sqli` CRITICAL finding. |
+| BL-040b baseline diff | PASS | `/sarif/diff` compares versions through occurrence history (stable record, not the mutating last_seen pointer) and labels absences `absent_from_current_scan` with an explicit "does not assert remediation" note; tests cover new/absent/common and RBAC isolation. |
+| BL-110 dashboard | PASS live | `/dashboard/summary` and `/dashboard/projects` over real tables: severities, KEV open, SLA breached/soon, 7-day inflow/outflow, assets, CI verdicts, remediation progress, license counts, gate verdict. Live: 7 open findings (CRITICAL 1 / HIGH 3 / MEDIUM 2 / LOW 1), gate fail. Foreign orgs see zeroed scopes (test). |
+| BL-110 console | PASS | New **dashboard** tab (default landing) with metric cards + project posture table (click-through to project scope); new **gates** tab (policies, evaluation with per-rule reasons). |
+| Regression | PASS | Full suite **85 pytest** + 151 CLI unittest; UI bundle 58 kB gzip. |
+| Fixed en route | — | `resolved` was missing from the allowed finding statuses, so the console's "mark resolved" always 422'd; now allowed and covered by gate/dashboard tests. |
+
+Known limits: SARIF PR-status publishing and inline code/diff viewer still
+pending (backend ingest/diff land now); gate thresholds are create-only (no
+PATCH); dashboards have no time-series charts (cards + lists only, by design).
+
 ## 2026-10-31 BL-060 license management
 
 | Item | Result | Evidence |
