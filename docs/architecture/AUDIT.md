@@ -2,6 +2,22 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 BL-070 pentest management
+
+| Item | Result | Evidence |
+|---|---|---|
+| Engagement lifecycle | PASS live | `draft → active → completed/cancelled` with starts/ends timestamps, project/version scope, lead, methodology, scope notes; audited (`pentest.engagement_*`). Live: "Demo engagement Q4" on `lic-live@1.0`. |
+| Tests | PASS live | tests per engagement (name, methodology, tester, notes) with `pending → in_progress → done/blocked`; audited. |
+| Manual findings + evidence | PASS live | findings carry severity (validated enum), CVSS string, target, reproduction, request AND response evidence, remediation; optional link to a test and to an asset in the same org (cross-engagement test or foreign asset → 404). |
+| Reverification | PASS live | `verified`/`closed` require `verification_evidence` (422) and the verifier must differ from the reporter (409, self-verification blocked — same discipline as suppression approvals). Live: self-verify → 409, reviewer verify → 200 with `verified_by`. |
+| Report | PASS live | `/engagements/{id}/report` renders engagement metadata, test status counts, findings totals by severity and by status, and the finding items (evidence included) — the export payload for a professional report. |
+| Console | PASS | 12th tab `pentest`: engagement table with counts and start/complete actions, expandable detail (tests, findings with severity/status pills and retest/verify/close actions, report line) and inline new-finding form with evidence fields. Verified in the live nginx console (screenshot). |
+| Tests | PASS | 4 in `test_bl070_pentest.py` (lifecycle, evidence+verification flow, tenant isolation + audit chain, invalid severity/status); suite total 94. |
+
+Known limits: report is JSON only (no PDF/HTML template yet), no Jira link
+field (BL-050), no attachment upload (evidence is text), and no conversion of
+a pentest finding into a regression test yet (BL-080).
+
 ## 2026-10-31 BL-025 SPDX export + operations runbook
 
 | Item | Result | Evidence |

@@ -9,11 +9,12 @@ import Members from './Members'
 import Assets from './Assets'
 import Components from './Components'
 import Findings from './Findings'
+import Pentest from './Pentest'
 import Pipelines from './Pipelines'
 import Settings from './Settings'
 import { api } from './api'
 
-const TABS = ['dashboard', 'findings', 'gates', 'licenses', 'grants', 'audit', 'remediation', 'members', 'assets', 'components', 'pipelines']
+const TABS = ['dashboard', 'findings', 'gates', 'licenses', 'pentest', 'grants', 'audit', 'remediation', 'members', 'assets', 'components', 'pipelines']
 
 export default function App() {
   const [tab, setTab] = useState('dashboard')
@@ -57,6 +58,7 @@ export default function App() {
           {tab === 'findings' && <Findings projects={projects} />}
           {tab === 'gates' && <Gates projects={projects} />}
           {tab === 'licenses' && <Licenses projects={projects} />}
+          {tab === 'pentest' && <Pentest projects={projects} />}
           {tab === 'grants' && <Grants />}
           {tab === 'audit' && <Audit />}
           {tab === 'remediation' && <Lifecycle />}

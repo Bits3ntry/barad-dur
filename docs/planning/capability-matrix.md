@@ -14,7 +14,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | Asset inventory (domain/ip/url/cidr) | COMPLETE (v1) | crt.sh sweep + snapshots/change detection (BL-090); no active probing |
 | Scan authorization engine | COMPLETE | BL-015; conditions fail closed |
 | SBOM ingest (CycloneDX) + receipts | COMPLETE | idempotent by content hash |
-| SPDX ingest/export | MISSING | BL-025 |
+| SPDX export | COMPLETE | BL-025 (ingest still missing) |
 | Vulnerability matching (OSV) + reconcile | COMPLETE | findings anchored per component/version |
 | KEV/EPSS enrichment | PARTIAL | mirrors + UI marker + KEV rule; feeds only, no scoring |
 | VEX statements | PARTIAL | statement column + UI; unsigned |
@@ -27,7 +27,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | SAST (OpenGrep) execution | COMPLETE (CLI) | engine pinned |
 | SARIF ingest + version diff | COMPLETE | BL-040b part 1; inline viewer/PR status pending |
 | PR review / inline code view | PARTIAL | diff+findings API ready; viewer UI pending (BL-040b part 2) |
-| Pentest management | MISSING | BL-070 |
+| Pentest management | PARTIAL | BL-070 engagements/tests/findings/evidence/retest/report live; no PDF template/Jira link/regression conversion |
 | Jira bidirectional | MISSING | BL-050 |
 | Regression suites | MISSING | BL-080 |
 | EASM probing (DNS/TLS/tech) | MISSING | BL-090 (crt.sh only) |

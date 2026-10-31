@@ -800,3 +800,82 @@ class AssetSnapshot(Base):
     source: Mapped[str] = mapped_column(String(64), default="manual")
     data: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── BL-070: pentest management ───────────────
+
+PENTEST_ENGAGEMENT_STATUSES = {"draft", "active", "completed", "cancelled"}
+PENTEST_FINDING_STATUSES = {"open", "in_remediation", "retest_pending",
+                            "verified", "closed", "false_positive"}
+
+
+class PentestEngagement(Base, TimestampMixin):
+    """One pentest engagement (campaign) scoped to a project/version."""
+
+    __tablename__ = "pentest_engagements"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True)
+    project_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_versions.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(255))
+    lead: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    methodology: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    scope_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="draft")
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PentestTest(Base, TimestampMixin):
+    """One test/procedure inside an engagement."""
+
+    __tablename__ = "pentest_tests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    engagement_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("pentest_engagements.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(255))
+    methodology: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tester: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PentestFinding(Base, TimestampMixin):
+    """Manual/tool-imported pentest finding with HTTP evidence and retest."""
+
+    __tablename__ = "pentest_findings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    engagement_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("pentest_engagements.id", ondelete="CASCADE"),
+        index=True)
+    test_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("pentest_tests.id"), nullable=True)
+    asset_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("assets.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String(512))
+    reported_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    severity: Mapped[str] = mapped_column(String(16), default="MEDIUM")
+    cvss: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    method: Mapped[str] = mapped_column(String(64), default="manual")
+    target: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    reproduction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    request_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remediation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="open")
+    verification_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verified_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
