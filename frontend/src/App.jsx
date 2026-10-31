@@ -17,6 +17,7 @@ import Regression from './Regression'
 import Pipelines from './Pipelines'
 import Settings from './Settings'
 import { api } from './api'
+import Login, { BrandMark } from './Login'
 import { Modal } from './ui'
 
 /* Navigation is grouped by what a person is trying to do, not by module name:
@@ -67,9 +68,11 @@ export default function App() {
   const [session, setSession] = useState(() => api.settings())
 
   const needsKey = !session.key && !session.token
+  const [providerUrl, setProviderUrl] = useState(session.url || '')
 
   useEffect(() => {
-    if (needsKey) setSettingsOpen(true)
+    if (needsKey) return
+    setProviderUrl(api.settings().url || '')
   }, [needsKey])
 
   useEffect(() => {
@@ -99,6 +102,13 @@ export default function App() {
     return 'Dashboard'
   }, [tab])
 
+  if (needsKey) {
+    return <Login onAuthenticated={() => {
+      setSession(api.settings())
+      setSettingsOpen(false)
+    }} />
+  }
+
   const screen = () => {
     switch (tab) {
       case 'findings': return <Findings projects={projects} />
@@ -124,8 +134,11 @@ export default function App() {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-name">BARAD-DÛR</span>
-          <span className="brand-sub">security management</span>
+          <BrandMark size={26} />
+          <span className="brand-text">
+            <span className="brand-name">BARAD-DÛR</span>
+            <span className="brand-sub">security management</span>
+          </span>
         </div>
         {NAV.map((entry) => (
           <div className="nav-group" key={entry.group}>
@@ -151,11 +164,17 @@ export default function App() {
           </div>
           <div className="topbar-actions">
             <span className="pill">
-              {session.role || (session.key ? 'api key' : session.token ? 'session' : 'no auth')}
+              {session.token ? 'signed in' : 'api key'}
+              {providerUrl ? ` · ${providerUrl.replace(/^https?:\/\//, '')}` : ''}
             </span>
             <button className="btn-ghost mini" onClick={() => setSettingsOpen(true)}>
               settings
             </button>
+            <button className="btn-ghost mini" onClick={async () => {
+              if (session.token) { try { await api.post('/api/v1/auth/logout', {}) } catch { /* session may be gone */ } }
+              api.save({ url: api.settings().url || '', key: '', token: '' })
+              setSession(api.settings())
+            }}>sign out</button>
           </div>
         </header>
 

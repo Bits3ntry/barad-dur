@@ -2,6 +2,18 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Console identity and the entrance screen
+
+| Item | Result | Evidence |
+|---|---|---|
+| Entrance | PASS live | Without credentials the console renders only the sign-in screen — no shell, no dashboard, no error banner. Live: gate present, shell absent; after a rejected key the visitor stays on the gate. |
+| Key validation | PASS live | An API key is proven against `/api/v1/auth/me` **before** it is stored; a rejected key restores the previous settings and leaves nothing behind. This fixed a real bug: the bad key was persisted, so the next reload landed in a shell that could not load anything. Live: wrong key → "Those credentials were rejected", stored key length 0, reload still shows the entrance; right key → shell with data. |
+| Hook order bug | FIXED | The unauthenticated early return sat above two `useEffect` calls, so a successful sign-in changed the hook count and React unmounted the tree (blank page). The gate now sits after every hook; verified by signing in. |
+| Identity | PASS live | New palette: obsidian ground (`#08090d`), one ember accent (`#ff7a45`) that marks the place to act, amber eye reserved for the mark, severity colours only for severity. Brand mark is an inline SVG tower with the eye, used in the sidebar lockup and the entrance; metrics use tabular numerals; the entry screen is a split layout with the product's claim and a focused card. |
+
+Known limits: the entrance has no password reset or OIDC button yet (OIDC is
+configured server-side), and there is still only the dark theme.
+
 ## 2026-10-31 Console UX foundation (shell, design system, dashboard, findings)
 
 | Item | Result | Evidence |
