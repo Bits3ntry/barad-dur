@@ -1042,3 +1042,61 @@ class JobArtifact(Base):
     kind: Mapped[str] = mapped_column(String(32))
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── BL-040b part 2: code review ───────────────
+
+class CodeFile(Base):
+    """Source snapshot pushed by CI for one ref (never fetched silently)."""
+
+    __tablename__ = "code_files"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    repository_id: Mapped[str] = mapped_column(String(36), ForeignKey("repositories.id"))
+    ref: Mapped[str] = mapped_column(String(128))
+    path: Mapped[str] = mapped_column(String(1024))
+    content: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PullRequest(Base, TimestampMixin):
+    __tablename__ = "pull_requests"
+    __table_args__ = (UniqueConstraint("org_id", "repository_id", "number",
+                                       name="uq_pr_org_repo_number"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True)
+    project_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_versions.id"), nullable=True)
+    repository_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("repositories.id"), nullable=True)
+    number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    base_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="open")
+    gate_verdict: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    gate_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PrFinding(Base):
+    __tablename__ = "pr_findings"
+    __table_args__ = (UniqueConstraint("pr_id", "finding_id", name="uq_pr_finding"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    pr_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("pull_requests.id", ondelete="CASCADE"))
+    finding_id: Mapped[str] = mapped_column(String(36), ForeignKey("findings.id"))
+    classification: Mapped[str] = mapped_column(String(16), default="new")
+    file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

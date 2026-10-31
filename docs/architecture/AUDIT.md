@@ -2,6 +2,25 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 BL-040b part 2 — code review
+
+| Item | Result | Evidence |
+|---|---|---|
+| Source snapshots | PASS live | `POST /code/files` indexes a file per (repo, ref, path) with a content hash; identical re-push → `created:false`; binary content and >400 KB rejected. CI pushes source; the platform never reaches into a repo by itself. |
+| Redaction | PASS live (after fix #2) | Served file text and context lines run through the shared `redaction` module. The live gate exposed a second real leak: `api_key = 'sk-live-...'` kept its quoted value because the pattern stopped at the quote — fixed to consume an optional quote pair, pinned by test, and re-verified live (`secret leaked: false`). |
+| Finding context | PASS live | `GET /code/findings/{id}/context?radius=` returns numbered lines around the finding from the latest snapshot of the project's linked repository, with the target line flagged; a path with no snapshot → 404, a finding without a location → 409. |
+| PR registration | PASS live | `POST /code/pull-requests` upserts by (org, repo, number), optional project/version scope, `open|merged|closed` transitions audited (`code.pr_registered`, `code.pr_status`). |
+| PR scan + classification | PASS live | `POST /code/pull-requests/{id}/sarif` ingests one SARIF run, links findings to the PR and classifies `new` when the fingerprint did not exist in the org before this scan, `existing` otherwise. Live: first scan `new:1`, rescan `existing:1`; repeated ingestion never duplicates links (unique pr+finding). |
+| Quality gate on the PR | PASS live | The existing `gates.evaluate` runs for the PR's project/version: live verdict `fail` on a CRITICAL code-weakness. |
+| Review comment | PASS live | Rendered markdown payload with verdict, NEW/existing markers, `rule/path:line`, and the explicit note that absence means `absent_from_current_scan`, never "fixed". |
+| Console | PASS | 3rd tab `code`: PR table with gate verdict and new/existing counts, expandable review grouped by file, inline numbered code with the finding line highlighted, and the PR comment payload. Verified in the live console (screenshot). |
+| Tests | PASS | 3 in `test_bl040b_code_review.py` (push/context/redaction, new→existing rescan, status + tenant isolation). Suite total 110. |
+
+Known limits: no diff view between base and head blobs yet (context only),
+no SCM PR status/comment publishing (the payload is returned for CI to
+post), no rule explanation catalogue, and no explicit baseline object —
+"new" is derived from fingerprint history.
+
 ## 2026-10-31 BL-020 orchestration (Shauron management side)
 
 | Item | Result | Evidence |

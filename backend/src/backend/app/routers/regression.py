@@ -10,7 +10,6 @@ Invariants pinned here:
   - `reintroduced` is only set when a check that previously passed now fails.
 """
 import json
-import re
 import urllib.error
 import urllib.request
 
@@ -18,29 +17,17 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from backend.app import auth, authorization, models
+from backend.app import auth, authorization, models, redaction
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
 router = APIRouter(prefix="/api/v1/regression", tags=["regression"])
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
-SECRET_HEADERS = {"authorization", "cookie", "set-cookie", "x-api-key",
-                  "proxy-authorization", "x-auth-token"}
-SECRET_PATTERN = re.compile(
-    r"(?i)\b(authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|"
-    r"token|secret|password|passwd|cookie|session[-_]?id|bearer)\b"
-    r"\s*[:=]\s*[^\s,;\"']+")
 MAX_BODY = 4096
 
-
-def _redact_headers(headers: dict) -> dict:
-    return {key: ("[REDACTED]" if key.lower() in SECRET_HEADERS else value)
-            for key, value in headers.items()}
-
-
-def _scrub(text: str) -> str:
-    return SECRET_PATTERN.sub(lambda m: f"{m.group(1)}=[REDACTED]", text or "")
+_redact_headers = redaction.redact_headers
+_scrub = redaction.redact_text
 
 
 def _test_data(row: models.RegressionTest) -> dict:
