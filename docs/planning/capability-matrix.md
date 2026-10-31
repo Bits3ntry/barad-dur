@@ -31,6 +31,8 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | Jira bidirectional | PARTIAL | BL-050 links/outbox/webhook/reconcile live vs stub; no attachment sync or field mapping UI |
 | Regression suites | PARTIAL | BL-080 HTTP checks, authorized replay, redaction, reintroduction detection; no scheduler/JSON-path assertions |
 | EASM probing (DNS/TLS/tech) | MISSING | BL-090 (crt.sh only) |
+| Scan scheduling | COMPLETE | BL-`schedules`: interval definitions + idempotent tick (cron), authorization re-checked per fire |
+| Pentest report export | PARTIAL | printable self-contained HTML report (escaped); no PDF renderer or template editor |
 | Scanner orchestration / Shauron contract | PARTIAL | BL-020 registry/workers/leased jobs/artifacts/revalidation + real `barad worker` execution (OpenGrep+SBOM) live; no worker tokens, scheduler or container isolation |
 | Dashboards / reporting | COMPLETE (v1) | BL-110: real-data summary + project posture + console tab |
 | Console pages | PARTIAL | 11 tabs; no pentest pages yet |
