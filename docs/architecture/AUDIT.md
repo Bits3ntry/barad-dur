@@ -2,6 +2,22 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Cross-project component impact
+
+| Item | Result | Evidence |
+|---|---|---|
+| Impact endpoint | PASS live | `GET /components/impact?component_id=` (or `purl`, or `name[+version]`) lists every project version using the component with direct/transitive flag and finding counts by severity, sorted by open findings. Live: `requirements.txt` root component is used by 3 project versions (`f2-fixture@1.2.0`, `worker-live@1.0/@1.1`). |
+| Identity resolution | PASS | Explicit keys only: ambiguous name → **409 "ambiguous component … pass component_id, purl or name+version"**; unknown → 404; no key → 400. No silent guessing between versions. |
+| Tenant scope | PASS | Queries are org-filtered; another org gets 404 for the same purl (pinned by test). |
+| Console | PASS | Components rows gain an `impact` toggle that loads the usage panel (projects, versions, open/total findings, severity breakdown, direct flag). |
+| Tests | PASS | 3 in `test_component_impact.py` (multi-project impact with findings + ordering, identity/ambiguity errors, tenant scoping). Suite total 145. |
+
+Known limit: the live dataset has no dependency-correlated findings yet
+(findings currently come from SAST/secrets/misconfig scans), so live impact
+counts are 0; the counting path is proven by the test that inserts a
+component-linked finding. The same endpoint backs per-component usage across
+projects, which is what the DoD's "cross-project impact" asks for.
+
 ## 2026-10-31 SLA notifications (signed webhooks)
 
 | Item | Result | Evidence |

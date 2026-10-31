@@ -66,3 +66,72 @@ def _resolve_version(session: Session, org_id: str, project: str, version: str):
         return None
     return (session.query(models.ProjectVersion)
             .filter_by(project_id=project_row.id, version=version).one_or_none())
+
+
+@router.get("/components/impact")
+def component_impact(component_id: str | None = Query(default=None),
+                     purl: str | None = Query(default=None),
+                     name: str | None = Query(default=None),
+                     version: str | None = Query(default=None),
+                     org: models.Organization = Depends(auth.require_org),
+                     session: Session = Depends(get_session)):
+    """Cross-project impact: where a component is used and what it exposes.
+
+    Identity is resolved by id, purl, or name(+version); ambiguity is an error
+    rather than a silent guess.
+    """
+    query = session.query(models.Component).filter_by(org_id=org.id)
+    if component_id:
+        query = query.filter_by(id=component_id)
+    elif purl:
+        query = query.filter_by(purl=purl)
+    elif name:
+        query = query.filter_by(name=name)
+        if version:
+            query = query.filter_by(version=version)
+    else:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "provide component_id, purl or name")
+    matches = query.all()
+    if not matches:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "component not found")
+    if len(matches) > 1:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"ambiguous component ({len(matches)} versions match); pass "
+            "component_id, purl or name+version")
+
+    component = matches[0]
+    usages = []
+    for link in (session.query(models.VersionComponent)
+                 .filter_by(component_id=component.id).all()):
+        pv = session.get(models.ProjectVersion, link.project_version_id)
+        if pv is None:
+            continue
+        project = session.get(models.Project, pv.project_id)
+        if project is None or project.org_id != org.id:
+            continue
+        findings = (session.query(models.Finding)
+                    .filter_by(org_id=org.id, component_id=component.id,
+                               last_seen_version_id=pv.id).all())
+        severities = {}
+        for row in findings:
+            severities[row.severity] = severities.get(row.severity, 0) + 1
+        usages.append({"project": project.slug, "version": pv.version,
+                       "is_direct": bool(link.is_direct),
+                       "findings": len(findings),
+                       "open_findings": sum(1 for f in findings
+                                            if f.status not in {"resolved",
+                                                                "false_positive",
+                                                                "suppressed"}),
+                       "by_severity": severities})
+    usages.sort(key=lambda row: (row["open_findings"], row["findings"]),
+                reverse=True)
+    return {"data": {"component": {"id": component.id, "name": component.name,
+                                   "version": component.version,
+                                   "purl": component.purl,
+                                   "license": component.license},
+                     "projects_using": len(usages),
+                     "total_findings": sum(row["findings"] for row in usages),
+                     "open_findings": sum(row["open_findings"] for row in usages),
+                     "usages": usages}}

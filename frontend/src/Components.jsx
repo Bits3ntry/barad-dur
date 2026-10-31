@@ -6,6 +6,17 @@ export default function Components({ projects }) {
   const project = projects[0]
   const version = project?.versions?.[0] || ''
   const fileInput = useRef(null)
+  const [impact, setImpact] = useState({ id: null, data: null, error: '' })
+
+  async function showImpact(row) {
+    if (impact.id === row.id) { setImpact({ id: null, data: null, error: '' }); return }
+    try {
+      const response = await api.get(`/api/v1/components/impact?component_id=${row.id}`)
+      setImpact({ id: row.id, data: response.data, error: '' })
+    } catch (e) {
+      setImpact({ id: row.id, data: null, error: String(e.message || e) })
+    }
+  }
 
   useEffect(() => {
     if (!project || !version) return
@@ -53,17 +64,48 @@ export default function Components({ projects }) {
         </p>
       )}
       <table>
-        <thead><tr><th>purl</th><th>name</th><th>version</th><th>license</th><th>manifest</th><th>direct</th></tr></thead>
+        <thead><tr><th>purl</th><th>name</th><th>version</th><th>license</th><th>manifest</th><th>direct</th><th></th></tr></thead>
         <tbody>
           {state.rows.map((row) => (
-            <tr key={row.id}>
-              <td className="mono">{row.purl || '—'}</td>
-              <td>{row.name}</td>
-              <td>{row.version || '—'}</td>
-              <td>{row.license || '—'}</td>
-              <td>{row.manifest_path || '—'}</td>
-              <td>{row.is_direct ? 'direct' : ''}</td>
-            </tr>
+            <React.Fragment key={row.id}>
+              <tr>
+                <td className="mono">{row.purl || '—'}</td>
+                <td>{row.name}</td>
+                <td>{row.version || '—'}</td>
+                <td>{row.license || '—'}</td>
+                <td>{row.manifest_path || '—'}</td>
+                <td>{row.is_direct ? 'direct' : ''}</td>
+                <td><button className="mini" onClick={() => showImpact(row)}>
+                  {impact.id === row.id ? 'hide impact' : 'impact'}
+                </button></td>
+              </tr>
+              {impact.id === row.id && (
+                <tr className="detail-row"><td colSpan={7}>
+                  <div className="detail">
+                    {impact.error && <p className="error">{impact.error}</p>}
+                    {impact.data && (
+                      <>
+                        <p className="muted">
+                          used by {impact.data.projects_using} project versions ·
+                          {' '}{impact.data.total_findings} findings
+                          {' '}({impact.data.open_findings} open)
+                        </p>
+                        {impact.data.usages.map((usage) => (
+                          <div key={`${usage.project}@${usage.version}`} className="occ-row">
+                            <strong>{usage.project}@{usage.version}</strong>
+                            {' '}— {usage.open_findings} open /
+                            {' '}{usage.findings} total
+                            {' '}{Object.entries(usage.by_severity)
+                              .map(([sev, count]) => `${sev}:${count}`).join(' ')}
+                            {usage.is_direct ? ' · direct' : ''}
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                </td></tr>
+              )}
+            </React.Fragment>
           ))}
         </tbody>
       </table>
