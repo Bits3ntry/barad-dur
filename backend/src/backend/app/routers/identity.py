@@ -164,9 +164,14 @@ def read_audit(actor: str | None = None, action: str | None = None,
         needle = q.lower()
         rows = [r for r in rows if needle in (r.detail or "").lower()
                 or needle in r.action.lower()]
+    rows_in_full_chain = session.query(models.AuditLog).filter_by(org_id=org.id)
+    full_rows = rows_in_full_chain.order_by(models.AuditLog.chain_position).all()
+    # The verification ALWAYS walks the complete per-org ledger, no matter
+    # which filters or pages the caller displays — a tampered entry outside
+    # the filtered window cannot hide behind `chain_ok: true`.
     chain_ok = True
     verify_hash = GENESIS_HASH
-    for entry in rows:
+    for entry in full_rows:
         payload = json.dumps({
             "actor": entry.actor, "action": entry.action,
             "resource_type": entry.resource_type, "resource_id": entry.resource_id,
@@ -181,7 +186,8 @@ def read_audit(actor: str | None = None, action: str | None = None,
                       "resource_type": r.resource_type, "resource_id": r.resource_id,
                       "detail": r.detail, "hash": r.hash, "prev_hash": r.prev_hash,
                       "at": r.created_at.isoformat()} for r in rows],
-            "total": len(rows), "chain_ok": chain_ok}
+            "total": len(full_rows), "shown": len(rows), "chain_ok": chain_ok,
+            "chain_position": full_rows[-1].chain_position if full_rows else 0}
 
 
 def _parse_ts(value: str) -> datetime.datetime:

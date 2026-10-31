@@ -86,3 +86,16 @@ picture) | `todo`. Anything else is NOT implemented.
   linking: Apache-2.0 engines) documented in `docs/planning/compatibility-
   and-licenses.md`; status `landed` (decision recorded; LICENSE file still
   pending if distribution ever happens).
+
+### Pending limitations (console round, carried after validation)
+
+- Grant PATCH/conditions editor absent — grant-level conditions deny (honest)
+  until an owner for that evaluator exists.
+- Occurrence history has no pagination in the UI (server endpoint paginates
+  nothing yet either); acceptable at current scale.
+- Audit filter by capability is a prefix match, not an exact-field filter.
+
+### Next objective queued
+
+- **BL-060 License Management** — next phase after this round's merge; not
+  started; no code, schema or UI change for it lives in this branch.

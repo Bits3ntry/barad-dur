@@ -2,6 +2,20 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Console-round pre-merge validation (gate run)
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Full suites | PASS | 66 backend/pytest + 151 CLI unittest; vite production bundle 55 kB gzip. |
+| RBAC + tenant isolation | PASS | Covered and green: `test_tenant_isolation_on_authorization_endpoints` (foreign org: zero grants, 404 on foreign revocation), `test_multi_tenant_isolation` (bl015), keys carry the org everywhere (`require_org`). |
+| Audit chain vs filters/pagination | **FIXED** | The filtered view previously verified only its own subset; `read_audit` now walks the COMPLETE ledger from genesis for `chain_ok` regardless of filters, and exposes `total/shown/chain_position`. Regression test: tampering outside the filtered window flips `chain_ok` to false in BOTH the filtered and unfiltered views. |
+| Occurrence failure resilience | PASS | Induced `TypeError` on the occurrences fetch in the live console: the finding detail still renders full metadata (source/tool/location/priority/sla/intel/VEX), no error state, occurrences section omitted gracefully. |
+| Simulator read-only + condition deny | PASS | `/authorize` writes only an audit entry; grants with `conditions` are never silently treated as unconditional (`test_unsupported_conditions_deny`); decision audit lines carry `[policy vN]`. |
+| Console states | PASS | Empty (`No audit entries for these filters.`), error (invalid key → 401 surfaced), expiry (expired filter reports honestly; the one historical grant is `revoked`, not expired). |
+| PR hygiene | FIXED | `barad.egg-info/` untracked (it was committed before the ignore pattern landed); secret scan of the whole branch diff found only redacted test fixtures (`AKIA4T...WP2X` masks), no real credentials; no node_modules/dist/console_html tracked. |
+
+Pending limitations carried into the backlog: grant PATCH/conditions editor, occurrences UI pagination, per-capability exact audit filter. BL-060 remains the next objective and is NOT started here.
+
 ## 2026-10-31 Console round: grants, audit trail, occurrences views
 
 The three priority views validated against the LIVE API through the containerized console (:8092). Requirements honored: authorization logic stays server-side (the simulator POSTs to `/authorize` — no engine duplication in JS); tenant isolation reused from the API layer; no unsupported grant operations exist in the UI.
