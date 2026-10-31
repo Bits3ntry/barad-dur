@@ -466,6 +466,7 @@ class CiRunFinding(Base, TimestampMixin):
 class ScopeTarget(Base, TimestampMixin):
     """What the organization may audit or analyze: static positive list."""
 
+
     __tablename__ = "scope_targets"
     __table_args__ = (
         UniqueConstraint("org_id", "target_type", "value", name="uq_scope_targets_identity"),
@@ -496,3 +497,133 @@ class ScopeExclusion(Base, TimestampMixin):
     reason: Mapped[str] = mapped_column(Text)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── BL-010: typed, temporal, auditable relationships ───────────────
+
+LINK_ENTITY_TYPES = {"project", "service", "deployment", "repository", "asset"}
+CONTEXT_ENTITY_TYPES = {"repository", "service", "deployment", "asset"}
+LINK_RELATIONS = {
+    "project": {"serves", "uses", "monitors"},
+    "service": {"serves", "uses", "monitors"},
+    "deployment": {"exposes", "is_deployed_at", "observed_at"},
+    "repository": {"observed_in"},
+    "asset": {"observed_in"},
+}
+
+
+class Repository(Base):
+    """One git remote — first-class entity, reusable across projects.
+    Explicit created_at instead of TimestampMixin: the migration ships only
+    that column (BL-010 teaches: never let padding drift a migration)."""
+
+    __tablename__ = "repositories"
+    __table_args__ = (
+        UniqueConstraint("org_id", "remote_url", name="uq_repositories_remote"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    provider: Mapped[str] = mapped_column(String(32), default="git")
+    name: Mapped[str] = mapped_column(String(255))
+    remote_url: Mapped[str] = mapped_column(String(2048))
+    last_commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProjectRepository(Base):
+    """Project ↔ repository N:M (temporal): removed links are history."""
+
+    __tablename__ = "project_repositories"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36))
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    repository_id: Mapped[str] = mapped_column(String(36), ForeignKey("repositories.id"))
+    relation: Mapped[str] = mapped_column(String(32), default="builds")
+    added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Service(Base):
+    """A deployable/observable unit distinct from its projects and deployments
+    (explicit created_at, no mixin — see Repository)."""
+
+    __tablename__ = "services"
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_services_org_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(255))
+    runtime: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ServiceProject(Base):
+    """Service ↔ project N:M (temporal)."""
+
+    __tablename__ = "service_projects"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36))
+    service_id: Mapped[str] = mapped_column(String(36), ForeignKey("services.id"), index=True)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    relation: Mapped[str] = mapped_column(String(32), default="exposes")
+    added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Deployment(Base, TimestampMixin):
+    """One environment-specific deployment of (usually) a service; domains
+    ride the asset_links table, never a copy of the asset."""
+
+    __tablename__ = "deployments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    service_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("services.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(255))
+    environment: Mapped[str] = mapped_column(String(64), default="production")
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AssetLink(Base):
+    """Typed, temporal asset attachment: asset ↔ (project | service |
+    deployment). One row per pairing; unlinking keeps the history; sharing an
+    asset across projects is links, never asset copies."""
+
+    __tablename__ = "asset_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36))
+    asset_id: Mapped[str] = mapped_column(String(36), ForeignKey("assets.id"), index=True)
+    entity_type: Mapped[str] = mapped_column(String(32), index=True)
+    entity_id: Mapped[str] = mapped_column(String(36), index=True)
+    relation: Mapped[str] = mapped_column(String(32), default="serves")
+    added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FindingContext(Base):
+    """Finding contextual attachment beyond project/version/component: the
+    repository, service, deployment or asset where it was observed."""
+
+    __tablename__ = "finding_contexts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36))
+    finding_id: Mapped[str] = mapped_column(String(36), ForeignKey("findings.id"), index=True)
+    entity_type: Mapped[str] = mapped_column(String(32))
+    entity_id: Mapped[str] = mapped_column(String(36))
+    relation: Mapped[str] = mapped_column(String(32), default="observed_in")
+    added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
