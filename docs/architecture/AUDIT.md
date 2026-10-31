@@ -2,6 +2,10 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Console as a deployed service (nginx, loopback 8092)
+
+The console stopped depending on the dev server: `console_html/` holds the built dist, `deploy/console/nginx.conf` serves it with a same-origin `/api` reverse-proxy to `platform-api:8090` (no CORS) and an SPA fallback. Service in both composes: digest-pinned `nginx:1.27-alpine`, loopback-only publish, PROD_URL default `http://127.0.0.1:8092`. Live evidence: index 200, proxied `/api/v1/projects` 401 with an invalid key (auth enforced through nginx), `/healthz` proxied ok, and the full console (6 tabs, findings with priority/SLA) rendering in a real browser at :8092 with the same data as the dev instance. Release recipe: `npm run build` in `frontend/` → rsync `dist/` → `console_html/` → `docker compose up -d console`.
+
 ## 2026-10-31 Parity blocks 1–4 (B1–B4): lifecycle, identity/audit, intel catalog, EASM
 
 The four agreed parity blocks against the OpenCTM functional inventory. Every check ran live against the containerized API on :8090 and in the real browser console. Backend commit `1b344df` + UI commit.
