@@ -104,13 +104,40 @@ def create_grant(payload: GrantIn = None,
 
 @router.get("/grants")
 def list_grants(status: str | None = Query(default=None),
+                principal: str | None = Query(default=None),
+                capability: str | None = Query(default=None),
+                tool: str | None = Query(default=None),
+                target: str | None = Query(default=None,
+                                           description="substring of a target value or type"),
+                expired: str | None = Query(default=None,
+                                            description="'true' keeps only grants whose window lapsed"),
                 org: models.Organization = Depends(auth.require_org),
                 session: Session = Depends(get_session)):
+    """Server-side filters; the console never duplicates authorization logic."""
     query = session.query(models.ScanGrant).filter_by(org_id=org.id)
     if status is not None:
         query = query.filter_by(status=status)
+    if principal is not None:
+        query = query.filter(models.ScanGrant.principal.contains(principal))
     rows = query.order_by(models.ScanGrant.created_at.desc()).all()
-    return {"data": [grant_data(g) for g in rows], "total": len(rows)}
+    if capability is not None:
+        rows = [g for g in rows
+                if capability in {c.strip() for c in g.capabilities.split(",")}]
+    if tool is not None:
+        rows = [g for g in rows
+                if g.tools and tool in {t.strip() for t in g.tools.split(",")}]
+    if target is not None:
+        needle = target.lower()
+        rows = [g for g in rows if any(
+            needle in t.target_value.lower() or needle in t.target_type.lower()
+            for t in g.targets)]
+    now = models.utcnow()
+    data = [grant_data(g) for g in rows]
+    if expired == "true":
+        data = [d for d in data if d["valid_until"] < now.isoformat()]
+    elif expired == "false":
+        data = [d for d in data if d["valid_until"] >= now.isoformat()]
+    return {"data": data, "total": len(data)}
 
 
 @router.post("/grants/{grant_id}/revoke")
@@ -152,7 +179,8 @@ def authorize_endpoint(payload: AuthorizeIn = None,
                                          environment=payload.environment)
     _audit_log(session, org.id, payload.principal,
                "authorization.decision", "capability", payload.capability,
-               f"{result['decision']}: {result['reason'][:120]}")
+               f"[policy v{result['policy_version']}] {result['decision']}: "
+               f"{result['reason'][:110]}")
     session.commit()
     return result
 

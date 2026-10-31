@@ -2,6 +2,20 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Console round: grants, audit trail, occurrences views
+
+The three priority views validated against the LIVE API through the containerized console (:8092). Requirements honored: authorization logic stays server-side (the simulator POSTs to `/authorize` — no engine duplication in JS); tenant isolation reused from the API layer; no unsupported grant operations exist in the UI.
+
+| View | What landed | Visual evidence |
+|---|---|---|
+| Grants | filters (status/principal/capability/tool/target/expiry, all server-side), detail columns incl. justification/issued_by/policy_v, revoke with confirm dialog, issue form (targets `type=value` lines), and the **authorize() simulator** rendering decision + reason + policy v + evaluated_at from the backend engine | `/tmp/console-grants.png` — grant row (revoked, staged campaign, caps+targets visible), simulator showing `deny / no active grant... / policy v1` |
+| Audit trail | filtered ledger (actor/action prefix/date-window/free-text, server-side), chain-integrity chip (`chain verified` green / `CHAIN BROKEN` red), decision rows carrying `[policy v1]` prefix | `/tmp/console-audit.png` — 20 entries, chip verified, both remediation task lifecycle entries visible |
+| Occurrences in finding detail | fetched on detail open; rows show seen_at, tool, source, version id (CI-run link only renders if ci_run_id exists — never invented); "no sightings recorded yet" empty state | `/tmp/console-occurrences.png` — occurrences (1) with `tool trivy · source api · version 131f67e8` |
+
+Backend contracts added for the console (all server-side, 5 new tests in `test_console_round_authz.py`): grant list filters (status/principal/capability/tool/target/expired), audit filters (actor/action/since/until/q) with chain verification on the FILTERED set, decision audit entries prefixed `[policy vN]`, and the **unsupported-conditions deny rule**: a grant carrying `conditions` is never treated as unconditional — default deny with an honest reason until a supported evaluator exists. Suites: 65 pytest + 151 unittest OK; live API 51 paths; bundle 55 kB gzip.
+
+Known limits: excluded rows in grants/audit come from the same org only (isolation preserved); simulator runs with the caller's principal (real authorization identity); occurrences for historical findings predating 0013 remain absent (only new sightings are recorded).
+
 ## 2026-10-31 BL-015 scan authorization engine + BL-040 occurrences
 
 | Item | Result | Evidence |

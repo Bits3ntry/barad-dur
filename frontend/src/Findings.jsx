@@ -2,6 +2,26 @@ import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { VexSection } from './Vex'
 
+function Occurrences({ occurrences }) {
+  if (!occurrences) return null
+  return (
+    <dl>
+      <dt>occurrences ({occurrences.length})</dt>
+      <dd>
+        {occurrences.length === 0 && <span className="muted">no sightings recorded yet</span>}
+        {occurrences.map((o) => (
+          <div key={o.id} className="occ-row">
+            {new Date(o.seen_at).toLocaleString()} · tool {o.tool || '—'} ·
+            source {o.source || '—'} · version {o.project_version_id ? o.project_version_id.slice(0, 8) : '—'}
+            {o.ci_run_id && <> · <a href={`#ci-run-${o.ci_run_id}`}>CI run {o.ci_run_id.slice(0, 8)}</a></>}
+            {o.evidence && <div className="muted">{o.evidence}</div>}
+          </div>
+        ))}
+      </dd>
+    </dl>
+  )
+}
+
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN', null]
 
 function slaCell(deadline) {
@@ -61,6 +81,11 @@ export default function Findings({ projects }) {
         if (kev?.known_exploited) enriched.kev = kev.data
         if (epss?.data) enriched.epss = epss.data
       }
+      // Occurrence history (BL-040) rides the same detail fetch.
+      try {
+        enriched.occurrences =
+          (await api.get(`/api/v1/findings/${finding.id}/occurrences`)).data
+      } catch { /* report only the primary failure */ }
       setState((s) => ({ ...s, detail: enriched }))
     } catch (error) {
       setState((s) => ({ ...s, error: String(error.message || error) }))
@@ -158,6 +183,7 @@ export default function Findings({ projects }) {
                       </dd>
                       <dt>url</dt><dd>{state.detail.source_url && <a href={state.detail.source_url} target="_blank" rel="noreferrer">{state.detail.source_url}</a>}</dd>
                     </dl>
+                    <Occurrences occurrences={state.detail.occurrences} />
                     <VexSection findingId={row.id} />
                     <div className="bar">
                       <input placeholder="remediation task title (creates + links)"

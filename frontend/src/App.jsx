@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from 'react'
+import Audit from './Audit'
+import Grants from './Grants'
 import Lifecycle from './Lifecycle'
 import Members from './Members'
 import Assets from './Assets'
@@ -8,7 +10,7 @@ import Pipelines from './Pipelines'
 import Settings from './Settings'
 import { api } from './api'
 
-const TABS = ['findings', 'remediation', 'members', 'assets', 'components', 'pipelines']
+const TABS = ['findings', 'grants', 'audit', 'remediation', 'members', 'assets', 'components', 'pipelines']
 
 export default function App() {
   const [tab, setTab] = useState('findings')
@@ -49,6 +51,8 @@ export default function App() {
       {!showingSettings && (
         <main>
           {tab === 'findings' && <Findings projects={projects} />}
+          {tab === 'grants' && <Grants />}
+          {tab === 'audit' && <Audit />}
           {tab === 'remediation' && <Lifecycle />}
           {tab === 'members' && <Members />}
           {tab === 'assets' && <Assets />}

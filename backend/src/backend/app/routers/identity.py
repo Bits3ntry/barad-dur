@@ -1,4 +1,5 @@
 """B2: org members (roles) and the per-org hash-chained audit ledger."""
+import datetime
 import hashlib
 import json
 
@@ -141,11 +142,28 @@ def remove_member(member_id: str, changed_by: str = "",
 
 
 @router.get("/audit")
-def read_audit(org: models.Organization = Depends(auth.require_org),
+def read_audit(actor: str | None = None, action: str | None = None,
+               since: str | None = None, until: str | None = None,
+               q: str | None = None,
+               org: models.Organization = Depends(auth.require_org),
                session: Session = Depends(get_session)):
-    rows = (session.query(models.AuditLog)
-            .filter_by(org_id=org.id)
-            .order_by(models.AuditLog.chain_position).all())
+    """Filtered read; filters are server-side (actor, action prefix, window,
+    free text on the recorded detail)."""
+    query = (session.query(models.AuditLog)
+             .filter_by(org_id=org.id))
+    if actor:
+        query = query.filter(models.AuditLog.actor.contains(actor))
+    if action:
+        query = query.filter(models.AuditLog.action.contains(action))
+    if since:
+        query = query.filter(models.AuditLog.created_at >= _parse_ts(since))
+    if until:
+        query = query.filter(models.AuditLog.created_at <= _parse_ts(until))
+    rows = query.order_by(models.AuditLog.chain_position).all()
+    if q:
+        needle = q.lower()
+        rows = [r for r in rows if needle in (r.detail or "").lower()
+                or needle in r.action.lower()]
     chain_ok = True
     verify_hash = GENESIS_HASH
     for entry in rows:
@@ -164,3 +182,12 @@ def read_audit(org: models.Organization = Depends(auth.require_org),
                       "detail": r.detail, "hash": r.hash, "prev_hash": r.prev_hash,
                       "at": r.created_at.isoformat()} for r in rows],
             "total": len(rows), "chain_ok": chain_ok}
+
+
+def _parse_ts(value: str) -> datetime.datetime:
+    from datetime import datetime as dt
+
+    parsed = dt.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed

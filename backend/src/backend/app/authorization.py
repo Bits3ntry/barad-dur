@@ -157,6 +157,7 @@ def authorize(session, org_id: str, principal: str, capability: str,
                          principal=principal)
               .order_by(models.ScanGrant.created_at).all())
     capabilities_wanted = {c for c in capability.split(",") if c}
+    conditional_skips: list[str] = []
     for grant in grants:
         granted_caps = {c.strip() for c in grant.capabilities.split(",") if c.strip()}
         if not capabilities_wanted <= granted_caps:
@@ -167,6 +168,12 @@ def authorize(session, org_id: str, principal: str, capability: str,
             continue
         if not (_aware(grant.valid_from) <= now <= _aware(grant.valid_until)):
             continue
+        if grant.conditions is not None and grant.conditions.strip() not in ("", "{}", "null"):
+            # BL-015 invariant: conditions the policy engine cannot evaluate
+            # yet are NEVER satisfied by leniency — the grant is skipped and
+            # the request stays denied until effective evaluation exists.
+            conditional_skips.append(grant.id)
+            continue
         covered = all(_target_allowed(session, grant, t["type"], t["value"])
                       for t in targets)
         if not covered:
@@ -175,6 +182,13 @@ def authorize(session, org_id: str, principal: str, capability: str,
                         f"granted by {grant.id} (capabilities {sorted(granted_caps)})",
                         matched_group=["grant", grant.id], checked=checked)
 
+    if conditional_skips:
+        return decision(
+            True,
+            f"matching grant(s) {conditional_skips} carry conditions whose "
+            "evaluation the current policy does not support; denied until a "
+            "supported evaluator exists",
+            checked=checked)
     return decision(True, "no active grant covers the requested capability+targets",
                     checked=checked)
 
