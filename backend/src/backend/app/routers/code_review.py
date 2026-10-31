@@ -496,6 +496,7 @@ def pull_request_diff(pr_id: str,
 class PublishIn(BaseModel):
     actor: str = Field(min_length=2, max_length=255)
     target_url: str | None = None
+    annotations: bool = True
 
 
 @router.post("/pull-requests/{pr_id}/publish")
@@ -545,6 +546,31 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
                 slug, pr.head_sha, state, description,
                 target_url=payload.target_url)
             comment = scm_client.upsert_pr_comment(slug, pr.number, body)
+            if payload.annotations:
+                links = (session.query(models.PrFinding)
+                         .filter_by(pr_id=pr.id).all())
+                annotations = []
+                for link in links:
+                    finding = session.get(models.Finding, link.finding_id)
+                    if finding is None or not link.file_path:
+                        continue
+                    annotations.append({
+                        "path": link.file_path, "line": link.line,
+                        "level": scm_client.annotation_level(finding.severity),
+                        "title": f"{finding.severity}: {finding.rule_id or 'finding'}",
+                        "message": (finding.title or "")[:500],
+                    })
+                try:
+                    scm_client.create_check_run(
+                        slug, pr.head_sha,
+                        "success" if pr.gate_verdict == "pass" else "failure",
+                        f"Barad-dûr gate {pr.gate_verdict}",
+                        pr.comment or "No findings.", annotations)
+                except scm_client.ScmError as exc:
+                    # statuses/comments already landed; record the failure loudly
+                    _audit_log(session, org.id, payload.actor,
+                               "code.pr_annotations_failed", "pull_request",
+                               pr.id, str(exc)[:300])
     except scm_client.ScmError as exc:
         _audit_log(session, org.id, payload.actor, "code.pr_publish_failed",
                    "pull_request", pr.id, str(exc)[:300])
@@ -555,7 +581,10 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
                "pull_request", pr.id,
                f"{provider}:{slug}#{pr.number} {state}")
     session.commit()
-    return {"data": {"provider": provider, "repository": slug,
+    return {"data": {"provider": provider,
+                     "annotations_published": bool(
+                         payload.annotations and provider == "github"),
+                     "repository": slug,
                      "sha": pr.head_sha, "state": state,
                      "status_id": status_response.get("id"),
                      "comment_id": comment.get("id")}}

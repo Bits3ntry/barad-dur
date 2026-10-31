@@ -163,3 +163,33 @@ def upsert_gitlab_mr_note(slug: str, number: int, body: str) -> dict:
                 {"body": body})
     return _gitlab_request("POST", f"/projects/{project}/merge_requests/{number}/notes",
                            {"body": body})
+
+
+def create_check_run(slug: str, sha: str, conclusion: str, title: str,
+                     summary: str, annotations: list[dict] | None = None):
+    """Publish a GitHub check run with per-finding annotations (max 50)."""
+    annotation_payload = []
+    for item in (annotations or [])[:50]:
+        annotation_payload.append({
+            "path": item["path"],
+            "start_line": max(1, int(item.get("line") or 1)),
+            "end_line": max(1, int(item.get("line") or 1)),
+            "annotation_level": item.get("level", "warning"),
+            "message": (item.get("message") or "")[:900],
+            "title": (item.get("title") or "")[:200],
+        })
+    payload = {
+        "name": "barad-dûr / security",
+        "head_sha": sha,
+        "status": "completed",
+        "conclusion": conclusion,
+        "output": {"title": title[:200], "summary": summary[:65000],
+                   "annotations": annotation_payload},
+    }
+    return _request("POST", f"/repos/{slug}/check-runs", payload)
+
+
+def annotation_level(severity: str | None) -> str:
+    return {"CRITICAL": "failure", "HIGH": "failure",
+            "MEDIUM": "warning", "LOW": "notice"}.get((severity or "").upper(),
+                                                       "warning")

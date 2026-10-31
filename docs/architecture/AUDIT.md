@@ -2,6 +2,20 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Inline PR annotations (GitHub check run)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Check run | PASS live | Publishing a PR now also creates a GitHub check run (`barad-dûr / security`, `status=completed`, conclusion from the gate verdict) carrying one annotation per linked finding: path, start/end line, level, title and message. Live against a stub GitHub: `check-run: failure | annotations: 2 | first: app/db.py`. |
+| Severity mapping | PASS | CRITICAL/HIGH → `failure`, MEDIUM → `warning`, LOW → `notice`, unknown → `warning` (pinned by test with a 9.8 and a 3.0 finding). |
+| Safety caps | PASS | Annotations are capped at 50 per run (GitHub's limit) and every string is truncated; the cap is unit-tested with 120 findings. |
+| Failure isolation | PASS | If the check run fails after the status and comment landed, the error is audited as `code.pr_annotations_failed` and the publish result is not rolled back silently; `annotations: false` skips the call entirely (status still lands). |
+| Tests | PASS | 3 in `test_code_annotations.py` against a real GitHub stub. Suite total 166. |
+
+Known limits: annotations are GitHub-only (GitLab MR discussions not
+implemented), and they annotate changed lines from the PR scan rather than
+computing a diff-aware set.
+
 ## 2026-10-31 Email notification channels
 
 | Item | Result | Evidence |
