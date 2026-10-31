@@ -35,7 +35,8 @@ def _channel_data(row: models.NotificationChannel) -> dict:
 
 class ChannelIn(BaseModel):
     name: str = Field(min_length=2, max_length=128)
-    url: str = Field(min_length=8, max_length=2048)
+    kind: str = "webhook"
+    url: str = Field(min_length=3, max_length=2048)
     events: list[str] = ["sla.breached"]
     secret: str | None = None
     actor: str = Field(min_length=2, max_length=255)
@@ -47,8 +48,15 @@ def create_channel(payload: ChannelIn = None,
                    session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
-    if not payload.url.lower().startswith(("http://", "https://")):
+    if payload.kind not in {"webhook", "email"}:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "kind must be webhook | email")
+    if payload.kind == "webhook" and not payload.url.lower().startswith(
+            ("http://", "https://")):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "url must be http(s)")
+    if payload.kind == "email" and "@" not in payload.url:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "email channels need an address")
     unknown = set(payload.events) - EVENTS
     if unknown:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -57,7 +65,7 @@ def create_channel(payload: ChannelIn = None,
             org_id=org.id, name=payload.name).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "channel name already used")
     row = models.NotificationChannel(
-        org_id=org.id, name=payload.name, url=payload.url,
+        org_id=org.id, name=payload.name, kind=payload.kind, url=payload.url,
         secret=payload.secret or secrets.token_urlsafe(24),
         events=json.dumps(payload.events), enabled=True,
         created_at=models.utcnow())
@@ -107,8 +115,54 @@ def patch_channel(channel_id: str, payload: ChannelPatch = None,
     return {"data": _channel_data(row)}
 
 
+def _email_settings() -> dict:
+    import os
+
+    return {"host": os.environ.get("SMTP_HOST") or "",
+            "port": int(os.environ.get("SMTP_PORT") or 25),
+            "sender": os.environ.get("SMTP_FROM") or "barad-dur@localhost",
+            "user": os.environ.get("SMTP_USER") or "",
+            "password": os.environ.get("SMTP_PASSWORD") or "",
+            "starttls": (os.environ.get("SMTP_STARTTLS") or "").lower() in
+                        {"1", "true", "yes"}}
+
+
+def _deliver_email(channel: models.NotificationChannel, event: str,
+                   payload: dict) -> tuple[int | None, str | None]:
+    """Send one plain-text email; SMTP is deployment-configured, never guessed."""
+    import smtplib
+    from email.message import EmailMessage
+
+    settings = _email_settings()
+    if not settings["host"]:
+        return None, "smtp_not_configured: set SMTP_HOST"
+    message = EmailMessage()
+    message["From"] = settings["sender"]
+    message["To"] = channel.url
+    message["Subject"] = f"[Barad-dûr] {event} — {payload.get('count', 1)} item(s)"
+    lines = [f"event: {event}", f"channel: {channel.name}", ""]
+    for finding in payload.get("findings", [])[:50]:
+        lines.append(f"- {finding.get('severity')} {finding.get('title')} "
+                     f"(deadline {finding.get('sla_deadline')})")
+    if payload.get("message"):
+        lines.append(payload["message"])
+    message.set_content("\n".join(lines))
+    try:
+        with smtplib.SMTP(settings["host"], settings["port"], timeout=8) as smtp:
+            if settings["starttls"]:
+                smtp.starttls()
+            if settings["user"]:
+                smtp.login(settings["user"], settings["password"])
+            smtp.send_message(message)
+        return 250, None
+    except (smtplib.SMTPException, OSError) as exc:
+        return None, f"smtp_error: {type(exc).__name__}: {exc}"[:400]
+
+
 def deliver(channel: models.NotificationChannel, event: str,
             payload: dict) -> tuple[int | None, str | None]:
+    if channel.kind == "email":
+        return _deliver_email(channel, event, payload)
     body = json.dumps({"event": event, "channel": channel.name,
                        "payload": payload}, sort_keys=True).encode()
     signature = hmac.new(channel.secret.encode(), body, hashlib.sha256).hexdigest()

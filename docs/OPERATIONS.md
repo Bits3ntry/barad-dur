@@ -99,6 +99,10 @@ scheduler:
   -H "X-API-Key: $BARAD_CRON_KEY" -H 'Content-Type: application/json' -d '{"actor":"cron"}' >/dev/null
 ```
 
+Email channels need `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` and optionally
+`SMTP_USER`/`SMTP_PASSWORD`/`SMTP_STARTTLS`; without them deliveries fail with
+`smtp_not_configured` instead of pretending to send.
+
 Deliveries are deduped per channel per day; failures are recorded in
 `GET /api/v1/notifications/deliveries` with the HTTP code and error.
 

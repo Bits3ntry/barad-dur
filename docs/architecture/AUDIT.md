@@ -2,6 +2,19 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Email notification channels
+
+| Item | Result | Evidence |
+|---|---|---|
+| Channel kind | PASS live | `kind` is validated (`webhook`/`email`); email channels require an address (422 otherwise) and keep the same event subscription model. |
+| Delivery | PASS live | `deliver()` branches by kind: plain-text `EmailMessage` through stdlib `smtplib` using deployment settings (`SMTP_HOST/PORT/FROM/USER/PASSWORD/STARTTLS`). Live against an SMTP sink on the compose network: envelope `barad@councilbox.test → secops@councilbox.test`, 280-byte message accepted (250). |
+| Honest failure | PASS live | Without `SMTP_HOST` the delivery returns `smtp_not_configured: set SMTP_HOST` and the delivery row records it — verified live after removing the env vars (dormant test → `delivered: False`). |
+| Tick | PASS live | The SLA tick works for email channels too; live `breached: 0` because no finding is overdue, and it delivered nothing (honest empty result). |
+| Tests | PASS | 3 in `test_notifications_email.py` against a real local SMTP server (validation, signed-in-content delivery with From/To/Subject, unconfigured SMTP failure). The stub had to be taught that smtplib lowercases commands until EHLO succeeds — a real protocol detail, not a mock shortcut. Suite total 163. |
+
+Known limits: plain-text only (no HTML templates), no per-recipient
+subscriptions, and delivery stays one aggregated event per channel per day.
+
 ## 2026-10-31 GitLab publishing (SCM parity)
 
 | Item | Result | Evidence |

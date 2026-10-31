@@ -238,6 +238,12 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITLAB_API_URL: ${GITLAB_API_URL:-}
       GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-25}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-}
     ports:
       # Console + CLI reach the API from the host; loopback-only.
       - "127.0.0.1:${PLATFORM_API_PORT:-8090}:8090"

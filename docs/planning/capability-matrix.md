@@ -32,7 +32,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | Jira bidirectional | PARTIAL | BL-050 links/outbox/webhook/reconcile live vs stub; no attachment sync or field mapping UI |
 | Regression suites | PARTIAL | BL-080 HTTP checks, authorized replay, redaction, reintroduction detection; no scheduler/JSON-path assertions |
 | EASM probing (DNS/TLS/tech) | MISSING | BL-090 (crt.sh only) |
-| SLA notifications | PARTIAL | signed webhook channels + daily breach tick with dedupe; no email or per-finding push |
+| SLA notifications | PARTIAL | signed webhook **and email (SMTP)** channels + daily breach tick with dedupe; no per-finding push or HTML templates |
 | Scanner execution health | COMPLETE | dashboard orchestration block (workers/stale/jobs/24h/avg/failures) + UI cards |
 | SBOM baseline | COMPLETE | per-version frozen component set + diff endpoint |
 | Cross-project component impact | COMPLETE | `/components/impact` (id/purl/name) with usage + findings; console panel |
