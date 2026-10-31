@@ -2,6 +2,20 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 SPDX ingest + SBOM version comparison
+
+| Item | Result | Evidence |
+|---|---|---|
+| SPDX ingest | PASS live | `POST /spdx/import` accepts an SPDX 2.3 JSON document, maps packages → components (name, versionInfo, purl from `externalRefs`, declared licenses split on AND/OR/WITH) and runs the existing CycloneDX pipeline, so idempotency, findings correlation and licensing come for free. `NOASSERTION` versions stay unknown instead of being invented. Non-SPDX input → 422. |
+| Round-trip | PASS live | Exported `lic-live@1.0` (3 packages) and imported it as `spdx-roundtrip@1.0`: 3 components created, both licenses of the multi-licensed component preserved (`BSD-3-Clause` + `MIT`), `Apache-2.0` intact. |
+| Idempotency | PASS | A repeated import returns `status: duplicate` and does not duplicate components/links (receipt exposes the original counters). |
+| Version comparison | PASS live | `GET /sbom/compare?project&from_version&to_version` diffs components by name: added / removed / changed (version moves), unchanged stays quiet; unknown version → 404. Live: `worker-live` 1.0 vs 1.1 correctly reports no drift (both scans identical). |
+| Tests | PASS | 4 in `test_spdx_ingest_compare.py` (import+licenses+idempotency, non-SPDX rejection, compare added/removed/changed, tenant isolation). Suite total 123. |
+
+Known limits: SPDX import maps only identity and licenses (no SPDX
+relationships graph), and the comparison compares two versions rather than a
+stored baseline snapshot.
+
 ## 2026-10-31 Scan schedules + printable pentest report
 
 | Item | Result | Evidence |

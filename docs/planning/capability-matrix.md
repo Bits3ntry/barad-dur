@@ -14,7 +14,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | Asset inventory (domain/ip/url/cidr) | COMPLETE (v1) | crt.sh sweep + snapshots/change detection (BL-090); no active probing |
 | Scan authorization engine | COMPLETE | BL-015; conditions fail closed |
 | SBOM ingest (CycloneDX) + receipts | COMPLETE | idempotent by content hash |
-| SPDX export | COMPLETE | BL-025 (ingest still missing) |
+| SPDX ingest + export | COMPLETE | export 2.3 + import via the CycloneDX pipeline; component diff between versions |
 | Vulnerability matching (OSV) + reconcile | COMPLETE | findings anchored per component/version |
 | KEV/EPSS enrichment | PARTIAL | mirrors + UI marker + KEV rule; feeds only, no scoring |
 | VEX statements | PARTIAL | statement column + UI; unsigned |
