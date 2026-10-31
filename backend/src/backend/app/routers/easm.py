@@ -132,3 +132,103 @@ def discover(payload: DiscoveryIn = None,
     session.commit()
     return {"data": {"domain": payload.domain, "created": created,
                      "refreshed": refreshed, "total_known": created + refreshed + 1}}
+
+
+class SnapshotIn(BaseModel):
+    data: dict
+    source: str = Field(default="manual", max_length=64)
+    actor: str | None = None
+
+
+def _snapshot_data(row: models.AssetSnapshot) -> dict:
+    import json as _json
+
+    return {"id": row.id, "observed_at": row.observed_at.isoformat(),
+            "source": row.source, "data": _json.loads(row.data)}
+
+
+def _diff(previous: dict, current: dict) -> list[dict]:
+    """Flat key diff over the structured observation (nested dicts compare
+    via their JSON rendering — honest for this payload shape)."""
+    import json as _json
+
+    changes = []
+    keys = sorted(set(previous) | set(current))
+    for key in keys:
+        before, after = previous.get(key), current.get(key)
+        if before != after:
+            changes.append({"field": key,
+                            "before": _json.dumps(before, sort_keys=True)
+                            if isinstance(before, (dict, list)) else before,
+                            "after": _json.dumps(after, sort_keys=True)
+                            if isinstance(after, (dict, list)) else after})
+    return changes
+
+
+@router.post("/assets/{asset_id}/snapshots")
+def add_snapshot(asset_id: str, payload: SnapshotIn = None,
+                 org: models.Organization = Depends(auth.require_org),
+                 session: Session = Depends(get_session)):
+    """Record an observation (passive DNS/TLS/tech metadata supplied by a
+    passive collector or entered manually). Snapshotting never authorizes
+    active testing."""
+    import json as _json
+
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    asset = session.get(models.Asset, asset_id)
+    if asset is None or asset.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+    now = models.utcnow()
+    row = models.AssetSnapshot(
+        org_id=org.id, asset_id=asset.id, observed_at=now,
+        source=payload.source, data=_json.dumps(payload.data, sort_keys=True),
+        created_at=now)
+    session.add(row)
+    asset.last_seen_at = now
+    session.flush()
+    _audit_log(session, org.id, payload.actor or "system", "asset.snapshot",
+               "asset", asset.id, f"{payload.source}: {len(payload.data)} fields")
+    session.commit()
+    return {"data": _snapshot_data(row)}
+
+
+@router.get("/assets/{asset_id}/snapshots")
+def list_snapshots(asset_id: str,
+                   org: models.Organization = Depends(auth.require_org),
+                   session: Session = Depends(get_session)):
+    asset = session.get(models.Asset, asset_id)
+    if asset is None or asset.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+    rows = (session.query(models.AssetSnapshot)
+            .filter_by(org_id=org.id, asset_id=asset.id)
+            .order_by(models.AssetSnapshot.observed_at.desc()).all())
+    return {"data": [_snapshot_data(r) for r in rows], "total": len(rows)}
+
+
+@router.get("/assets/{asset_id}/changes")
+def asset_changes(asset_id: str,
+                  org: models.Organization = Depends(auth.require_org),
+                  session: Session = Depends(get_session)):
+    """Diff of the two most recent snapshots (plus the full change history)."""
+    asset = session.get(models.Asset, asset_id)
+    if asset is None or asset.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+    rows = (session.query(models.AssetSnapshot)
+            .filter_by(org_id=org.id, asset_id=asset.id)
+            .order_by(models.AssetSnapshot.observed_at).all())
+    if len(rows) < 2:
+        return {"data": {"asset": asset.value, "snapshots": len(rows),
+                         "latest_changes": [], "history": []}}
+    import json as _json
+
+    history = []
+    latest_changes = []
+    for previous, current in zip(rows, rows[1:]):
+        changes = _diff(_json.loads(previous.data), _json.loads(current.data))
+        entry = {"from": previous.observed_at.isoformat(),
+                 "to": current.observed_at.isoformat(), "changes": changes}
+        history.append(entry)
+    latest_changes = history[-1]["changes"] if history else []
+    return {"data": {"asset": asset.value, "snapshots": len(rows),
+                     "latest_changes": latest_changes, "history": history}}

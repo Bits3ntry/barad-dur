@@ -781,3 +781,22 @@ class GatePolicy(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), default="active")
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── BL-090: asset snapshots ───────────────
+
+class AssetSnapshot(Base):
+    """One observation of an asset at a point in time (DNS/TLS/tech/service
+    metadata as JSON). Change detection diffs consecutive observations; a
+    snapshot never implies scan authorization."""
+
+    __tablename__ = "asset_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    asset_id: Mapped[str] = mapped_column(String(36), ForeignKey("assets.id"),
+                                          index=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    source: Mapped[str] = mapped_column(String(64), default="manual")
+    data: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

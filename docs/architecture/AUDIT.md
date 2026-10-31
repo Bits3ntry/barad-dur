@@ -2,6 +2,18 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 BL-090 asset snapshots + change detection
+
+| Item | Result | Evidence |
+|---|---|---|
+| Snapshots | PASS live | `POST /assets/{id}/snapshots` stores structured observations (ip/tech/tls/... keys) with source + timestamp; asset last_seen refreshed; snapshot never implies scan authorization (passive data only). Live: two DNS-scan snapshots on `api.councilbox.com`. |
+| Change detection | PASS live | `/assets/{id}/changes` diffs consecutive snapshots (ip changed 203.0.113.10→.11; tech list gained `redis`; unchanged `tls_issuer` stayed quiet) and returns full history. |
+| Console | PASS | Assets tab row → history panel: snapshot count, latest changes, JSON observation entry to record new snapshots. |
+| Tests | PASS | 3 in `test_bl090_snapshots.py` (history/diff, single-snapshot quiet state, tenant isolation + audit); suite total 88. |
+
+Known limits: probing (DNS/TLS/tech collection) is supplied by collectors or
+manual JSON for now — active probing stays gated behind scan authorization.
+
 ## 2026-10-31 BL-055 quality gates + BL-040b SARIF + BL-110 dashboards
 
 | Item | Result | Evidence |

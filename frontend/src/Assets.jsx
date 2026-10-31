@@ -7,12 +7,37 @@ export default function Assets() {
   const [manual, setManual] = useState({ type: 'domain', value: '' })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [history, setHistory] = useState(null)
+  const [snapshotDraft, setSnapshotDraft] = useState('{"ip": "", "tech": []}')
 
   useEffect(() => { load() }, [])
 
   function load() {
     setError('')
     api.get('/api/v1/assets').then((r) => setAssets(r.data)).catch((e) => setError(String(e.message || e)))
+  }
+
+  async function openHistory(asset) {
+    if (history?.assetId === asset.id) { setHistory(null); return }
+    try {
+      const { data } = await api.get(`/api/v1/assets/${asset.id}/changes`)
+      setHistory({ assetId: asset.id, asset: asset.value, ...data })
+    } catch (e) {
+      setError(String(e.message || e))
+    }
+  }
+
+  async function addSnapshot(asset) {
+    try {
+      const parsed = JSON.parse(snapshotDraft)
+      await api.post(`/api/v1/assets/${asset.id}/snapshots`, {
+        data: parsed, source: 'console', actor: 'console',
+      })
+      setHistory(null)
+      setTimeout(() => openHistory(asset), 150)
+    } catch (e) {
+      setError(String(e.message || e))
+    }
   }
 
   async function sweep() {
@@ -58,16 +83,44 @@ export default function Assets() {
       </div>
       {error && <p className="error">{error}</p>}
       <table>
-        <thead><tr><th>type</th><th>value</th><th>source</th><th>first seen</th><th>last seen</th></tr></thead>
+        <thead><tr><th>type</th><th>value</th><th>source</th><th>first seen</th><th>last seen</th><th></th></tr></thead>
         <tbody>
           {assets.map((a) => (
-            <tr key={a.id}>
-              <td><span className="pill">{a.type}</span></td>
-              <td className="title">{a.value}</td>
-              <td>{a.source}</td>
-              <td>{new Date(a.discovered_at).toLocaleDateString()}</td>
-              <td>{new Date(a.last_seen_at).toLocaleDateString()}</td>
-            </tr>
+            <React.Fragment key={a.id}>
+              <tr className={history?.assetId === a.id ? 'selected' : ''}>
+                <td><span className="pill">{a.type}</span></td>
+                <td className="title">{a.value}</td>
+                <td>{a.source}</td>
+                <td>{new Date(a.discovered_at).toLocaleDateString()}</td>
+                <td>{new Date(a.last_seen_at).toLocaleDateString()}</td>
+                <td><button onClick={() => openHistory(a)}>history</button></td>
+              </tr>
+              {history?.assetId === a.id && (
+                <tr className="detail-row"><td colSpan={6}>
+                  <div className="detail">
+                    <dl>
+                      <dt>snapshots</dt><dd>{history.snapshots}</dd>
+                      <dt>latest changes</dt>
+                      <dd>
+                        {(!history.latest_changes || history.latest_changes.length === 0) &&
+                          <span className="muted">no changes between observations</span>}
+                        {(history.latest_changes || []).map((c, index) => (
+                          <div key={index} className="occ-row">
+                            <strong>{c.field}</strong>: {String(c.before ?? '—')} → {String(c.after ?? '—')}
+                          </div>
+                        ))}
+                      </dd>
+                    </dl>
+                    <div className="bar">
+                      <input value={snapshotDraft} style={{ minWidth: 380 }}
+                        onChange={(e) => setSnapshotDraft(e.target.value)}
+                        placeholder='observation JSON, e.g. {"ip": "1.2.3.4"}' />
+                      <button onClick={() => addSnapshot(a)}>record snapshot</button>
+                    </div>
+                  </div>
+                </td></tr>
+              )}
+            </React.Fragment>
           ))}
         </tbody>
       </table>

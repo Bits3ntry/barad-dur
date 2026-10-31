@@ -73,9 +73,11 @@ picture) | `todo`. Anything else is NOT implemented.
 
 ## Phase 6–8
 
-- **BL-090 EASM probing jobs** — DNS/TLS service probe, tech fingerprint,
-  snapshot history; **P1** | deps assets live | AC: snapshot diff endpoint;
-  loopback-safe, passive only without BL-015 grant.
+- **BL-090 EASM probing jobs** — status `partial`: snapshots + change
+  detection landed (`test_bl090_snapshots.py`, live gate); active DNS/TLS
+  collectors and scheduled sweeps still pending, gated by scan grants.
+  **P1** | deps assets live | AC: snapshot diff endpoint; loopback-safe,
+  passive only without BL-015 grant.
 - **BL-080 Regression suites** — authorized HTTP test suites with variables,
   auth injection, assertions, secret redaction, rerun per version; **P2**
   | deps BL-015 | AC: suite run stores assertions results, reruns produce
