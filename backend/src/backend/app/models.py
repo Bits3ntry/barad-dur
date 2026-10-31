@@ -672,3 +672,30 @@ class ScanGrantTarget(Base):
     grant_id: Mapped[str] = mapped_column(String(36), ForeignKey("scan_grants.id", ondelete="CASCADE"), index=True)
     target_type: Mapped[str] = mapped_column(String(32))
     target_value: Mapped[str] = mapped_column(String(1024))
+
+
+# ─────────────── BL-040: occurrences ───────────────
+
+class Occurrence(Base):
+    """One verified sighting of one finding (per ingest/scan event). The
+    finding row dedupes the weakness; occurrences preserve the sighting
+    history with its context and evidence pointer."""
+
+    __tablename__ = "occurrences"
+    __table_args__ = (
+        UniqueConstraint("finding_id", "sighting_key", name="uq_occurrence_sighting"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    finding_id: Mapped[str] = mapped_column(String(36), ForeignKey("findings.id"), index=True)
+    project_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_versions.id"), nullable=True)
+    ci_run_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("ci_runs.id"), nullable=True)
+    tool: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sighting_key: Mapped[str] = mapped_column(String(64))
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -9,6 +9,7 @@ and never expects raw secret material.
 """
 import fnmatch
 import hashlib
+import json
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -130,7 +131,30 @@ def ingest_payload(session, org, project, project_version, payload: FindingsPayl
             finding.line = item.line
             finding.updated_at = now
             counters["refreshed"] += 1
+        _record_occurrence(session, org.id, finding, project_version.id,
+                           grouped, source, item, now)
     return counters
+
+
+def _record_occurrence(session, org_id: str, finding: models.Finding,
+                       project_version_id: str, tool: str, source: str,
+                       item, now) -> None:
+    """One occurrence row per sighting; identical repeats stay one row via
+    the (finding, sighting_key) pair (idempotent ingest)."""
+    sighting = {
+        "v": "1", "kind": item.kind, "rule": item.rule_id, "path": item.path,
+        "line": item.line, "tool": tool, "source": source, "ver": project_version_id,
+    }
+    key = hashlib.sha256(json.dumps(sighting, sort_keys=True).encode()).hexdigest()
+    existing = (session.query(models.Occurrence)
+                .filter_by(finding_id=finding.id, sighting_key=key).one_or_none())
+    if existing is not None:
+        return
+    session.add(models.Occurrence(
+        org_id=org_id, finding_id=finding.id,
+        project_version_id=project_version_id,
+        tool=tool, source=source, sighting_key=key,
+        evidence=item.detail, seen_at=now, created_at=now))
 
 
 def _approved_rules(session, org_id: str) -> list[models.SuppressionRule]:

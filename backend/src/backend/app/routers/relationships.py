@@ -376,3 +376,22 @@ def unlink_finding_context(finding_id: str, context_id: str, actor: str = "",
                "finding", finding_id, f"{link.entity_type}:{link.entity_id}")
     session.commit()
     return {"data": _link_data(link)}
+
+
+@router.get("/findings/{finding_id}/occurrences")
+def list_occurrences(finding_id: str,
+                     org: models.Organization = Depends(auth.require_org),
+                     session: Session = Depends(get_session)):
+    """Sighting history for one finding (BL-040): the finding row dedupes the
+    weakness; each distinct sighting (context/tool/source/version) is kept."""
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    rows = (session.query(models.Occurrence)
+            .filter_by(org_id=org.id, finding_id=finding.id)
+            .order_by(models.Occurrence.seen_at.desc()).all())
+    return {"data": [{
+        "id": r.id, "seen_at": r.seen_at.isoformat(),
+        "project_version_id": r.project_version_id, "ci_run_id": r.ci_run_id,
+        "tool": r.tool, "source": r.source, "evidence": r.evidence,
+    } for r in rows], "total": len(rows)}
