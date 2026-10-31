@@ -5,7 +5,7 @@ import sys
 from .core.errors import EXIT_FAILURE, BaradError
 
 from . import __version__
-from .commands import health, run, scan
+from .commands import health, run, scan, worker
 
 
 def build_parser():
@@ -16,7 +16,7 @@ def build_parser():
     )
     parser.add_argument("--version", action="version", version=f"barad {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for module in (scan, run, health):
+    for module in (scan, run, health, worker):
         module.register(subparsers)
     return parser
 

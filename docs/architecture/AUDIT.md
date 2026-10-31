@@ -2,6 +2,20 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Shauron worker (execution path validated with real scans)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Worker CLI | PASS live | `barad worker --platform-url --api-key --name [--limit/--once]` registers, heartbeats every 30 s, claims, starts (honouring `cancelled: true`), executes and reports. |
+| Real execution | PASS live | Job `opengrep` on `/tmp/shauron-gate/src` ran the pinned OpenGrep engine and the Trivy SBOM step: SBOM ingested to `worker-live`, **4 components received / 3 created**, and 2 real SAST findings landed at `app.py:8` (HIGH, `python-subprocess-shell-true`) and `app.py:12` (MEDIUM, `python-unsafe-yaml-load`). Job `succeeded` with manifest + log artifacts. |
+| Failure honesty | PASS | Missing `target_path` → job `failed` with `target_path not found`; scan error → `failed` with the tool's own text; no artifacts produced → `failed` with `no_artifacts`. Nothing is reported as success without evidence. |
+| Bug found by the gate | FIXED | The first worker run reported `succeeded` while uploading nothing: the CLI nests runs (`<target>/<status>/scan-<id>/`) and the worker looked for artifacts flat. Now artifacts are located recursively, and an empty artifact set fails the job. Second bug in the same gate: OpenGrep `check_id` arrives fully qualified (`…rules.<name>`) and paths were absolute — normalized to the rule name and repo-relative path, verified on the next job (`app.py:8`). |
+| Tests | PASS | 5 in `tests/test_worker_contract.py` against a real local HTTP stub of the platform: API-key header, clean no-job exit, cancellation means no execution, missing target → failed, scan error → failed. Suite: 107 backend + 156 CLI. |
+
+Known limits: single-process polling worker (no graceful drain beyond
+`--limit`), SBOM/SARIF ingestion assumes project/version in the job profile,
+and artifact upload is capped by the API (20 artifacts/job, 200 KB each).
+
 ## 2026-10-31 BL-040b part 2 — code review
 
 | Item | Result | Evidence |
