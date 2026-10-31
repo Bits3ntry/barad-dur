@@ -25,7 +25,9 @@ def _now() -> datetime.datetime:
 
 def classify(session, org_id: str, finding: models.Finding) -> tuple[str, str]:
     """(priority, reason): first inclusive matching org rule wins, then the
-    severity fallback table."""
+    severity fallback table. Rule criteria may include intel membership
+    (`match_intel='kev'`: the advisory's CVE is exploited in the wild) so KEV
+    stays a configurable rule, not a hard global override."""
     rules = (session.query(models.PriorityRule)
              .filter_by(org_id=org_id)
              .order_by(models.PriorityRule.position).all())
@@ -39,7 +41,17 @@ def classify(session, org_id: str, finding: models.Finding) -> tuple[str, str]:
             mine = (finding.severity or "UNKNOWN").upper()
             if mine not in wanted:
                 continue
-        has_criterion = bool(rule.match_kind or rule.match_source or rule.match_severities)
+        if rule.match_intel:
+            intel_hit = False
+            if rule.match_intel == "kev" and finding.vulnerability_id:
+                advisory = session.get(models.Vulnerability, finding.vulnerability_id)
+                intel_hit = bool(
+                    advisory and advisory.cve_id and
+                    session.get(models.KevEntry, advisory.cve_id))
+            if not intel_hit:
+                continue
+        has_criterion = bool(rule.match_kind or rule.match_source
+                             or rule.match_severities or rule.match_intel)
         if has_criterion:
             return rule.priority, rule.reason
     fallback = SEVERITY_FALLBACK.get((finding.severity or "UNKNOWN").upper(), "P3")

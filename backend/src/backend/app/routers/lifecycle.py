@@ -20,6 +20,7 @@ class PriorityRuleIn(BaseModel):
     match_kind: str | None = None
     match_severities: str | None = Field(default=None, max_length=255)
     match_source: str | None = None
+    match_intel: str | None = None
     priority: str
     reason: str = Field(min_length=4, max_length=2048)
 
@@ -28,6 +29,14 @@ class PriorityRuleIn(BaseModel):
     def priority_known(cls, value):
         if value not in PRIORITIES:
             raise ValueError(f"priority must be one of {sorted(PRIORITIES)}")
+        return value
+
+    @field_validator("match_intel")
+    @classmethod
+    def intel_known(cls, value):
+        allowed = {"kev"}
+        if value is not None and value not in allowed:
+            raise ValueError(f"match_intel must be one of {sorted(allowed)}")
         return value
 
 
@@ -53,7 +62,7 @@ def list_rules(org: models.Organization = Depends(auth.require_org),
     return {"data": [{
         "id": r.id, "position": r.position, "match_kind": r.match_kind,
         "match_severities": r.match_severities, "match_source": r.match_source,
-        "priority": r.priority, "reason": r.reason,
+        "match_intel": r.match_intel, "priority": r.priority, "reason": r.reason,
     } for r in rows], "total": len(rows)}
 
 
@@ -63,13 +72,15 @@ def add_rule(payload: PriorityRuleIn = None,
              session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
-    if not (payload.match_kind or payload.match_severities or payload.match_source):
+    if not (payload.match_kind or payload.match_severities or payload.match_source
+            or payload.match_intel):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "at least one match criterion is required")
     rule = models.PriorityRule(
         org_id=org.id, position=payload.position, match_kind=payload.match_kind,
         match_severities=(payload.match_severities.upper() if payload.match_severities else None),
-        match_source=payload.match_source, priority=payload.priority,
+        match_source=payload.match_source, match_intel=payload.match_intel,
+        priority=payload.priority,
         reason=payload.reason, created_at=models.utcnow(), updated_at=models.utcnow())
     session.add(rule)
     session.flush()

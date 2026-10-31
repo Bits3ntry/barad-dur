@@ -16,15 +16,17 @@ from backend.app.routers.identity import _audit as _audit_log
 
 router = APIRouter(prefix="/api/v1", tags=["intelligence"])
 
-KEV_URL = "https://raw.githubusercontent.com/cisagov/kev-data/main/kev.json"
+KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 EPSS_URL = "https://api.first.org/data/v1/epss"
 
 VEX_STATUSES = {"not_affected", "affected", "fixed", "under_investigation"}
 
 
 def fetch_kev(timeout: float = 15.0) -> list[dict]:
-    """Pull the CISA KEV catalog (direct stderr | failure raises)."""
-    with urllib.request.urlopen(KEV_URL, timeout=timeout) as response:
+    """Pull the canonical CISA KEV catalog feed."""
+    with urllib.request.urlopen(
+            urllib.request.Request(KEV_URL, headers={"User-Agent": "barad-dur-platform"}),
+            timeout=timeout) as response:
         payload = json.load(response)
     rows = []
     for entry in payload.get("vulnerabilities", []):

@@ -240,6 +240,7 @@ class PriorityRule(Base, TimestampMixin):
     match_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     match_severities: Mapped[str | None] = mapped_column(String(255), nullable=True)
     match_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    match_intel: Mapped[str | None] = mapped_column(String(32), nullable=True)
     priority: Mapped[str] = mapped_column(String(8))
     reason: Mapped[str] = mapped_column(Text)
 

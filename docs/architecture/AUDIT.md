@@ -2,6 +2,16 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Phase 0 audit docs + BL-010 relationships + KEV rule (requested increments)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Phase 0 deliverables (9 docs) | PASS | `docs/planning/*` + `docs/architecture/*` committed (`7b7922c`); matrix KEEP/EXTEND/REPLACE/REMOVE by area; A–J audit honest; clean-room status verified per-file (no upstream code anywhere). |
+| License decision (BL-102) | DECIDED | Proprietary/private for now; no LICENSE GPL/AGPL adoption; obligations of our dependencies documented (Apache-2.0 engines, composition not linking); no OpenCTM code copied — recorded in compatibility doc. |
+| BL-010 relationships | PASS live | Migration 0009 (+0010 timestamp fix-up) at head on the live Postgres; repositories/services/deployments created via REST; repo N:M across projects (idempotent relink, same repo row), asset↔deployment `observed_at` and finding→service context links; every mutation audited (`/audit` 11 entries, chain_ok true). Test suite `test_bl010_relationships.py` covers N:M sharing, orphan assets, temporal unlink + audit trail, and the one-component-across-projects dedupe invariant. **Timestamp-drift family fired twice** (RemediationFinding in B-earlier, repositories/services in 0009→0010) — tests run on both engines and catch these. |
+| KEV→P0 rule (configurable) | PASS | `priority_rules.match_intel='kev'` column (migration 0011); classify() consults the local KEV mirror only (no runtime network); rule creation accepts intel criterion (validator: `kev` only); unit test proves promote P0 with an exploited CVE and that findings without CVEs/the criterion stay on severity fallback. **Live gate**: `/intel/sync` pulled the canonical CISA feed into the mirror (1766 KEV + 500 EPSS — the first URL attempt returned 404 and was honestly swapped to the official feed); reclass counter 0 because the fixture findings carry no CVEs (rule correctly inert there). |
+| Suites | PASS | 47 pytest + 151 unittest OK; live API 40 paths (openapi) rebuilt within the compose service. |
+
 ## 2026-10-31 Console as a deployed service (nginx, loopback 8092)
 
 The console stopped depending on the dev server: `console_html/` holds the built dist, `deploy/console/nginx.conf` serves it with a same-origin `/api` reverse-proxy to `platform-api:8090` (no CORS) and an SPA fallback. Service in both composes: digest-pinned `nginx:1.27-alpine`, loopback-only publish, PROD_URL default `http://127.0.0.1:8092`. Live evidence: index 200, proxied `/api/v1/projects` 401 with an invalid key (auth enforced through nginx), `/healthz` proxied ok, and the full console (6 tabs, findings with priority/SLA) rendering in a real browser at :8092 with the same data as the dev instance. Release recipe: `npm run build` in `frontend/` → rsync `dist/` → `console_html/` → `docker compose up -d console`.

@@ -10,7 +10,10 @@ picture) | `todo`. Anything else is NOT implemented.
 - **BL-010 Repo/Service/Deployment entities** — objective: platform entities
   for repository, service, deployment + typed relations project↔repo,
   component↔service. **P0** | deps none | AC: CRUD via API, FK from findings
-  navigable, migration 0009; T: pytest CRUD + FK navigation test; status `todo`.
+  navigable, migration 0009; T: pytest CRUD + FK navigation test; status
+  `landed` (`d6bc72e`: 0009+0010 migrations on live Postgres, N:M links, asset
+  polimórfico y finding-contexts, suite test_bl010_relationships.py toda
+  verde + gate live en AUDIT.md).
 - **BL-015 observed-vs-authorized split** — objective: `scan_authorizations`
   table binding assets/scopes to allowed profiles with approver + window;
   intrusive endpoints reject without a grant. **P0** (safety-relevant), deps
@@ -76,5 +79,8 @@ picture) | `todo`. Anything else is NOT implemented.
   deprecation; **P2** | deps everything above.
 - **BL-101 Ops** — backups (pg_dump schedule to migration-backup volume
   contract), metrics endpoint, downtime runbook; **P1** before prod claims.
-- **BL-102 LICENSE + attribution doc** — decision + LICENSE file (see
-  compatibility doc); **P0** (repo hygiene, blocks any distribution claim).
+- **BL-102 LICENSE + attribution doc** — decided 2026-10-31: proprietary/private
+  for now; no GPL/AGPL adoption; dependency obligations (Composition, not
+  linking: Apache-2.0 engines) documented in `docs/planning/compatibility-
+  and-licenses.md`; status `landed` (decision recorded; LICENSE file still
+  pending if distribution ever happens).
