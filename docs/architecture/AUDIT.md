@@ -2,6 +2,19 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Worker container isolation (Shauron sandbox)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Isolation flags | PASS live | `barad worker --isolate-image <img@sha256:...>` runs every scan in a throwaway container with `--network none`, `--read-only`, `--tmpfs /tmp:noexec,nosuid`, `--cap-drop ALL`, `no-new-privileges`, `--user 65534:65534`, `--memory/--memory-swap 1g`, `--cpus 1`, `--pids-limit 256`. Live probe inside a real container returned `uid 65534`, `rootfs_writable false`, DNS `gaierror`, HTTP `URLError`, target mounted read-only. |
+| Fail-closed composition | PASS | `build_command` refuses unpinned images (digest requirement), an empty command, a missing target, and any argv that would expose Docker. Live: `python:3.12-slim` → "sandbox images must be digest-pinned". Never a privileged container, never a mounted Docker socket. |
+| Worker wiring | PASS | `run_scan(..., isolate_image=...)` composes the sandbox command and runs `barad run /target -O /out --json` inside it; a non-zero exit becomes a failed job with the container's own stderr (not a silent success). |
+| Tests | PASS | 7 in `tests/test_sandbox.py` (flags present, unpinned refused, docker-socket refused, empty command, missing target, image passed through, failure surfaces as job failure). CLI suite 172 + 44 subtests. |
+
+Known limits: the isolated image must already contain the Shauron CLI (the
+deployment builds it), and the probe proved isolation with a generic image —
+a scan inside the sandbox still needs that image to carry OpenGrep/Trivy.
+
 ## 2026-10-31 Pentest PDF report (dependency-free writer)
 
 | Item | Result | Evidence |

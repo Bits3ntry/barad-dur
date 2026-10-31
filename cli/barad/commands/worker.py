@@ -19,6 +19,10 @@ def register(subparsers):
                        help="organization API key (full org rights)")
     parser.add_argument("--worker-token", default="",
                        help="scoped worker token (preferred; cannot read findings)")
+    parser.add_argument("--isolate-image", default="",
+                        help=("run each scan in a digest-pinned throwaway "
+                              "container (no network, read-only rootfs, "
+                              "memory/cpu limits, non-root)"))
     parser.add_argument("--name", default="shauron-worker",
                         help="worker name (stable identity)")
     parser.add_argument("--capability", action="append", default=None,
@@ -40,7 +44,8 @@ def _execute(args):
             args.platform_url, args.api_key, name=args.name,
             capabilities=args.capability, max_concurrent=args.max_concurrent,
             once=args.once, poll=args.poll, limit=args.limit,
-            worker_token=args.worker_token or None)
+            worker_token=args.worker_token or None,
+            isolate_image=args.isolate_image or None)
     except worker_module.WorkerError as error:
         print(f"worker error: {error}", file=sys.stderr)
         return EXIT_FAILURE

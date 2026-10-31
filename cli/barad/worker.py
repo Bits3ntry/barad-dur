@@ -91,8 +91,26 @@ def finish(platform_url, api_key, job_id, worker_id, outcome, summary,
 
 
 def run_scan(target_path: Path, output_dir: Path, cli_module="barad",
-             timeout=900) -> dict:
-    """Run the local CLI scan; return the parsed manifest or raise."""
+             timeout=900, isolate_image: str | None = None) -> dict:
+    """Run the CLI scan locally, or inside an ephemeral sandbox container."""
+    if isolate_image:
+        from . import sandbox
+
+        command = sandbox.build_command(
+            isolate_image,
+            ["barad", "run", "/target", "-O", "/out", "--json"],
+            "/target", target_path, output_dir)
+        try:
+            returncode, stdout, stderr = sandbox.run(command, timeout=timeout)
+        except sandbox.SandboxError as exc:
+            raise WorkerError(f"sandbox unavailable: {exc}") from exc
+        if returncode != 0:
+            tail = (stderr or stdout or "")[-600:]
+            raise WorkerError(f"isolated scan failed (exit {returncode}): {tail}")
+        try:
+            return json.loads(stdout)
+        except json.JSONDecodeError:
+            return {"raw_stdout_tail": (stdout or "")[-400:], "isolated": True}
     command = [sys.executable, "-m", cli_module, "run", str(target_path),
                "-O", str(output_dir), "--json"]
     completed = subprocess.run(command, capture_output=True, text=True,
@@ -220,7 +238,8 @@ def _counts_from(artifacts: dict) -> dict:
     return {}
 
 
-def execute_job(platform_url, api_key, worker_id, job, worker_token=None) -> dict:
+def execute_job(platform_url, api_key, worker_id, job, worker_token=None,
+                isolate_image: str | None = None) -> dict:
     """Run one claimed job; returns the finish payload outcome."""
     profile = job.get("profile") or {}
     target_path = Path(profile.get("target_path") or "").expanduser()
@@ -235,7 +254,7 @@ def execute_job(platform_url, api_key, worker_id, job, worker_token=None) -> dic
                    or f"/tmp/barad-worker-{job['id'][:8]}").expanduser()
     workdir.mkdir(parents=True, exist_ok=True)
     try:
-        manifest = run_scan(target_path, workdir)
+        manifest = run_scan(target_path, workdir, isolate_image=isolate_image)
     except (WorkerError, subprocess.TimeoutExpired) as exc:
         finish(platform_url, api_key, job["id"], worker_id, "failed",
                {"reason": "scan_error"}, [], error=str(exc)[:900])
@@ -285,7 +304,7 @@ def execute_job(platform_url, api_key, worker_id, job, worker_token=None) -> dic
 
 def serve(platform_url, api_key, name="shauron-worker", capabilities=None,
           max_concurrent=1, once=False, poll=DEFAULT_POLL, limit=None,
-          worker_token=None):
+          worker_token=None, isolate_image: str | None = None):
     """Register, then poll for jobs until stopped (or `limit` jobs)."""
     capabilities = capabilities or ["vulnerability_analysis"]
     worker = register(platform_url, api_key, name, capabilities, max_concurrent)
@@ -308,7 +327,8 @@ def serve(platform_url, api_key, name="shauron-worker", capabilities=None,
         if started.get("cancelled"):
             handled += 1
             continue
-        execute_job(platform_url, api_key, worker_id, job, worker_token)
+        execute_job(platform_url, api_key, worker_id, job, worker_token,
+                    isolate_image=isolate_image)
         handled += 1
         if once or (limit is not None and handled >= limit):
             return {"worker": worker_id, "handled": handled}
