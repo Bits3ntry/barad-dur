@@ -2,6 +2,19 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Code diff viewer (PR base↔head)
+
+| Item | Result | Evidence |
+|---|---|---|
+| File diff | PASS live | `GET /code/diff?repository_id&from_ref&to_ref&path` produces a structured unified diff (hunk/added/removed/context rows) from the indexed snapshots; every line is redacted. Live: adding `token = "sk-live-..."` in head produced `token=[REDACTED]` and `secret leaked: false`. |
+| PR diff | PASS live | `GET /code/pull-requests/{id}/diff` diffs base↔head for every file carrying PR findings. Live PR #2001: status `diff`, +3/−1, hunk header and rows correct. |
+| Honest states | PASS | A missing baseline is `missing_base` (or `missing_head`), never "no changes"; a PR without repository/branch context is `missing_refs`. Both pinned by tests — absence of a baseline is not evidence of safety. |
+| Console | PASS | Each file in the review panel gains `show diff`, rendering added/removed lines with +/− gutters and a diff-unavailable message when snapshots are missing. |
+| Tests | PASS | 3 in `test_code_diff.py` (generic diff + redaction, missing-base honesty, missing-refs + isolation). Suite total 130. |
+
+Known limits: diffs are per-file and line-based (no rename/move detection),
+and only files with findings get a PR diff entry.
+
 ## 2026-10-31 EASM collection (DNS passive, TLS active)
 
 | Item | Result | Evidence |

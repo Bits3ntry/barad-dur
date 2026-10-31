@@ -406,3 +406,88 @@ def set_pr_status(pr_id: str, payload: PrStatusIn = None,
                "pull_request", pr.id, payload.status)
     session.commit()
     return {"data": _pr_data(session, pr)}
+
+
+def _diff_lines(base_text: str, head_text: str, path: str,
+                context: int = 3) -> list[dict]:
+    """Unified diff as structured rows; every kept line is redacted."""
+    import difflib
+
+    base_lines = (base_text or "").splitlines()
+    head_lines = (head_text or "").splitlines()
+    rows = []
+    for line in difflib.unified_diff(base_lines, head_lines,
+                                     fromfile=f"a/{path}", tofile=f"b/{path}",
+                                     n=context, lineterm=""):
+        if line.startswith(("---", "+++")):
+            continue
+        if line.startswith("@@"):
+            rows.append({"type": "hunk", "text": line})
+        elif line.startswith("+"):
+            rows.append({"type": "added", "text": redaction.redact_text(line[1:])})
+        elif line.startswith("-"):
+            rows.append({"type": "removed", "text": redaction.redact_text(line[1:])})
+        else:
+            rows.append({"type": "context", "text": redaction.redact_text(line[1:])})
+    return rows
+
+
+@router.get("/diff")
+def file_diff(repository_id: str = Query(...),
+              from_ref: str = Query(...), to_ref: str = Query(...),
+              path: str = Query(...),
+              org: models.Organization = Depends(auth.require_org),
+              session: Session = Depends(get_session)):
+    base = _latest_file(session, org.id, repository_id, path, from_ref)
+    head = _latest_file(session, org.id, repository_id, path, to_ref)
+    if base is None or head is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "diff impossible: "
+            + ("base snapshot missing" if base is None else "")
+            + ("; " if base is None and head is None else "")
+            + ("head snapshot missing" if head is None else ""))
+    rows = _diff_lines(base.content, head.content, path)
+    return {"data": {"path": path, "from_ref": from_ref, "to_ref": to_ref,
+                     "changed": bool(rows),
+                     "added": sum(1 for row in rows if row["type"] == "added"),
+                     "removed": sum(1 for row in rows if row["type"] == "removed"),
+                     "rows": rows}}
+
+
+@router.get("/pull-requests/{pr_id}/diff")
+def pull_request_diff(pr_id: str,
+                      org: models.Organization = Depends(auth.require_org),
+                      session: Session = Depends(get_session)):
+    """Diff base↔head for every file that carries findings in this PR.
+
+    A missing base snapshot is reported as `missing_base` — never presented
+    as "no changes", because absence of a baseline is not evidence of safety.
+    """
+    pr = session.get(models.PullRequest, pr_id)
+    if pr is None or pr.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "pull request not found")
+    links = session.query(models.PrFinding).filter_by(pr_id=pr.id).all()
+    paths = sorted({link.file_path for link in links if link.file_path})
+    files = []
+    for path in paths:
+        entry = {"path": path}
+        if not (pr.repository_id and pr.base_branch and (pr.branch or pr.head_sha)):
+            entry.update({"status": "missing_refs",
+                          "detail": "repository, base branch and head ref are required"})
+            files.append(entry)
+            continue
+        base = _latest_file(session, org.id, pr.repository_id, path, pr.base_branch)
+        head = _latest_file(session, org.id, pr.repository_id, path,
+                            pr.branch or pr.head_sha)
+        if base is None or head is None:
+            entry.update({"status": "missing_base" if base is None else "missing_head",
+                          "detail": "no source snapshot indexed for that ref"})
+        else:
+            rows = _diff_lines(base.content, head.content, path)
+            entry.update({"status": "diff", "changed": bool(rows),
+                          "added": sum(1 for row in rows if row["type"] == "added"),
+                          "removed": sum(1 for row in rows if row["type"] == "removed"),
+                          "rows": rows})
+        files.append(entry)
+    return {"data": {"pull_request": _pr_data(session, pr), "files": files}}

@@ -6,6 +6,7 @@ export default function CodeReview({ projects }) {
   const [selected, setSelected] = useState(null)
   const [detail, setDetail] = useState(null)
   const [context, setContext] = useState({})
+  const [diffs, setDiffs] = useState({})
   const [error, setError] = useState('')
   const [form, setForm] = useState({ number: '', title: '', project: '', version: '' })
 
@@ -35,6 +36,18 @@ export default function CodeReview({ projects }) {
     try {
       const r = await api.get(`/api/v1/code/findings/${finding.finding_id}/context?radius=4`)
       setContext((c) => ({ ...c, [finding.finding_id]: r.data }))
+    } catch (e) { setError(String(e.message || e)) }
+  }
+
+  async function showDiff(path) {
+    if (diffs[path]) {
+      setDiffs((d) => { const next = { ...d }; delete next[path]; return next })
+      return
+    }
+    try {
+      const r = await api.get(`/api/v1/code/pull-requests/${selected}/diff`)
+      const file = (r.data.files || []).find((f) => f.path === path)
+      setDiffs((d) => ({ ...d, [path]: file }))
     } catch (e) { setError(String(e.message || e)) }
   }
 
@@ -89,7 +102,31 @@ export default function CodeReview({ projects }) {
                     {detail.files.length === 0 && <p className="muted">No findings linked to this PR yet.</p>}
                     {detail.files.map((file) => (
                       <div key={file.path}>
-                        <h3 className="section">{file.path}</h3>
+                        <h3 className="section">{file.path}{' '}
+                          <button className="mini" onClick={() => showDiff(file.path)}>
+                            {diffs[file.path] ? 'hide diff' : 'show diff'}
+                          </button>
+                        </h3>
+                        {diffs[file.path] && (
+                          diffs[file.path].status === 'diff' ? (
+                            <pre className="code">
+                              {diffs[file.path].rows.map((row, index) => (
+                                <div key={index}
+                                  className={row.type === 'added' ? 'code-add'
+                                    : row.type === 'removed' ? 'code-del' : ''}>
+                                  <span className="code-n">
+                                    {row.type === 'added' ? '+' : row.type === 'removed' ? '-' : ' '}
+                                  </span>{row.text}
+                                </div>
+                              ))}
+                            </pre>
+                          ) : (
+                            <p className="muted">
+                              diff unavailable: {diffs[file.path].status} —
+                              {diffs[file.path].detail}
+                            </p>
+                          )
+                        )}
                         {file.findings.map((finding) => (
                           <div key={finding.finding_id} className="occ-row">
                             <span className={`sev sev-${(finding.severity || 'low').toLowerCase()}`}>

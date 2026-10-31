@@ -26,7 +26,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | Quality Gates / policies engine | COMPLETE (v1) | BL-055: severity/KEV/license rules, org+project scopes, deterministic + audited |
 | SAST (OpenGrep) execution | COMPLETE (CLI) | engine pinned |
 | SARIF ingest + version diff | COMPLETE | BL-040b part 1; inline viewer/PR status pending |
-| PR review / inline code view | PARTIAL | BL-040b part 2: source snapshots, context viewer with redaction, new/existing classification, gate verdict, comment payload; no blob diff or SCM publishing |
+| PR review / inline code view | PARTIAL | source snapshots, context + base↔head diff viewer with redaction, new/existing classification, gate verdict, comment payload; no SCM publishing/annotations |
 | Pentest management | PARTIAL | BL-070 engagements/tests/findings/evidence/retest/report live; no PDF template/Jira link/regression conversion |
 | Jira bidirectional | PARTIAL | BL-050 links/outbox/webhook/reconcile live vs stub; no attachment sync or field mapping UI |
 | Regression suites | PARTIAL | BL-080 HTTP checks, authorized replay, redaction, reintroduction detection; no scheduler/JSON-path assertions |

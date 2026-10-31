@@ -149,3 +149,7 @@ button.mini { padding: 0 6px; font-size: 11px; line-height: 1.6; }
 .metric.good .metric-value { color: #4ade80; }
 tr.clickable { cursor: pointer; }
 tr.clickable:hover { background: #111827; }
+
+.code-add { background: #10261a; }
+.code-del { background: #2a1414; }
+pre.code { max-height: 420px; overflow: auto; }
