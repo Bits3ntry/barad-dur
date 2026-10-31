@@ -153,3 +153,6 @@ tr.clickable:hover { background: #111827; }
 .code-add { background: #10261a; }
 .code-del { background: #2a1414; }
 pre.code { max-height: 420px; overflow: auto; }
+
+.panel { border: 1px solid #2a2f3a; border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+.panel .bar { margin-bottom: 6px; }

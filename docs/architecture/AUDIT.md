@@ -2,6 +2,21 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Named SAST baselines with approval
+
+| Item | Result | Evidence |
+|---|---|---|
+| Baseline snapshot | PASS live | `POST /api/v1/code/baselines` snapshots the fingerprints of a PR (or a project's code-weakness findings) under a name and stays `draft`. Live: `legacy-sqli-2026-10` captured 1 entry (`CRITICAL: 1`). |
+| Approval gate | PASS live | `approve` refuses self-approval with 409 ("another reviewer must approve") and refuses a non-draft baseline; a second actor approves. Live: self-approve → 409, `reviewer` → 200. Reject is available for drafts. |
+| Classification effect | PASS live | Only an **approved** baseline changes classification: a new PR containing the same rule+path reports `baselined: 1, new: 0`; a draft baseline leaves findings `new` (pinned by test). Every decision is audited (`code.baseline_created/approved/rejected`). |
+| Tenant + naming | PASS | Names are unique per org, foreign orgs see an empty list and cannot approve, repositories/projects/PRs are validated against the caller's org. |
+| Console | PASS | The code-review tab lists baselines with status/entries/approver, offers snapshot-from-PR, approve and reject, and shows `new / existing / baselined` per PR; the API answered 200 through the console proxy. |
+| Tests | PASS | 4 in `test_code_baselines.py`; suite total 173. |
+
+Known limits: baselines are per repository (or project) and immutable once
+decided — superseding a baseline means creating a new named one; there is no
+expiry on an approved baseline.
+
 ## 2026-10-31 Shauron sandbox image (real scan, no network)
 
 | Item | Result | Evidence |

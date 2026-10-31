@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from backend.app import auth, gates, incidents, models, redaction
 from backend.app.db import get_session
+from backend.app.routers.code_baselines import approved_fingerprints
 from backend.app.routers.identity import _audit as _audit_log
 from backend.app.routers.sarif import _location, _severity_of
 
@@ -293,7 +294,10 @@ def ingest_pr_sarif(pr_id: str, payload: PrSarifIn = None,
         if isinstance(rule, dict) and rule.get("id"):
             rules_index[rule["id"]] = rule
     now = models.utcnow()
-    counters = {"received": 0, "new": 0, "existing": 0, "skipped": 0}
+    counters = {"received": 0, "new": 0, "existing": 0, "skipped": 0,
+                "baselined": 0}
+    baselined = approved_fingerprints(session, org.id, pr.repository_id,
+                                      project.id)
     items = []
     for result in run.get("results") or []:
         if not isinstance(result, dict):
@@ -309,7 +313,10 @@ def ingest_pr_sarif(pr_id: str, payload: PrSarifIn = None,
             "code-weakness", org.id, project.id, rule_id, path)
         finding = (session.query(models.Finding)
                    .filter_by(org_id=org.id, fingerprint=fingerprint).one_or_none())
-        is_new = finding is None
+        # A fingerprint accepted in an approved baseline is pre-existing by
+        # definition; a draft baseline never silences anything.
+        covered = fingerprint in baselined
+        is_new = finding is None and not covered
         if finding is None:
             finding = models.Finding(
                 org_id=org.id, project_id=project.id, kind="code-weakness",
@@ -324,7 +331,12 @@ def ingest_pr_sarif(pr_id: str, payload: PrSarifIn = None,
             session.flush()
         else:
             finding.last_seen_at = now
-        classification = "new" if is_new else "existing"
+        if is_new:
+            classification = "new"
+        elif covered:
+            classification = "baselined"
+        else:
+            classification = "existing"
         counters[classification] += 1
         link = (session.query(models.PrFinding)
                 .filter_by(pr_id=pr.id, finding_id=finding.id).one_or_none())

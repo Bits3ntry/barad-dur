@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -1085,6 +1086,35 @@ class PullRequest(Base, TimestampMixin):
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SastBaseline(Base):
+    """A named set of accepted SAST fingerprints; inert until approved."""
+
+    __tablename__ = "sast_baselines"
+    __table_args__ = (UniqueConstraint("org_id", "name",
+                                       name="uq_sast_baseline_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(128))
+    repository_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("repositories.id"), nullable=True)
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="draft")
+    entries: Mapped[list] = mapped_column(JSON, default=list)
+    counters: Mapped[dict] = mapped_column(JSON, default=dict)
+    source_pr_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(255))
+    approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
+                                                 default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
+                                                 default=utcnow)
 
 
 class PrFinding(Base):

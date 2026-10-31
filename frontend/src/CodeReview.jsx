@@ -9,14 +9,42 @@ export default function CodeReview({ projects }) {
   const [diffs, setDiffs] = useState({})
   const [error, setError] = useState('')
   const [form, setForm] = useState({ number: '', title: '', project: '', version: '' })
+  const [baselines, setBaselines] = useState([])
+  const [reviewer, setReviewer] = useState('')
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load(); loadBaselines() }, [])
 
   function load() {
     setError('')
     api.get('/api/v1/code/pull-requests')
       .then((r) => setPrs(r.data))
       .catch((e) => setError(String(e.message || e)))
+  }
+
+  function loadBaselines() {
+    api.get('/api/v1/code/baselines')
+      .then((r) => setBaselines(r.data))
+      .catch((e) => setError(String(e.message || e)))
+  }
+
+  async function snapshotBaseline(pr) {
+    const name = window.prompt('baseline name', `baseline-${pr.number}`)
+    if (!name) return
+    try {
+      await api.post('/api/v1/code/baselines', {
+        name, repository_id: pr.repository_id, from_pr_id: pr.id, actor: 'console',
+      })
+      loadBaselines()
+    } catch (e) { setError(String(e.message || e)) }
+  }
+
+  async function decideBaseline(baseline, action) {
+    const who = reviewer || window.prompt('reviewer identity', '') || ''
+    if (!who) return
+    try {
+      await api.post(`/api/v1/code/baselines/${baseline.id}/${action}`, { actor: who })
+      loadBaselines()
+    } catch (e) { setError(String(e.message || e)) }
   }
 
   async function open(pr) {
@@ -86,6 +114,32 @@ export default function CodeReview({ projects }) {
         <button onClick={load}>refresh</button>
       </div>
       {error && <p className="error">{error}</p>}
+      <div className="panel">
+        <div className="bar">
+          <span className="count">{baselines.length} SAST baselines</span>
+          <input placeholder="reviewer" value={reviewer}
+            onChange={(e) => setReviewer(e.target.value)} />
+          <button className="mini" onClick={loadBaselines}>refresh</button>
+        </div>
+        {baselines.length === 0 && (
+          <p className="muted">No baselines yet. Snapshot a reviewed PR to accept its
+            current findings; approval needs a second person.</p>
+        )}
+        {baselines.map((baseline) => (
+          <div key={baseline.id} className="muted">
+            <strong>{baseline.name}</strong>{' '}
+            <span className={`status st-${baseline.status}`}>{baseline.status}</span>{' '}
+            {baseline.counters?.entries || 0} entries
+            {baseline.approved_by ? ` · approved by ${baseline.approved_by}` : ''}{' '}
+            {baseline.status === 'draft' && (
+              <>
+                <button className="mini" onClick={() => decideBaseline(baseline, 'approve')}>approve</button>{' '}
+                <button className="mini" onClick={() => decideBaseline(baseline, 'reject')}>reject</button>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
       <table>
         <thead><tr><th>PR</th><th>title</th><th>gate</th><th>new / existing</th><th>status</th><th></th></tr></thead>
         <tbody>
@@ -97,14 +151,15 @@ export default function CodeReview({ projects }) {
                 <td>{pr.gate_verdict
                   ? <span className={`status st-${pr.gate_verdict}`}>{pr.gate_verdict}</span>
                   : <span className="muted">not scanned</span>}</td>
-                <td>{pr.counts?.new || 0} / {pr.counts?.existing || 0}</td>
+                <td>{pr.counts?.new || 0} new / {pr.counts?.existing || 0} existing / {pr.counts?.baselined || 0} baselined</td>
                 <td><span className={`status st-${pr.status}`}>{pr.status}</span></td>
                 <td>
                   <button className="mini" onClick={() => open(pr)}>review</button>{' '}
                   {pr.status === 'open' && <button className="mini" onClick={() => setStatus(pr, 'merged')}>merge</button>}{' '}
                   {pr.gate_verdict && (
                     <button className="mini" onClick={() => publish(pr)}>publish</button>
-                  )}
+                  )}{' '}
+                  <button className="mini" onClick={() => snapshotBaseline(pr)}>baseline</button>
                 </td>
               </tr>
               {selected === pr.id && detail && (
