@@ -699,3 +699,60 @@ class Occurrence(Base):
     evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── BL-060: license management ───────────────
+
+class ComponentLicense(Base):
+    """One declared license of a component (multi-license aware; the
+    component's single `license` column stays the summary)."""
+
+    __tablename__ = "component_licenses"
+    __table_args__ = (
+        UniqueConstraint("component_id", "license_id", name="uq_component_license"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    component_id: Mapped[str] = mapped_column(String(36), ForeignKey("components.id"),
+                                              index=True)
+    license_id: Mapped[str] = mapped_column(String(255), index=True)
+    source: Mapped[str] = mapped_column(String(32), default="sbom")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LicensePolicy(Base, TimestampMixin):
+    """org- or project-scoped allow/deny lists with an explicit unknown action."""
+
+    __tablename__ = "license_policies"
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_license_policies_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(255))
+    scope_type: Mapped[str] = mapped_column(String(16), default="org")
+    scope_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    allow_list: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deny_list: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unknown_action: Mapped[str] = mapped_column(String(16), default="warn")
+    status: Mapped[str] = mapped_column(String(32), default="active")
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LicenseException(Base, TimestampMixin):
+    """Explicit, expiring, audited waiver for one (component identity, license)."""
+
+    __tablename__ = "license_exceptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    component_identity: Mapped[str] = mapped_column(String(1100), index=True)
+    license_id: Mapped[str] = mapped_column(String(255))
+    reason: Mapped[str] = mapped_column(Text)
+    approved_by: Mapped[str] = mapped_column(String(255))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

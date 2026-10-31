@@ -46,19 +46,34 @@ def _property_strings(component: dict) -> str | None:
     return None
 
 
+def _licenses_of(component: dict) -> list[str]:
+    """Every declared license (SPDX id/name or expression), deduped, stable."""
+    found: list[str] = []
+    for entry in component.get("licenses") or []:
+        if not isinstance(entry, dict):
+            continue
+        if isinstance(entry.get("expression"), str) and entry["expression"]:
+            found.append(entry["expression"].strip())
+            continue
+        license_block = entry.get("license")
+        if isinstance(license_block, dict):
+            for key in ("id", "name"):
+                value = license_block.get(key)
+                if isinstance(value, str) and value.strip():
+                    found.append(value.strip())
+                    break
+    seen: set[str] = set()
+    unique = []
+    for item in found:
+        if item not in seen:
+            seen.add(item)
+            unique.append(item)
+    return unique
+
+
 def _license_of(component: dict) -> str | None:
-    licenses = component.get("licenses") or []
-    for entry in licenses:
-        if isinstance(entry, dict):
-            if isinstance(entry.get("expression"), str) and entry["expression"]:
-                return entry["expression"]
-            license_block = entry.get("license")
-            if isinstance(license_block, dict):
-                for key in ("id", "name"):
-                    value = license_block.get(key)
-                    if isinstance(value, str) and value:
-                        return value
-    return None
+    licenses = _licenses_of(component)
+    return licenses[0] if licenses else None
 
 
 def parse(document: dict) -> dict:
@@ -122,6 +137,7 @@ def parse(document: dict) -> dict:
             "name": name,
             "version": entry.get("version") if isinstance(entry.get("version"), str) else None,
             "license": _license_of(entry),
+            "licenses": _licenses_of(entry),
             "manifest_path": _property_strings(entry),
             "is_direct": is_direct,
             "parent_purl": parent_purl,
@@ -186,6 +202,16 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
                 component.manifest_path = row["manifest_path"]
                 component.updated_at = models.utcnow()
                 counters["components_updated"] += 1
+        # BL-060: full license set (idempotent rows; never duplicated on
+        # re-ingest thanks to uq(component, license)).
+        for license_id in row.get("licenses") or []:
+            exists = (session.query(models.ComponentLicense)
+                      .filter_by(component_id=component.id, license_id=license_id)
+                      .one_or_none())
+            if exists is None:
+                session.add(models.ComponentLicense(
+                    org_id=org_id, component_id=component.id,
+                    license_id=license_id, created_at=models.utcnow()))
         link = session.query(models.VersionComponent).filter_by(
             project_version_id=project_version.id, component_id=component.id).one_or_none()
         if link is None:
