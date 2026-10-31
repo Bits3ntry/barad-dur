@@ -77,6 +77,26 @@ API reports `jira_configured: false` — it never fakes a sync. A Jira issue
 reaching Done flips the link to `verification_required`; findings still need
 their own verification.
 
+## Users and roles
+
+`BOOTSTRAP_TOKEN` (in `.env`) enables first-run owner creation; unset it after
+onboarding if the API is reachable by anyone else.
+
+```sh
+curl -X POST http://127.0.0.1:8090/api/v1/auth/bootstrap \
+  -H "X-Bootstrap-Token: $BOOTSTRAP_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"org_slug":"poc","email":"you@company.dev","password":"********"}'
+```
+
+Roles: `owner` (everything), `admin` (identity, grants, policies, orchestration),
+`analyst` (operational writes), `viewer` (read-only). API keys remain the
+service identity with full org rights. Sessions last `SESSION_TTL_HOURS`
+(default 12) and are revoked on logout, password reset or user disable.
+
+OIDC is available when `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`,
+`OIDC_REDIRECT_URI` are set **and** the optional `cryptography` extra is
+installed; otherwise `/auth/oidc/*` answers 503 with the reason.
+
 ## Secrets
 
 All secrets live in the deployment `.env` (gitignored, chmod 600):

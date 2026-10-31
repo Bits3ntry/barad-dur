@@ -78,7 +78,7 @@ def capabilities(org: models.Organization = Depends(auth.require_org)):
 
 @router.post("/grants")
 def create_grant(payload: GrantIn = None,
-                 org: models.Organization = Depends(auth.require_org),
+                 org: models.Organization = Depends(auth.require_admin),
                  session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
@@ -142,7 +142,7 @@ def list_grants(status: str | None = Query(default=None),
 
 @router.post("/grants/{grant_id}/revoke")
 def revoke(grant_id: str, payload: RevokeIn = None,
-           org: models.Organization = Depends(auth.require_org),
+           org: models.Organization = Depends(auth.require_admin),
            session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")

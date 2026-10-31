@@ -6,7 +6,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 
 | Area | Status | Evidence / gap |
 |---|---|---|
-| Org / API keys / members / roles | COMPLETE | `identity.py` + tests; no login UI (API-key plane) |
+| Users / sessions / RBAC | COMPLETE | BL-`auth`: scrypt passwords, opaque sessions, bootstrap, 4 roles enforced in the auth dependency; OIDC guarded behind the optional crypto extra |
 | Multi-tenancy isolation | COMPLETE | every endpoint via `require_org`; isolation tests in bl015/console set |
 | Audit hash chain | COMPLETE | full-ledger verification independent of filters |
 | Projects / versions / components | COMPLETE | migrations 0001–0002; dedupe invariants tested |

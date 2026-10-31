@@ -63,7 +63,7 @@ class ScannerIn(BaseModel):
 
 @router.post("/scanners")
 def register_scanner(payload: ScannerIn = None,
-                     org: models.Organization = Depends(auth.require_org),
+                     org: models.Organization = Depends(auth.require_admin),
                      session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
@@ -108,7 +108,7 @@ class WorkerIn(BaseModel):
 
 @router.post("/workers")
 def register_worker(payload: WorkerIn = None,
-                    org: models.Organization = Depends(auth.require_org),
+                    org: models.Organization = Depends(auth.require_admin),
                     session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")

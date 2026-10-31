@@ -2,6 +2,25 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Users, sessions and RBAC
+
+| Item | Result | Evidence |
+|---|---|---|
+| Password credentials | PASS | stdlib scrypt (n=2^14, r=8, p=1) with per-user salt, constant-time compare, 8-char minimum; no third-party crypto dependency. |
+| Sessions | PASS live | Opaque 32-byte tokens stored only as SHA-256 hashes, 12 h TTL (`SESSION_TTL_HOURS`), logout revokes, disabling a user revokes all their sessions (verified live: `me` 200 → logout → 401). |
+| Bootstrap | PASS live | First owner only: requires `BOOTSTRAP_TOKEN` (unset ⇒ 503 `bootstrap_disabled`) and an org with zero users (second attempt 409). Live: owner created on org `poc`. |
+| Login | PASS live | Email + password (+ optional org slug); every failure returns the same `invalid credentials` (no user enumeration); failed attempts audited as `auth.login_failed`. |
+| RBAC | PASS live | `viewer` read-only (POST → 403 "role 'viewer' is read-only"), `analyst` writes operational data but POST /auth/users and POST /authorization/grants → 403 "requires admin", `admin`/`owner` administer. Enforced in the auth dependency, so no router can forget it; API keys keep full org rights as machine identities. |
+| User admin | PASS live | List/create/patch (role, active/disabled) and password reset (revokes sessions); the last owner cannot be demoted (409). |
+| Console | PASS live | Settings gains sign-in/sign-out and shows the current principal; Members gains an accounts table (role, status, last login, disable) plus the account creation form, above the named-members and audit sections. Fixed a real UX defect found while verifying: the settings panel could only be closed by saving — it now has a close button. |
+| OIDC | PASS (guarded) | Discovery/authorization/token/client-claims implemented with stdlib; RS256 verification needs the optional `cryptography` extra, and without it the endpoints answer 503 `oidc_requires_cryptography_extra` — never an unverified token. Not enabled in this deployment. |
+| Tests | PASS | 5 in `test_auth_users.py` (bootstrap gating, login/me/logout, viewer+analyst RBAC, disable revokes sessions, tenant isolation). Suite total 115. |
+
+Known limits: no password reset email flow or MFA; OIDC is implemented but
+untested against a real IdP (no crypto dependency installed here), so it is
+documented as guarded-not-verified; sessions are bearer tokens in
+localStorage (no httpOnly cookie flow yet).
+
 ## 2026-10-31 Shauron worker (execution path validated with real scans)
 
 | Item | Result | Evidence |

@@ -1,4 +1,4 @@
-const DEFAULTS = { url: '', key: '' }
+const DEFAULTS = { url: '', key: '', token: '' }
 
 function read() {
   try {
@@ -13,15 +13,15 @@ function save(settings) {
 }
 
 async function request(path, options = {}) {
-  const { url, key } = read()
+  const { url, key, token } = read()
   // Empty URL = same-origin: in dev the Vite proxy forwards /api to the
   // platform (no CORS); a full URL addresses a remote deployment directly.
   const base = (url || '').replace(/\/$/, '')
-  if (!key) throw new Error('Set the API key in Settings.')
+  if (!key && !token) throw new Error('Set the API key or sign in from Settings.')
   const response = await fetch(`${base}${path}`, {
     ...options,
     headers: {
-      'X-API-Key': key,
+      ...(token ? { Authorization: `Bearer ${token}` } : { 'X-API-Key': key }),
       ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...(options.headers || {}),
     },
