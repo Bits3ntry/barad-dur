@@ -1178,3 +1178,20 @@ class ScanSchedule(Base, TimestampMixin):
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WorkerToken(Base):
+    """A worker's own credential: only the scan-job endpoints accept it, so a
+    compromised worker cannot read findings, grants or audit history."""
+
+    __tablename__ = "worker_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    worker_id: Mapped[str] = mapped_column(String(36), ForeignKey("workers.id"))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -2,6 +2,21 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Worker tokens (scoped machine identities)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Issuance | PASS live | `POST /orchestration/workers/{id}/tokens` (admin) returns the raw token exactly once; listings show metadata only (`last_used_at`, `expires_at`, `revoked_at`), never the secret. Live: 43-char token issued for `scoped-gate`. |
+| Narrow scope | PASS live | A worker credential authenticates only `POST /jobs/claim`, `POST /jobs/{id}/start`, `POST /jobs/{id}/result` and its own heartbeat; `/findings`, `/audit`, `/authorization/grants`, `/auth/users` → **403 "worker tokens may only claim, start and report their own jobs"** (verified live). It cannot mint more tokens either. |
+| Identity binding | PASS live | A token issued for worker A cannot claim or report for worker B → 403 `worker token does not belong to that worker` (unit test + live). |
+| Revocation & expiry | PASS live | Revoked token → 401 `unknown worker token` immediately; optional `expires_hours` accepted at issuance. |
+| CLI | PASS | `barad worker --worker-token` sends `X-Worker-Token` instead of the org API key, so an edge machine no longer needs full org rights. |
+| Tests | PASS | 5 in `test_worker_tokens.py` (issue+use, read denial, cross-worker denial, revocation, tenant isolation). Suite total 138. |
+
+Known limits: tokens carry no per-scanner or per-target scope beyond the
+worker identity itself (the job targets are still authorized by BL-015), and
+rotation is manual (issue + revoke).
+
 ## 2026-10-31 SCM publishing (GitHub)
 
 | Item | Result | Evidence |

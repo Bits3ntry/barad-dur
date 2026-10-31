@@ -69,8 +69,14 @@ for its next interval.
 ## Shauron worker
 
 ```sh
-barad worker --platform-url http://127.0.0.1:8090 --api-key "$KEY" \
+# preferred: a scoped worker token (cannot read findings, grants or audit)
+barad worker --platform-url http://127.0.0.1:8090 --worker-token "$WORKER_TOKEN" \
   --name worker-1 --capability vulnerability_analysis --limit 1
+
+# mint one (admin) — raw value returned once
+curl -X POST http://127.0.0.1:8090/api/v1/orchestration/workers/$WORKER_ID/tokens \
+  -H "X-API-Key: $ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"label":"edge-1","expires_hours":720,"actor":"ops"}'
 ```
 
 Queue jobs from the console (orchestration tab) or the API with a profile

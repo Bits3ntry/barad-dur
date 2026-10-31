@@ -27,12 +27,16 @@ class WorkerError(RuntimeError):
     pass
 
 
-def _call(platform_url, api_key, method, path, payload=None, timeout=30):
+def _call(platform_url, api_key, method, path, payload=None, timeout=30,
+          worker_token=None):
     url = platform_url.rstrip("/") + path
     data = json.dumps(payload).encode() if payload is not None else None
     request = urllib.request.Request(url, data=data, method=method)
     request.add_header("Accept", "application/json")
-    request.add_header("X-API-Key", api_key)
+    if worker_token:
+        request.add_header("X-Worker-Token", worker_token)
+    else:
+        request.add_header("X-API-Key", api_key)
     if data is not None:
         request.add_header("Content-Type", "application/json")
     try:
@@ -46,40 +50,43 @@ def _call(platform_url, api_key, method, path, payload=None, timeout=30):
         raise WorkerError(f"{method} {path} -> unreachable: {exc.reason}") from exc
 
 
-def register(platform_url, api_key, name, capabilities, max_concurrent=1):
+def register(platform_url, api_key, name, capabilities, max_concurrent=1,
+             worker_token=None):
     status, body = _call(platform_url, api_key, "POST", "/api/v1/orchestration/workers", {
         "name": name, "capabilities": capabilities,
         "labels": {"host": name}, "max_concurrent": max_concurrent,
-        "actor": name})
+        "actor": name}, worker_token=worker_token)
     return body["data"]
 
 
-def heartbeat(platform_url, api_key, worker_id):
+def heartbeat(platform_url, api_key, worker_id, worker_token=None):
     _call(platform_url, api_key, "POST",
-          f"/api/v1/orchestration/workers/{worker_id}/heartbeat")
+          f"/api/v1/orchestration/workers/{worker_id}/heartbeat",
+          worker_token=worker_token)
 
 
-def claim(platform_url, api_key, worker_id):
+def claim(platform_url, api_key, worker_id, worker_token=None):
     _call_raw = _call(platform_url, api_key, "POST",
                       "/api/v1/orchestration/jobs/claim",
-                      {"worker_id": worker_id, "actor": worker_id})
+                      {"worker_id": worker_id, "actor": worker_id},
+                      worker_token=worker_token)
     return _call_raw[1]
 
 
-def start(platform_url, api_key, job_id, worker_id):
+def start(platform_url, api_key, job_id, worker_id, worker_token=None):
     _, body = _call(platform_url, api_key, "POST",
                     f"/api/v1/orchestration/jobs/{job_id}/start",
-                    {"actor": worker_id})
+                    {"actor": worker_id}, worker_token=worker_token)
     return body
 
 
 def finish(platform_url, api_key, job_id, worker_id, outcome, summary,
-           artifacts, error=None):
+           artifacts, error=None, worker_token=None):
     payload = {"actor": worker_id, "outcome": outcome, "summary": summary,
                "artifacts": artifacts, "error": error}
     _, body = _call(platform_url, api_key, "POST",
                     f"/api/v1/orchestration/jobs/{job_id}/result", payload,
-                    timeout=60)
+                    timeout=60, worker_token=worker_token)
     return body
 
 
@@ -106,7 +113,10 @@ def _upload_sbom(platform_url, api_key, project, version, path: Path):
     url = (f"{platform_url.rstrip('/')}/api/v1/sbom?project={project}"
            f"&version={version}")
     request = urllib.request.Request(url, data=data, method="POST")
-    request.add_header("X-API-Key", api_key)
+    if worker_token:
+        request.add_header("X-Worker-Token", worker_token)
+    else:
+        request.add_header("X-API-Key", api_key)
     request.add_header("Content-Type", "application/octet-stream")
     with urllib.request.urlopen(request, timeout=60) as response:
         return json.loads(response.read().decode() or "{}")
@@ -169,7 +179,10 @@ def _post_sarif(platform_url, api_key, project, version, run):
     url = (f"{platform_url.rstrip('/')}/api/v1/sarif?project={project}"
            f"&version={version}")
     request = urllib.request.Request(url, data=payload, method="POST")
-    request.add_header("X-API-Key", api_key)
+    if worker_token:
+        request.add_header("X-Worker-Token", worker_token)
+    else:
+        request.add_header("X-API-Key", api_key)
     request.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(request, timeout=60) as response:
         return json.loads(response.read().decode() or "{}")
@@ -207,7 +220,7 @@ def _counts_from(artifacts: dict) -> dict:
     return {}
 
 
-def execute_job(platform_url, api_key, worker_id, job) -> dict:
+def execute_job(platform_url, api_key, worker_id, job, worker_token=None) -> dict:
     """Run one claimed job; returns the finish payload outcome."""
     profile = job.get("profile") or {}
     target_path = Path(profile.get("target_path") or "").expanduser()
@@ -271,7 +284,8 @@ def execute_job(platform_url, api_key, worker_id, job) -> dict:
 
 
 def serve(platform_url, api_key, name="shauron-worker", capabilities=None,
-          max_concurrent=1, once=False, poll=DEFAULT_POLL, limit=None):
+          max_concurrent=1, once=False, poll=DEFAULT_POLL, limit=None,
+          worker_token=None):
     """Register, then poll for jobs until stopped (or `limit` jobs)."""
     capabilities = capabilities or ["vulnerability_analysis"]
     worker = register(platform_url, api_key, name, capabilities, max_concurrent)
@@ -280,9 +294,9 @@ def serve(platform_url, api_key, name="shauron-worker", capabilities=None,
     last_heartbeat = time.time()
     while True:
         if time.time() - last_heartbeat > HEARTBEAT_EVERY:
-            heartbeat(platform_url, api_key, worker_id)
+            heartbeat(platform_url, api_key, worker_id, worker_token)
             last_heartbeat = time.time()
-        body = claim(platform_url, api_key, worker_id)
+        body = claim(platform_url, api_key, worker_id, worker_token)
         job = body.get("data")
         if not job:
             if once or (limit is not None and handled >= limit):
@@ -290,11 +304,11 @@ def serve(platform_url, api_key, name="shauron-worker", capabilities=None,
                         "rejected": body.get("rejected")}
             time.sleep(poll)
             continue
-        started = start(platform_url, api_key, job["id"], worker_id)
+        started = start(platform_url, api_key, job["id"], worker_id, worker_token)
         if started.get("cancelled"):
             handled += 1
             continue
-        execute_job(platform_url, api_key, worker_id, job)
+        execute_job(platform_url, api_key, worker_id, job, worker_token)
         handled += 1
         if once or (limit is not None and handled >= limit):
             return {"worker": worker_id, "handled": handled}

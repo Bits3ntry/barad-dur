@@ -17,7 +17,7 @@ Rules pinned here:
 import datetime
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,17 @@ HEARTBEAT_STALE_SECONDS = 120
 
 def _aware(value: datetime.datetime) -> datetime.datetime:
     return value if value.tzinfo else value.replace(tzinfo=datetime.timezone.utc)
+
+
+
+def _assert_worker_identity(session, worker_token: str, worker_id: str) -> None:
+    """A worker credential may only act for the worker it was issued to."""
+    if not worker_token:
+        return
+    principal = auth.resolve_principal(session, worker_token=worker_token)
+    if principal.get("worker_id") != worker_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "worker token does not belong to that worker")
 
 
 def _job_data(row: models.ScanJob) -> dict:
@@ -262,10 +273,12 @@ class ClaimIn(BaseModel):
 @router.post("/jobs/claim")
 def claim_job(payload: ClaimIn = None,
               org: models.Organization = Depends(auth.require_org),
-              session: Session = Depends(get_session)):
+              session: Session = Depends(get_session),
+              x_worker_token: str = Header(default="", alias="X-Worker-Token")):
     """Lease the next authorized job for a worker, re-validating authorization."""
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    _assert_worker_identity(session, x_worker_token, payload.worker_id)
     worker = session.get(models.Worker, payload.worker_id)
     if worker is None or worker.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "worker not found")
@@ -350,7 +363,8 @@ class ProgressIn(BaseModel):
 @router.post("/jobs/{job_id}/start")
 def start_job(job_id: str, payload: ProgressIn = None,
               org: models.Organization = Depends(auth.require_org),
-              session: Session = Depends(get_session)):
+              session: Session = Depends(get_session),
+              x_worker_token: str = Header(default="", alias="X-Worker-Token")):
     """Worker acknowledges the lease; also the cancellation checkpoint."""
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
@@ -377,7 +391,8 @@ class ResultIn(BaseModel):
 @router.post("/jobs/{job_id}/result")
 def submit_result(job_id: str, payload: ResultIn = None,
                   org: models.Organization = Depends(auth.require_org),
-                  session: Session = Depends(get_session)):
+                  session: Session = Depends(get_session),
+                  x_worker_token: str = Header(default="", alias="X-Worker-Token")):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
     if payload.outcome not in {"succeeded", "failed"}:
@@ -474,3 +489,82 @@ def list_artifacts(job_id: str, org: models.Organization = Depends(auth.require_
     return {"data": [{"id": a.id, "kind": a.kind, "content": a.content,
                       "created_at": a.created_at.isoformat()} for a in rows],
             "total": len(rows)}
+
+
+class WorkerTokenIn(BaseModel):
+    label: str | None = None
+    expires_hours: int | None = Field(default=None, ge=1, le=8760)
+    actor: str = Field(min_length=2, max_length=255)
+
+
+def _token_data(row: models.WorkerToken) -> dict:
+    return {"id": row.id, "worker_id": row.worker_id, "label": row.label,
+            "created_at": row.created_at.isoformat(),
+            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
+            "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None}
+
+
+@router.post("/workers/{worker_id}/tokens")
+def issue_worker_token(worker_id: str, payload: WorkerTokenIn = None,
+                       org: models.Organization = Depends(auth.require_admin),
+                       session: Session = Depends(get_session)):
+    """Mint a scoped credential; the raw value is returned exactly once."""
+    import datetime as _dt
+    import hashlib
+    import secrets as _secrets
+
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    worker = session.get(models.Worker, worker_id)
+    if worker is None or worker.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "worker not found")
+    raw = _secrets.token_urlsafe(32)
+    now = models.utcnow()
+    row = models.WorkerToken(
+        org_id=org.id, worker_id=worker.id,
+        token_hash=hashlib.sha256(raw.encode()).hexdigest(),
+        label=(payload.label or "worker")[:128], created_at=now,
+        expires_at=(now + _dt.timedelta(hours=payload.expires_hours)
+                    if payload.expires_hours else None))
+    session.add(row)
+    session.flush()
+    _audit_log(session, org.id, payload.actor, "orchestration.worker_token_issued",
+               "worker", worker.id, row.label or "")
+    session.commit()
+    return {"data": {**_token_data(row), "token": raw}}
+
+
+@router.get("/workers/{worker_id}/tokens")
+def list_worker_tokens(worker_id: str,
+                       org: models.Organization = Depends(auth.require_admin),
+                       session: Session = Depends(get_session)):
+    worker = session.get(models.Worker, worker_id)
+    if worker is None or worker.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "worker not found")
+    rows = (session.query(models.WorkerToken).filter_by(worker_id=worker.id)
+            .order_by(models.WorkerToken.created_at.desc()).all())
+    return {"data": [_token_data(r) for r in rows], "total": len(rows)}
+
+
+class TokenRevokeIn(BaseModel):
+    actor: str = Field(min_length=2, max_length=255)
+    reason: str | None = None
+
+
+@router.post("/worker-tokens/{token_id}/revoke")
+def revoke_worker_token(token_id: str, payload: TokenRevokeIn = None,
+                        org: models.Organization = Depends(auth.require_admin),
+                        session: Session = Depends(get_session)):
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    row = session.get(models.WorkerToken, token_id)
+    if row is None or row.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "token not found")
+    if row.revoked_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "already revoked")
+    row.revoked_at = models.utcnow()
+    _audit_log(session, org.id, payload.actor, "orchestration.worker_token_revoked",
+               "worker", row.worker_id, (payload.reason or "")[:200])
+    session.commit()
+    return {"data": _token_data(row)}

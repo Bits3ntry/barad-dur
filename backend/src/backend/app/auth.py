@@ -28,6 +28,25 @@ _SESSION_INVALID = HTTPException(status.HTTP_401_UNAUTHORIZED,
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 ROLE_RANK = {"viewer": 0, "analyst": 1, "admin": 2, "owner": 3}
 
+# A worker credential is deliberately narrow: it can only drive its own jobs.
+WORKER_ALLOWED_PATHS = (
+    "/api/v1/orchestration/jobs/claim",
+    "/api/v1/orchestration/jobs/",
+    "/api/v1/orchestration/workers/",
+)
+
+
+def _worker_path_allowed(path: str, method: str) -> bool:
+    if path == "/api/v1/orchestration/jobs/claim":
+        return method == "POST"
+    if path.startswith("/api/v1/orchestration/jobs/") and path.endswith(
+            ("/start", "/result")):
+        return method == "POST"
+    if path.startswith("/api/v1/orchestration/workers/") and path.endswith(
+            "/heartbeat"):
+        return method == "POST"
+    return False
+
 
 def key_hash(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -64,8 +83,23 @@ def _session_principal(session: Session, raw_token: str) -> dict | None:
 
 
 def resolve_principal(session: Session, x_api_key: str = "",
-                      authorization: str = "") -> dict:
+                      authorization: str = "", worker_token: str = "") -> dict:
     """Resolve the caller to {org_id, role, kind}. Raises 401 otherwise."""
+    if worker_token:
+        row = (session.query(models.WorkerToken)
+               .filter_by(token_hash=key_hash(worker_token)).one_or_none())
+        if row is None or row.revoked_at is not None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                                "unknown worker token")
+        from backend.app import auth_local
+
+        if row.expires_at is not None and \
+                auth_local.ensure_aware(row.expires_at) <= models.utcnow():
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "worker token expired")
+        row.last_used_at = models.utcnow()
+        session.commit()
+        return {"org_id": row.org_id, "role": "worker", "kind": "worker",
+                "user_id": None, "worker_id": row.worker_id}
     if authorization.lower().startswith("bearer "):
         principal = _session_principal(session, authorization[7:].strip())
         if principal is None:
@@ -83,6 +117,12 @@ def resolve_principal(session: Session, x_api_key: str = "",
 
 def _enforce(principal: dict, request: Request, minimum: str | None):
     if principal["kind"] == "api_key":
+        return
+    if principal["kind"] == "worker":
+        if not _worker_path_allowed(request.url.path, request.method):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "worker tokens may only claim, start and report their own jobs")
         return
     role = principal["role"]
     if minimum is None and request.method not in SAFE_METHODS and role == "viewer":
@@ -106,9 +146,10 @@ def require_org(
     session: Session = Depends(get_session),
     x_api_key: str = Header(default="", alias="X-API-Key"),
     authorization: str = Header(default=""),
+    x_worker_token: str = Header(default="", alias="X-Worker-Token"),
 ) -> models.Organization:
     """Resolve the caller's organization, enforcing the viewer write rule."""
-    principal = resolve_principal(session, x_api_key, authorization)
+    principal = resolve_principal(session, x_api_key, authorization, x_worker_token)
     _enforce(principal, request, None)
     return _organization_from(principal, session)
 
@@ -118,8 +159,9 @@ def require_writer(
     session: Session = Depends(get_session),
     x_api_key: str = Header(default="", alias="X-API-Key"),
     authorization: str = Header(default=""),
+    x_worker_token: str = Header(default="", alias="X-Worker-Token"),
 ) -> models.Organization:
-    principal = resolve_principal(session, x_api_key, authorization)
+    principal = resolve_principal(session, x_api_key, authorization, x_worker_token)
     _enforce(principal, request, "analyst")
     return _organization_from(principal, session)
 
@@ -129,7 +171,8 @@ def require_admin(
     session: Session = Depends(get_session),
     x_api_key: str = Header(default="", alias="X-API-Key"),
     authorization: str = Header(default=""),
+    x_worker_token: str = Header(default="", alias="X-Worker-Token"),
 ) -> models.Organization:
-    principal = resolve_principal(session, x_api_key, authorization)
+    principal = resolve_principal(session, x_api_key, authorization, x_worker_token)
     _enforce(principal, request, "admin")
     return _organization_from(principal, session)
