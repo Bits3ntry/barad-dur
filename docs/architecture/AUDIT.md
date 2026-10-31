@@ -2,6 +2,21 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Console UX foundation (shell, design system, dashboard, findings)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Deployment bug found | FIXED | The console nginx serves `console_html/`, not `frontend/dist/`. Every earlier UI change was published to a directory nothing served — verified by diffing the asset hash in `curl /` against the built files. `OPERATIONS.md` now documents the correct publish step and the check. |
+| Navigation | PASS live | 16 flat tabs became six grouped sections (Overview, Supply chain, Code, Testing, Operations, Administration) in a sticky sidebar, with hash deep-links (`#findings`) and a breadcrumb in the top bar. Live DOM check lists all six groups and 16 destinations. |
+| Design system | PASS | One stylesheet with tokens (surfaces, text, accents, spacing, radii, focus ring), a responsive breakpoint at 900px, table cards with sticky headers, buttons with primary/danger/ghost variants and 34px minimum targets. |
+| Shared primitives | PASS | `ui.jsx`: PageHeader, Card, Table (with empty slot), EmptyState, Loading skeletons, Banner/ErrorBanner with retry, Stat, ConfirmButton (two-step), Modal (Escape closes) and `useAsync` (loading/error/retry). Screens compose these instead of inventing their own states. |
+| Dashboard | PASS live | Regrouped into Findings / Assets / Remediation+CI / Scanner execution / Pentest cards with real values; scope selector, "quality gate" banner and clickable project posture table. Live: 16 open, 4 critical, 6 high, 4 medium. |
+| Findings | PASS live | Page header with real count, toolbar filters, skeleton while loading, empty state with guidance, retry on error, table card. Live: 11 rows rendered from the API. |
+
+Remaining screens still render their original markup inside the new shell (they
+inherit typography, tables and spacing but not yet headers, empty states or
+confirmations). That migration is the next UX block.
+
 ## 2026-10-31 Shauron image: real multi-arch (amd64 + arm64)
 
 | Item | Result | Evidence |

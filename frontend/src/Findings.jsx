@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { ConfirmButton, EmptyState, ErrorBanner, Loading, PageHeader, Table } from './ui'
 import { VexSection } from './Vex'
 
 function Occurrences({ occurrences }) {
@@ -129,7 +130,12 @@ export default function Findings({ projects }) {
 
   return (
     <div>
-      <div className="bar">
+      <PageHeader
+        title="Findings"
+        subtitle={`${state.total} ${state.total === 1 ? 'finding' : 'findings'} in scope`}
+        actions={<button onClick={() => setBump((n) => n + 1)}>refresh</button>}
+      />
+      <div className="toolbar" style={{ marginBottom: 12 }}>
         <select value={state.project} onChange={(e) => setState((s) => ({ ...s, project: e.target.value, version: '' }))}>
           {projects.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
         </select>
@@ -155,15 +161,14 @@ export default function Findings({ projects }) {
           />
           include suppressed
         </label>
-        <span className="count">{state.loading ? 'loading…' : `${state.total} findings`}</span>
-        <button onClick={() => setBump((n) => n + 1)}>refresh</button>
       </div>
-      {state.error && <p className="error">{state.error}</p>}
-      <table>
-        <thead>
-          <tr><th>prio</th><th>sev</th><th>kind</th><th>title</th><th>rule / cve</th><th>path</th><th>sla</th><th>status</th></tr>
-        </thead>
-        <tbody>
+      {state.error && <ErrorBanner error={state.error} onRetry={() => setBump((n) => n + 1)} />}
+      {state.loading && !state.rows.length && <Loading rows={6} />}
+      <Table head={['prio', 'sev', 'kind', 'title', 'rule / cve', 'path', 'sla', 'status']}
+        empty={!state.loading && !state.error && (
+          <EmptyState title="No findings for this selection"
+            hint="Widen the filters, or ingest a scan to produce findings." />
+        )}>
           {[...state.rows].sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity)).map((row) => (
             <React.Fragment key={row.id}>
               <tr className={state.detail?.id === row.id ? 'selected' : ''} onClick={() => openDetail(row)}>
@@ -215,9 +220,7 @@ export default function Findings({ projects }) {
               )}
             </React.Fragment>
           ))}
-        </tbody>
-      </table>
-      {!state.rows.length && !state.loading && !state.error && <p className="empty">No findings for this selection.</p>}
+      </Table>
     </div>
   )
 }

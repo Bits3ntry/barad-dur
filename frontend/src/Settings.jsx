@@ -80,10 +80,9 @@ export default function Settings({ onClose }) {
   }
 
   return (
-    <div className="card">
-      <div className="bar">
-        <h3>Connection</h3>
-        <button className="mini" onClick={() => onClose(false)}>close</button>
+    <div className="stack">
+      <div className="row">
+        <span className="muted">API key, user session or sign-in</span>
       </div>
       {identity && (
         <p className="muted">
