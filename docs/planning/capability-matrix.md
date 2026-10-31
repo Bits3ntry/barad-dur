@@ -38,7 +38,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | Cross-project component impact | COMPLETE | `/components/impact` (id/purl/name) with usage + findings; console panel |
 | Scan scheduling | COMPLETE | interval definitions for scan **and easm** jobs, idempotent tick (cron), authorization re-checked per fire, console panel with tick-now |
 | Pentest report export | COMPLETE | printable self-contained HTML **and** dependency-free PDF (scope, tests, evidence, remediation, verification); no template editor |
-| Scanner orchestration / Shauron contract | PARTIAL | BL-020 registry/workers/leased jobs/artifacts/revalidation + real `barad worker` execution (OpenGrep+SBOM) live; no worker tokens, scheduler or container isolation |
+| Scanner orchestration / Shauron contract | COMPLETE | BL-020 registry/workers/leased jobs/artifacts/revalidation, real `barad worker` execution (OpenGrep+SBOM) live, scoped worker tokens, scheduling, **and digest-pinned ephemeral container sandbox** (no network, read-only rootfs, non-root, limits, no Docker socket) |
 | Dashboards / reporting | COMPLETE (v1) | BL-110: real-data summary + project posture + console tab |
 | Console pages | PARTIAL | 11 tabs; no pentest pages yet |
 | Docker deployment | COMPLETE | compose + console service |

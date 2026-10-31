@@ -107,3 +107,11 @@ picture) | `todo`. Anything else is NOT implemented.
 
 - **BL-060 License Management** — next phase after this round's merge; not
   started; no code, schema or UI change for it lives in this branch.
+
+## BL-020b — Worker container isolation (done)
+
+`barad worker --isolate-image <img@sha256:...>` composes a digest-pinned
+throwaway container (no network, read-only rootfs, noexec tmp, all caps
+dropped, uid 65534, 1g/1cpu/256 pids, target read-only) and refuses to build
+anything unsafe. Remaining: ship a Shauron image that carries the scanners so
+the sandbox can run a real scan without the host engines.
