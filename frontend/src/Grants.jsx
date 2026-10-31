@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 const CAPABILITIES = ['passive_discovery', 'active_verification',
   'vulnerability_analysis', 'intrusive_testing']
@@ -87,8 +88,9 @@ export default function Grants() {
   }
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Authorization grants" />
+      <div className="toolbar">
         <select value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}>
           <option value="">any status</option>
           <option value="active">active</option>
@@ -111,7 +113,7 @@ export default function Grants() {
         </select>
         <span className="count">{total} grants</span>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
       <table>
         <thead>
           <tr><th>principal</th><th>capability</th><th>targets</th><th>env/tool</th>
@@ -155,7 +157,7 @@ export default function Grants() {
             onChange={(e) => setForm((f) => ({ ...f, issued_by: e.target.value }))} />
           <input placeholder="justification (audited)" value={form.justification}
             onChange={(e) => setForm((f) => ({ ...f, justification: e.target.value }))} />
-          <div className="bar">
+          <div className="toolbar">
             <label>hours <input type="number" value={form.hours} style={{ width: 70 }}
               onChange={(e) => setForm((f) => ({ ...f, hours: e.target.value }))} /></label>
             <input placeholder="environment (optional)" value={form.environment}
@@ -171,7 +173,7 @@ export default function Grants() {
         </div>
       )}
       <h2 className="section">authorize() simulator</h2>
-      <div className="bar">
+      <div className="toolbar">
         <select value={sim.capability} onChange={(e) => setSim((s) => ({ ...s, capability: e.target.value }))}>
           {CAPABILITIES.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>

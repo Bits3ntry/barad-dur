@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 export default function Assets() {
   const [assets, setAssets] = useState([])
@@ -72,15 +73,16 @@ export default function Assets() {
   }
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Assets" />
+      <div className="toolbar">
         <input placeholder="seed domain, e.g. councilbox.com" value={domain}
           onChange={(e) => setDomain(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && sweep()} />
         <button onClick={sweep} disabled={busy}>{busy ? 'sweeping…' : 'sweep crt.sh'}</button>
         <span className="count">{assets.length} assets</span>
       </div>
-      <div className="bar">
+      <div className="toolbar">
         <select value={manual.type} onChange={(e) => setManual((m) => ({ ...m, type: e.target.value }))}>
           <option value="domain">domain</option>
           <option value="ip">ip</option>
@@ -92,7 +94,7 @@ export default function Assets() {
           onKeyDown={(e) => e.key === 'Enter' && addManual()} />
         <button onClick={addManual}>add asset</button>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
       <table>
         <thead><tr><th>type</th><th>value</th><th>source</th><th>first seen</th><th>last seen</th><th></th></tr></thead>
         <tbody>
@@ -122,7 +124,7 @@ export default function Assets() {
                         ))}
                       </dd>
                     </dl>
-                    <div className="bar">
+                    <div className="toolbar">
                       <input value={snapshotDraft} style={{ minWidth: 380 }}
                         onChange={(e) => setSnapshotDraft(e.target.value)}
                         placeholder='observation JSON, e.g. {"ip": "1.2.3.4"}' />

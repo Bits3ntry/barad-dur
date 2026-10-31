@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 export default function Gates({ projects }) {
   const [policies, setPolicies] = useState([])
@@ -45,8 +46,9 @@ export default function Gates({ projects }) {
   const result = evalState.result
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Quality gates" />
+      <div className="toolbar">
         <select value={evalState.project}
           onChange={(e) => setEvalState((s) => ({ ...s, project: e.target.value, version: '' }))}>
           <option value="">select project…</option>
@@ -61,11 +63,11 @@ export default function Gates({ projects }) {
         <button onClick={evaluate} disabled={!evalState.project}>evaluate gate</button>
         <span className="count">{policies.length} gate policies</span>
       </div>
-      {error && <p className="error">{error}</p>}
-      {evalState.error && <p className="error">{evalState.error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
+      {evalState.error && <div className="banner banner-error">{evalState.error}</div>}
       {result && (
         <>
-          <div className="bar">
+          <div className="toolbar">
             <span className={`pill ${result.verdict === 'fail' ? 'sev sev-critical' : 'ok'}`}>
               verdict: {result.verdict}
             </span>

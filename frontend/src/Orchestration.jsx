@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 const CAPS = ['passive_discovery', 'active_verification', 'vulnerability_analysis', 'intrusive_testing']
 
@@ -117,13 +118,14 @@ export default function Orchestration() {
   }
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Orchestration" />
+      <div className="toolbar">
         <span className="count">{scanners.length} scanners · {workers.length} workers · {jobs.length} jobs</span>
         <button onClick={load}>refresh</button>
         {claimInfo && <span className="muted">{claimInfo}</span>}
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
 
       <h2 className="section">jobs</h2>
       <table>
@@ -150,7 +152,7 @@ export default function Orchestration() {
       {!jobs.length && <p className="empty">No jobs queued.</p>}
 
       <h2 className="section">schedules</h2>
-      <div className="bar">
+      <div className="toolbar">
         <span className="count">{schedules.length} schedules</span>
         <button onClick={tickNow}>run tick now</button>
         {tickInfo && <span className="muted">{tickInfo}</span>}

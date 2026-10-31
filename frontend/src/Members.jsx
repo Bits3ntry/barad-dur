@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 const ROLES = ['owner', 'admin', 'analyst', 'viewer']
 const CREATABLE = ['admin', 'analyst', 'viewer']
@@ -59,9 +60,10 @@ export default function Members() {
   }
 
   return (
-    <div>
+    <div className="stack">
+      <PageHeader title="Members and access" />
       <h2 className="section">accounts (login users)</h2>
-      {userError && <p className="error">{userError}</p>}
+      {userError && <div className="banner banner-error">{userError}</div>}
       <table>
         <thead><tr><th>email</th><th>role</th><th>status</th><th>last login</th><th></th></tr></thead>
         <tbody>
@@ -101,7 +103,7 @@ export default function Members() {
       </div>
 
       <h2 className="section">named members (audit attribution)</h2>
-      <div className="bar">
+      <div className="toolbar">
         <input placeholder="identity (email)" value={form.identity}
           onChange={(e) => setForm((f) => ({ ...f, identity: e.target.value }))}
           onKeyDown={(e) => e.key === 'Enter' && add()} />
@@ -111,7 +113,7 @@ export default function Members() {
         <button onClick={add}>add member</button>
         <span className="count">{members.length} members</span>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
       <table>
         <thead><tr><th>identity</th><th>role</th><th>added by</th><th>status</th><th></th></tr></thead>
         <tbody>

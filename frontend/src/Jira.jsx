@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 export default function Jira() {
   const [links, setLinks] = useState([])
@@ -42,13 +43,14 @@ export default function Jira() {
   }
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Jira links" />
+      <div className="toolbar">
         <span className="count">{links.length} links</span>
         {!configured && <span className="pill warn">Jira not configured (JIRA_BASE_URL / JIRA_TOKEN)</span>}
         <button onClick={reconcile} disabled={!configured}>reconcile now</button>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
       {recon && (
         <p className="muted">
           checked {recon.checked} · drifted {recon.drifted} · errors {recon.errors} ·

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 export default function Pipelines() {
   const [state, setState] = useState({ pipelines: [], runs: [], error: '', loading: false, detail: null })
@@ -30,12 +31,13 @@ export default function Pipelines() {
   }
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Pipelines" />
+      <div className="toolbar">
         <span className="count">{state.pipelines.length} pipelines</span>
         <span className="count">{state.runs.length} runs</span>
       </div>
-      {state.error && <p className="error">{state.error}</p>}
+      {state.error && <div className="banner banner-error">{state.error}</div>}
       <table>
         <thead><tr><th>provider</th><th>repository</th><th>workflow</th><th>retired</th></tr></thead>
         <tbody>

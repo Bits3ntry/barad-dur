@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 const ACTIONS = ['', 'authorization.', 'member.', 'remediation.', 'asset.',
   'easm.', 'vex.', 'intel.', 'suppression.', 'finding.']
@@ -25,8 +26,9 @@ export default function Audit() {
   }
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Audit trail" />
+      <div className="toolbar">
         <input placeholder="actor…" value={state.actor}
           onChange={(e) => setState((s) => ({ ...s, actor: e.target.value }))} />
         <select value={state.action} onChange={(e) => setState((s) => ({ ...s, action: e.target.value }))}>
@@ -43,7 +45,7 @@ export default function Audit() {
         </span>
         <span className="count">{state.total} entries</span>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
       <table>
         <thead>
           <tr><th>#</th><th>at</th><th>actor</th><th>action</th><th>detail (reason / policy)</th><th>hash</th></tr>

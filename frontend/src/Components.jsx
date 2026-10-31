@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 export default function Components({ projects }) {
   const [state, setState] = useState({ total: 0, rows: [], error: '', loading: false, receipt: null })
@@ -46,8 +47,9 @@ export default function Components({ projects }) {
   }
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Components" />
+      <div className="toolbar">
         <span className="count">{state.loading ? 'loading…' : `${state.total} components @ ${project?.name || '—'} ${version}`}</span>
         <label className="button">
           <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={(e) => upload(e.target.files[0])} />
@@ -55,7 +57,7 @@ export default function Components({ projects }) {
         </label>
         <span className="hint">ingests via the platform API (source=web)</span>
       </div>
-      {state.error && <p className="error">{state.error}</p>}
+      {state.error && <div className="banner banner-error">{state.error}</div>}
       {state.receipt && (
         <p className="receipt">
           import {state.receipt.status} — {state.receipt.receipt.counts.components_created} created,
@@ -82,7 +84,7 @@ export default function Components({ projects }) {
               {impact.id === row.id && (
                 <tr className="detail-row"><td colSpan={7}>
                   <div className="detail">
-                    {impact.error && <p className="error">{impact.error}</p>}
+                    {impact.error && <div className="banner banner-error">{impact.error}</div>}
                     {impact.data && (
                       <>
                         <p className="muted">

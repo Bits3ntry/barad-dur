@@ -13,9 +13,13 @@ This ledger records observed checks for the current architecture. It does not tu
 | Dashboard | PASS live | Regrouped into Findings / Assets / Remediation+CI / Scanner execution / Pentest cards with real values; scope selector, "quality gate" banner and clickable project posture table. Live: 16 open, 4 critical, 6 high, 4 medium. |
 | Findings | PASS live | Page header with real count, toolbar filters, skeleton while loading, empty state with guidance, retry on error, table card. Live: 11 rows rendered from the API. |
 
-Remaining screens still render their original markup inside the new shell (they
-inherit typography, tables and spacing but not yet headers, empty states or
-confirmations). That migration is the next UX block.
+| Screen headers | PASS live | All 16 sections now render through `PageHeader`: walking them in a real browser returns a title for each (Security posture, Findings, Assets, Components, License compliance, Pull requests, Pipelines, Quality gates, Pentests, Security regression, Orchestration, Jira links, Remediation, Authorization grants, Audit trail, Members and access) with real rows (assets 268, audit 141, members 148, orchestration 18) and no error banner. |
+| Consistent tables | PASS | Screens still rendering a bare `<table>` get the same card treatment through CSS, so the console reads as one product while those screens are migrated. |
+| Responsive | PASS live | Phone-sized viewport: the sidebar becomes static, nav groups wrap horizontally, tables scroll inside their own wrapper and the page has no horizontal overflow. |
+
+Remaining UX work: destructive actions still use `window.confirm`/`prompt` in
+a few screens (to be replaced by the two-step ConfirmButton), detail panels are
+still expanded table rows, and there is no light theme or density toggle.
 
 ## 2026-10-31 Shauron image: real multi-arch (amd64 + arm64)
 

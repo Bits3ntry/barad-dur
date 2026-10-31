@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 const PRIORITY_CLASSES = ['P0', 'P1', 'P2', 'P3']
 
@@ -55,18 +56,19 @@ export default function Lifecycle() {
   }
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Remediation" />
+      <div className="toolbar">
         <select value={tab} onChange={(e) => setTab(e.target.value)}>
           <option value="tasks">remediation tasks</option>
           <option value="rules">priority rules</option>
         </select>
         <span className="count">{tab === 'tasks' ? `${tasks.length} tasks` : `${rules.length} rules`}</span>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
       {tab === 'tasks' && (
         <>
-          <div className="bar">
+          <div className="toolbar">
             <input placeholder="new task title" value={newTask}
               onChange={(e) => setNewTask(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && createTask()} />
@@ -104,7 +106,7 @@ export default function Lifecycle() {
       )}
       {tab === 'rules' && (
         <>
-          <div className="bar">
+          <div className="toolbar">
             <select value={newRule.kind} onChange={(e) => setNewRule((r) => ({ ...r, kind: e.target.value }))}>
               <option value="secret">secret</option>
               <option value="misconfiguration">misconfiguration</option>
@@ -132,7 +134,7 @@ export default function Lifecycle() {
             </tbody>
           </table>
           {policy && (
-            <div className="bar">
+            <div className="toolbar">
               <span className="muted">SLA default policy:</span>
               <label>P0→<input type="number" size="2" value={policy.p0_days} onChange={(e) => setPolicy({ ...policy, p0_days: +e.target.value })} />d</label>
               <label>P1→<input type="number" size="2" value={policy.p1_days} onChange={(e) => setPolicy({ ...policy, p1_days: +e.target.value })} />d</label>

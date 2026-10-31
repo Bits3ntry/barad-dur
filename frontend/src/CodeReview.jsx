@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 export default function CodeReview({ projects }) {
   const [prs, setPrs] = useState([])
@@ -108,14 +109,15 @@ export default function CodeReview({ projects }) {
   const project = projects.find((p) => p.name === form.project)
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Pull requests" />
+      <div className="toolbar">
         <span className="count">{prs.length} pull requests</span>
         <button onClick={load}>refresh</button>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
       <div className="panel">
-        <div className="bar">
+        <div className="toolbar">
           <span className="count">{baselines.length} SAST baselines</span>
           <input placeholder="reviewer" value={reviewer}
             onChange={(e) => setReviewer(e.target.value)} />

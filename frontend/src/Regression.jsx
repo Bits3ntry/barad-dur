@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 export default function Regression() {
   const [tests, setTests] = useState([])
@@ -51,12 +52,13 @@ export default function Regression() {
   }
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="Security regression" />
+      <div className="toolbar">
         <span className="count">{tests.length} checks</span>
         <button onClick={load}>refresh</button>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
       <table>
         <thead><tr><th>check</th><th>suite</th><th>method</th><th>target</th><th>last run</th><th></th></tr></thead>
         <tbody>

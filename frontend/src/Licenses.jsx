@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { PageHeader } from './ui'
 
 export default function Licenses({ projects }) {
   const [policies, setPolicies] = useState([])
@@ -61,8 +62,9 @@ export default function Licenses({ projects }) {
   const counts = evalState.result?.counts
 
   return (
-    <div>
-      <div className="bar">
+    <div className="stack">
+      <PageHeader title="License compliance" />
+      <div className="toolbar">
         <select value={evalState.project}
           onChange={(e) => setEvalState((s) => ({ ...s, project: e.target.value, version: '' }))}>
           <option value="">select project…</option>
@@ -76,11 +78,11 @@ export default function Licenses({ projects }) {
         <button onClick={evaluate} disabled={!evalState.project || !evalState.version}>evaluate licenses</button>
         <span className="count">{policies.length} policies</span>
       </div>
-      {error && <p className="error">{error}</p>}
-      {evalState.error && <p className="error">{evalState.error}</p>}
+      {error && <div className="banner banner-error">{error}</div>}
+      {evalState.error && <div className="banner banner-error">{evalState.error}</div>}
       {counts && (
         <>
-          <div className="bar">
+          <div className="toolbar">
             <span className="pill">policy: {evalState.result.policy?.name || 'none'}</span>
             <span className="pill">{counts.components} components</span>
             <span className={`pill ${counts.denied ? 'sev sev-critical' : ''}`}>{counts.denied} denied</span>
@@ -163,7 +165,7 @@ export default function Licenses({ projects }) {
           ))}
         </tbody>
       </table>
-      <div className="bar">
+      <div className="toolbar">
         <input placeholder="component identity key" value={exForm.component_identity}
           onChange={(e) => setExForm((f) => ({ ...f, component_identity: e.target.value }))} />
         <input placeholder="license id" value={exForm.license_id}

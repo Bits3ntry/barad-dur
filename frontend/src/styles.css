@@ -167,6 +167,16 @@ label { display: grid; gap: var(--gap-1); color: var(--text-dim); font-size: 12p
   border-radius: var(--radius); overflow: auto;
 }
 table { width: 100%; border-collapse: collapse; }
+/* Screens that still render a bare <table> get the same card treatment as the
+   ones using the Table primitive, so the console looks consistent while those
+   screens are migrated. */
+.table-wrap > table { border: none; border-radius: 0; }
+table:not(.table-wrap > table) {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden; display: table;
+}
+h2.section, h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-dim); margin: var(--gap-4) 0 var(--gap-2); }
 th, td { text-align: left; padding: 9px 12px; border-top: 1px solid var(--line);
   vertical-align: middle; }
 thead th { border-top: none; color: var(--muted); font-size: 11px;
