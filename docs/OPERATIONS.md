@@ -86,6 +86,21 @@ the grant at claim time, and reports failure with the tool's own error text
 when a scan cannot produce evidence. Artifacts: SBOM (CycloneDX) and SAST
 (SARIF) are ingested back into the job's project version.
 
+## SLA notifications
+
+Create a webhook channel (admin) and point it at your receiver; the secret is
+returned once and used to sign every delivery
+(`X-Barad-Signature: sha256=…`). Run the tick from cron next to the scan
+scheduler:
+
+```cron
+30 * * * * curl -s -X POST http://127.0.0.1:8090/api/v1/notifications/tick \
+  -H "X-API-Key: $BARAD_CRON_KEY" -H 'Content-Type: application/json' -d '{"actor":"cron"}' >/dev/null
+```
+
+Deliveries are deduped per channel per day; failures are recorded in
+`GET /api/v1/notifications/deliveries` with the HTTP code and error.
+
 ## SCM publishing
 
 Set `GITHUB_TOKEN` (repo:status + pull_requests:write) and optionally

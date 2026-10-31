@@ -2,6 +2,20 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 SLA notifications (signed webhooks)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Channels | PASS live | Admin-managed webhook channels with name, URL (http/https only), subscribed events and a generated signing secret returned **once** at creation; duplicate name → 409, unknown event → 422. |
+| Signed delivery | PASS live | Payloads are POSTed with `X-Barad-Event` and `X-Barad-Signature: sha256=<hmac>` over the exact JSON body, so receivers can verify authenticity. Live test delivery to a stub receiver: HTTP 200, signature present. |
+| SLA tick | PASS live (0 breaches) | `POST /notifications/tick` collects open findings past `sla_deadline`, delivers one aggregated event per channel and dedupes per channel per day. Live check: 5 findings carry deadlines, **0 are overdue**, so the tick honestly reported `breached: 0` and delivered nothing. The breach path (overdue finding → delivery, repeat → `already_sent`) is pinned by test against a real receiver. |
+| Deliveries log | PASS | `GET /notifications/deliveries` records status, HTTP code and error, so a failing endpoint is visible instead of silently dropped. |
+| Isolation | PASS | Channels are admin-only and org-scoped (foreign org sees none, patch → 404). |
+| Tests | PASS | 4 in `test_notifications_sla.py` (signed test delivery, breach tick + same-day dedupe, event filter/disabled channel, validation + isolation). Suite total 142. |
+
+Known limits: webhook only (no SMTP/email), one aggregated daily event rather
+than per-finding pushes, and no retry/backoff beyond the next daily tick.
+
 ## 2026-10-31 Worker tokens (scoped machine identities)
 
 | Item | Result | Evidence |
