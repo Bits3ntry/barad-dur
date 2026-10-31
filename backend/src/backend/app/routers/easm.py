@@ -232,3 +232,109 @@ def asset_changes(asset_id: str,
     latest_changes = history[-1]["changes"] if history else []
     return {"data": {"asset": asset.value, "snapshots": len(rows),
                      "latest_changes": latest_changes, "history": history}}
+
+
+def _dns_lookup(host: str) -> dict:
+    """Resolve A/AAAA records. DNS resolution is discovery, not authorization."""
+    import socket
+
+    addresses = {"ipv4": [], "ipv6": []}
+    try:
+        for family, _type, _proto, _canon, sockaddr in socket.getaddrinfo(
+                host, None, proto=socket.IPPROTO_TCP):
+            ip = sockaddr[0]
+            bucket = "ipv6" if ":" in ip else "ipv4"
+            if ip not in addresses[bucket]:
+                addresses[bucket].append(ip)
+    except socket.gaierror as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            f"dns resolution failed: {exc}") from exc
+    return addresses
+
+
+def _tls_probe(host: str, port: int = 443, timeout: float = 6.0) -> dict:
+    """Fetch the presented certificate metadata (an active connection)."""
+    import socket
+    import ssl
+
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as raw:
+            with context.wrap_socket(raw, server_hostname=host) as tls:
+                cert = tls.getpeercert() or {}
+                return {"issuer": dict(x[0] for x in cert.get("issuer", [])),
+                        "subject": dict(x[0] for x in cert.get("subject", [])),
+                        "not_before": cert.get("notBefore"),
+                        "not_after": cert.get("notAfter"),
+                        "tls_version": tls.version(),
+                        "cipher": (tls.cipher() or [None])[0]}
+    except ssl.SSLCertVerificationError as exc:
+        return {"error": f"certificate verification failed: {exc.verify_message}"}
+    except (socket.timeout, OSError) as exc:
+        return {"error": f"tls probe failed: {exc}"}
+
+
+class CollectIn(BaseModel):
+    tls: bool = False
+    port: int = Field(default=443, ge=1, le=65535)
+    actor: str = Field(min_length=2, max_length=255)
+
+
+@router.post("/assets/{asset_id}/collect")
+def collect(asset_id: str, payload: CollectIn = None,
+            org: models.Organization = Depends(auth.require_org),
+            session: Session = Depends(get_session)):
+    """Passive DNS discovery plus optional active TLS probe.
+
+    DNS stays discovery: it needs `passive_discovery` authorization. Opening
+    a TLS connection is active verification and needs `active_verification`
+    for that exact domain — discovering a host never authorizes touching it.
+    """
+    from backend.app import authorization
+
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    asset = session.get(models.Asset, asset_id)
+    if asset is None or asset.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+    if asset.type not in {"domain", "subdomain"}:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "collection supports domain assets only")
+    target = [{"type": "domain", "value": asset.value}]
+    decision = authorization.authorize(
+        session, org.id, payload.actor, "passive_discovery", target,
+        tool="dns-collector")
+    if decision["decision"] == "deny":
+        _audit_log(session, org.id, payload.actor, "easm.collect_denied",
+                   "asset", asset.id, decision["reason"][:300])
+        session.commit()
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            f"not authorized: {decision['reason']}")
+
+    observation: dict = {"dns": _dns_lookup(asset.value)}
+    if payload.tls:
+        tls_decision = authorization.authorize(
+            session, org.id, payload.actor, "active_verification", target,
+            tool="tls-probe")
+        if tls_decision["decision"] == "deny":
+            _audit_log(session, org.id, payload.actor, "easm.tls_denied",
+                       "asset", asset.id, tls_decision["reason"][:300])
+            session.commit()
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                f"tls probe not authorized: {tls_decision['reason']}")
+        observation["tls"] = _tls_probe(asset.value, payload.port)
+
+    now = models.utcnow()
+    row = models.AssetSnapshot(
+        org_id=org.id, asset_id=asset.id, observed_at=now,
+        source="dns-collector" if not payload.tls else "dns+tls-collector",
+        data=json.dumps(observation, sort_keys=True), created_at=now)
+    session.add(row)
+    asset.last_seen_at = now
+    session.flush()
+    _audit_log(session, org.id, payload.actor, "easm.collected", "asset",
+               asset.id, f"{len(observation['dns']['ipv4'])} ipv4"
+                         + (" +tls" if payload.tls else ""))
+    session.commit()
+    return {"data": {"snapshot_id": row.id, "observed_at": now.isoformat(),
+                     "observation": observation}}

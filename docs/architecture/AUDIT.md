@@ -2,6 +2,22 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 EASM collection (DNS passive, TLS active)
+
+| Item | Result | Evidence |
+|---|---|---|
+| DNS discovery | PASS live | `POST /assets/{id}/collect` resolves A/AAAA via stdlib `getaddrinfo` and stores the observation as an asset snapshot (source `dns-collector`), refreshing `last_seen`. Live: `api.councilbox.com` → `52.143.19.233`. No grant → 403 and **nothing stored** (snapshot count stays 0, pinned by test). |
+| TLS probe | PASS live | Optional handshake records issuer/subject/validity/TLS version/cipher. It is active verification: it needs `active_verification` for the exact domain, and with only `passive_discovery` the call returns 403 `tls probe not authorized` and writes no half-snapshot (verified live and by test). |
+| Honest failures | PASS | A host with no TLS listener returns the socket/certificate error inside the observation instead of a fabricated certificate; DNS resolution failure → 502 `dns resolution failed`. |
+| Validation | PASS | Only `domain`/`subdomain` assets collect (422 otherwise); foreign-org asset → 404; every action audited (`easm.collected`, `easm.collect_denied`, `easm.tls_denied`). |
+| Change history | PASS live | Collected snapshots flow into the existing `/changes` diff: live comparison surfaced `dns`, `ip`, `tech`, `tls_issuer` against earlier manual observations. |
+| Console | PASS | Assets rows for domain/subdomain gain a `collect dns` action that reports the observed address count and reloads. |
+| Tests | PASS | 4 in `test_easm_collect.py` (grant required, DNS snapshot, TLS needs active grant + no partial write, validation/isolation). Suite total 127. |
+
+Known limits: no scheduled collection yet (schedules cover scan jobs only),
+no certificate chain/history beyond the latest snapshot, and no technology
+fingerprinting (HTTP fingerprinting is intentionally not implemented).
+
 ## 2026-10-31 SPDX ingest + SBOM version comparison
 
 | Item | Result | Evidence |

@@ -11,7 +11,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | Audit hash chain | COMPLETE | full-ledger verification independent of filters |
 | Projects / versions / components | COMPLETE | migrations 0001–0002; dedupe invariants tested |
 | Repositories / services / deployments / typed links | COMPLETE | BL-010 (0009+0010) |
-| Asset inventory (domain/ip/url/cidr) | COMPLETE (v1) | crt.sh sweep + snapshots/change detection (BL-090); no active probing |
+| Asset inventory (domain/ip/url/cidr) | COMPLETE (v1) | crt.sh sweep, snapshots/change detection, DNS collection (passive) and TLS probe (active, grant-gated) |
 | Scan authorization engine | COMPLETE | BL-015; conditions fail closed |
 | SBOM ingest (CycloneDX) + receipts | COMPLETE | idempotent by content hash |
 | SPDX ingest + export | COMPLETE | export 2.3 + import via the CycloneDX pipeline; component diff between versions |

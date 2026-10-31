@@ -27,6 +27,17 @@ export default function Assets() {
     }
   }
 
+  async function collect(asset) {
+    try {
+      const result = await api.post(`/api/v1/assets/${asset.id}/collect`,
+        { actor: 'console', tls: false })
+      setError('')
+      window.alert(`observed ${result.data.observation.dns.ipv4.length} ipv4 / `
+        + `${result.data.observation.dns.ipv6.length} ipv6`)
+      load()
+    } catch (e) { setError(String(e.message || e)) }
+  }
+
   async function addSnapshot(asset) {
     try {
       const parsed = JSON.parse(snapshotDraft)
