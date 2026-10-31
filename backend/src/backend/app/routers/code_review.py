@@ -553,6 +553,30 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
                 slug, pr.head_sha, gitlab_state, description,
                 target_url=payload.target_url)
             comment = scm_client.upsert_gitlab_mr_note(slug, pr.number, body)
+            if payload.annotations:
+                discussions = 0
+                try:
+                    versions = scm_client.gitlab_mr_versions(slug, pr.number)
+                    for link in (session.query(models.PrFinding)
+                                 .filter_by(pr_id=pr.id).limit(20).all()):
+                        finding = session.get(models.Finding, link.finding_id)
+                        if finding is None or not link.file_path:
+                            continue
+                        scm_client.post_gitlab_mr_discussion(
+                            slug, pr.number,
+                            f"**{finding.severity}** `{finding.rule_id or 'finding'}`: "
+                            f"{(finding.title or '')[:400]}",
+                            link.file_path, link.line or 1, versions)
+                        discussions += 1
+                except scm_client.ScmError as exc:
+                    _audit_log(session, org.id, payload.actor,
+                               "code.pr_annotations_failed", "pull_request",
+                               pr.id, f"gitlab: {str(exc)[:250]}")
+                else:
+                    if discussions:
+                        _audit_log(session, org.id, payload.actor,
+                                   "code.pr_annotations_published", "pull_request",
+                                   pr.id, f"gitlab discussions: {discussions}")
         else:
             status_response = scm_client.post_commit_status(
                 slug, pr.head_sha, state, description,
@@ -594,8 +618,9 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
                f"{provider}:{slug}#{pr.number} {state}")
     session.commit()
     return {"data": {"provider": provider,
-                     "annotations_published": bool(
-                         payload.annotations and provider == "github"),
+                     "annotations_published": bool(payload.annotations
+                                                   and provider in ("github",
+                                                                    "gitlab")),
                      "repository": slug,
                      "sha": pr.head_sha, "state": state,
                      "status_id": status_response.get("id"),

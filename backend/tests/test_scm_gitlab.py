@@ -15,7 +15,7 @@ from backend.app.auth import create_key  # noqa: E402
 from backend.app.db import session_factory  # noqa: E402
 from backend.app.main import create_app  # noqa: E402
 
-STATE = {"statuses": [], "notes": [], "next_id": 0}
+STATE = {"statuses": [], "notes": [], "discussions": [], "next_id": 0}
 
 
 class GitLab(BaseHTTPRequestHandler):
@@ -37,10 +37,13 @@ class GitLab(BaseHTTPRequestHandler):
     def do_POST(self):
         payload = self._body()
         assert self.headers.get("PRIVATE-TOKEN") == "gl-token"
-        if self.path.endswith("/statuses/abc123"):
+        if "/statuses/" in self.path:
             STATE["statuses"].append(payload)
             return self._json(201, {"id": len(STATE["statuses"]),
                                     "state": payload["state"]})
+        if self.path.endswith("/discussions"):
+            STATE["discussions"].append(payload)
+            return self._json(201, {"id": f"d{len(STATE['discussions'])}"})
         if self.path.endswith("/notes"):
             STATE["next_id"] += 1
             note = {"id": STATE["next_id"], "body": payload["body"]}
@@ -49,6 +52,9 @@ class GitLab(BaseHTTPRequestHandler):
         return self._json(404, {"error": "not found"})
 
     def do_GET(self):
+        if self.path.endswith("/versions"):
+            return self._json(200, [{"base_sha": "base1", "start_sha": "start1",
+                                     "head_sha": "head1", "id": 1}])
         if "/notes" in self.path:
             return self._json(200, STATE["notes"])
         return self._json(404, {"error": "not found"})
@@ -79,6 +85,7 @@ def gitlab_client(tmp_path, monkeypatch, gitlab_server):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     STATE["statuses"].clear()
     STATE["notes"].clear()
+    STATE["discussions"].clear()
     app = create_app()
     session = session_factory()()
     models.Base.metadata.create_all(session.get_bind())
@@ -170,3 +177,56 @@ def test_unknown_provider_is_rejected(gitlab_client):
                               json={"actor": "ci"}, headers=headers)
     assert denied.status_code == 422
     assert "scm_provider_unknown" in denied.json()["detail"]
+
+
+def test_gitlab_inline_discussions(gitlab_client):
+    test_client, headers, repo_id = gitlab_client
+    pr = test_client.post("/api/v1/code/pull-requests", json={
+        "repository_id": repo_id, "number": 77, "branch": "feat/g",
+        "base_branch": "main", "head_sha": "abc123", "project": "saria",
+        "version": "1.0", "actor": "ci"}, headers=headers).json()["data"]
+    sarif = {"tool": {"driver": {"name": "opengrep", "rules": [
+        {"id": "py.sqli", "properties": {"security-severity": "9.5"}}]}},
+        "results": [{"ruleId": "py.sqli", "level": "error",
+                     "message": {"text": "SQL injection"},
+                     "locations": [{"physicalLocation": {
+                         "artifactLocation": {"uri": "app/db.py"},
+                         "region": {"startLine": 12}}}]}]}
+    test_client.post(f"/api/v1/code/pull-requests/{pr['id']}/sarif",
+                     json={"run": sarif, "actor": "ci"}, headers=headers)
+
+    published = test_client.post(
+        f"/api/v1/code/pull-requests/{pr['id']}/publish",
+        json={"actor": "ci", "annotations": True}, headers=headers)
+    assert published.status_code == 200, published.text
+    assert published.json()["data"]["provider"] == "gitlab"
+    assert published.json()["data"]["annotations_published"] is True
+
+    assert len(STATE["discussions"]) == 1
+    position = STATE["discussions"][0]["position"]
+    assert position["new_path"] == "app/db.py"
+    assert position["new_line"] == 12
+    assert position["head_sha"] == "head1"
+    assert "py.sqli" in STATE["discussions"][0]["body"]
+
+
+def test_gitlab_discussions_skipped_when_disabled(gitlab_client):
+    test_client, headers, repo_id = gitlab_client
+    pr = test_client.post("/api/v1/code/pull-requests", json={
+        "repository_id": repo_id, "number": 78, "branch": "feat/h",
+        "base_branch": "main", "head_sha": "abc124", "project": "saria",
+        "version": "1.0", "actor": "ci"}, headers=headers).json()["data"]
+    sarif = {"tool": {"driver": {"name": "opengrep", "rules": [
+        {"id": "py.x", "properties": {"security-severity": "3.0"}}]}},
+        "results": [{"ruleId": "py.x", "level": "warning",
+                     "message": {"text": "n"},"locations": [{"physicalLocation": {
+                         "artifactLocation": {"uri": "app/n.py"},
+                         "region": {"startLine": 2}}}]}]}
+    test_client.post(f"/api/v1/code/pull-requests/{pr['id']}/sarif",
+                     json={"run": sarif, "actor": "ci"}, headers=headers)
+    published = test_client.post(
+        f"/api/v1/code/pull-requests/{pr['id']}/publish",
+        json={"actor": "ci", "annotations": False}, headers=headers)
+    assert published.status_code == 200, published.text
+    assert published.json()["data"]["annotations_published"] is False
+    assert STATE["discussions"] == []

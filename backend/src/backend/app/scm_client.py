@@ -193,3 +193,31 @@ def annotation_level(severity: str | None) -> str:
     return {"CRITICAL": "failure", "HIGH": "failure",
             "MEDIUM": "warning", "LOW": "notice"}.get((severity or "").upper(),
                                                        "warning")
+
+
+def gitlab_mr_versions(slug: str, number: int) -> dict:
+    """Diff refs needed for an inline discussion; empty dict when unavailable."""
+    payload = _gitlab_request(
+        "GET", f"/projects/{_project_path(slug)}/merge_requests/{number}/versions")
+    if isinstance(payload, list) and payload:
+        return payload[0] or {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def post_gitlab_mr_discussion(slug: str, number: int, body: str,
+                              path: str, line: int,
+                              versions: dict) -> dict:
+    """One inline discussion anchored to a new line of the merge request diff."""
+    position = {
+        "position_type": "text",
+        "base_sha": versions.get("base_sha"),
+        "start_sha": versions.get("start_sha"),
+        "head_sha": versions.get("head_sha"),
+        "new_path": path,
+        "new_line": max(1, int(line or 1)),
+    }
+    if not all(position.get(key) for key in ("base_sha", "start_sha", "head_sha")):
+        raise ScmError("gitlab_mr_versions_incomplete")
+    return _gitlab_request(
+        "POST", f"/projects/{_project_path(slug)}/merge_requests/{number}/discussions",
+        {"body": body, "position": position})

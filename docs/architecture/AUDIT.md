@@ -2,6 +2,19 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 GitLab inline discussions
+
+| Item | Result | Evidence |
+|---|---|---|
+| Discussions | PASS live | Publishing a GitLab MR now posts one inline discussion per linked finding, anchored to the MR diff position (`base_sha`/`start_sha`/`head_sha` + `new_path`/`new_line` taken from `/merge_requests/:iid/versions`). Live against a stub GitLab: `status: failed`, `note created`, `discussion: app/orders.py line 88 head headsha`. |
+| Fail-closed | PASS | Missing diff refs raise `gitlab_mr_versions_incomplete` instead of posting a floating note at the wrong line; the failure is audited as `code.pr_annotations_failed` while the status and MR note already published stay valid. Success is audited as `code.pr_annotations_published`. |
+| Volume control | PASS | At most 20 discussions per publish, so a noisy MR cannot spam the review; `annotations: false` skips discussions entirely (pinned by test). |
+| Tests | PASS | 2 new tests in `test_scm_gitlab.py` (position contents, disabled path) against a real stub; suite total 175. |
+
+Known limits: discussions are created, not deduplicated — republishing an MR
+adds new discussions rather than updating the previous ones; notes remain the
+idempotent channel.
+
 ## 2026-10-31 Named SAST baselines with approval
 
 | Item | Result | Evidence |
