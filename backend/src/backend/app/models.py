@@ -12,13 +12,13 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
-    Integer,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -628,3 +628,47 @@ class FindingContext(Base):
     added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# ─────────────── BL-015: scan authorization engine ───────────────
+
+class ScanGrant(Base):
+    """An explicit, expiring, revocable authorization to run one or more
+    capabilities against declared targets. Issuance and revocation both
+    leave an audit-chain entry; revalidation never trusts past answers."""
+
+    __tablename__ = "scan_grants"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    principal: Mapped[str] = mapped_column(String(255), index=True)
+    capabilities: Mapped[str] = mapped_column(String(255))
+    tools: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    environment: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    conditions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issued_by: Mapped[str] = mapped_column(String(255))
+    justification: Mapped[str] = mapped_column(Text)
+    policy_version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    revocation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    targets: Mapped[list["ScanGrantTarget"]] = relationship(
+        "ScanGrantTarget", cascade="all, delete-orphan", lazy="selectin")
+
+
+class ScanGrantTarget(Base):
+    """One declared target of a grant (exact or wildcard-shaped)."""
+
+    __tablename__ = "scan_grant_targets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    grant_id: Mapped[str] = mapped_column(String(36), ForeignKey("scan_grants.id", ondelete="CASCADE"), index=True)
+    target_type: Mapped[str] = mapped_column(String(32))
+    target_value: Mapped[str] = mapped_column(String(1024))
