@@ -23,6 +23,7 @@ confirmations). That migration is the next UX block.
 |---|---|---|
 | Multi-arch build | PASS live | `docker buildx build --platform linux/amd64,linux/arm64` produces an index with both architectures; bases are pinned per architecture by digest and the Trivy asset (plus its sha256) is selected from `TARGETARCH`. |
 | Binary correctness | PASS live | ELF headers checked inside each image: `linux/amd64` → `trivy x86_64`, `opengrep x86_64`; `linux/arm64` → `trivy aarch64`, `opengrep aarch64`. |
+| Combined build | PASS live | One `docker buildx build --platform linux/amd64,linux/arm64` produces an OCI index whose manifests are `linux/amd64` and `linux/arm64` (plus the usual provenance attestations); the amd64 manifest digest matches the image whose binaries were checked byte by byte. |
 | Real scan on amd64 | PASS live | The amd64 image ran a sandboxed scan under emulation with no network: `sast.json` and `sbom.cdx.json` produced (same 2 SAST findings and 3 components as arm64). |
 | Unsupported platforms | PASS | The build fails with "unsupported sandbox platform" for anything that is not linux/amd64 or linux/arm64 — including a Windows container image, which does not exist for this sandbox. |
 | Windows worker hosts | PASS | `mount_path()` hands Docker `C:/dir` instead of backslashes (pinned by test), and the Docker pipe is refused as a mount; a Windows x64 host gets no local engine because the lockfile only pins `windows-x86` — it fails closed and uses the sandbox instead (pinned by test). |
