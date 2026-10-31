@@ -102,6 +102,19 @@ export default function Findings({ projects }) {
     setBump((n) => n + 1)
   }
 
+  async function linkJira(row) {
+    const projectKey = window.prompt('Jira project key (e.g. SEC):')
+    if (!projectKey) return
+    try {
+      const result = await api.post('/api/v1/jira/links',
+        { finding_id: row.id, project_key: projectKey, actor: 'console' })
+      const key = result.data?.issue_key || 'queued (Jira not configured)'
+      window.alert(`Jira link: ${key}`)
+    } catch (e) {
+      window.alert(String(e.message || e))
+    }
+  }
+
   async function dispose(status) {
     const { id } = state.detail
     try {
@@ -195,6 +208,7 @@ export default function Findings({ projects }) {
                       <button onClick={() => dispose('acknowledged')}>acknowledge</button>
                       <button onClick={() => dispose('resolved')}>mark resolved</button>
                       {state.detail.status !== 'open' && <button onClick={() => dispose('open')}>reopen</button>}
+                      <button onClick={() => linkJira(row)}>link to jira</button>
                     </div>
                   </div>
                 </td></tr>

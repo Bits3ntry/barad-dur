@@ -225,6 +225,12 @@ services:
       # password lives in the deployment .env as `barad_db_password` (written
       # by the F0 bootstrap).
       PLATFORM_DATABASE_URL: postgresql+psycopg://barad:${barad_db_password:?set barad_db_password in .env}@postgres:5432/barad_platform
+      # BL-050 Jira bridge: leave unset to keep the integration dormant
+      # (links are queued in jira_outbox and reported as not configured).
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_TOKEN: ${JIRA_TOKEN:-}
+      JIRA_WEBHOOK_SECRET: ${JIRA_WEBHOOK_SECRET:-}
     ports:
       # Console + CLI reach the API from the host; loopback-only.
       - "127.0.0.1:${PLATFORM_API_PORT:-8090}:8090"

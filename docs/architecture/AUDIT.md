@@ -2,6 +2,26 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 BL-050 Jira bridge
+
+| Item | Result | Evidence |
+|---|---|---|
+| Link + create issue | PASS live | `POST /jira/links` queues a `create` item in `jira_outbox` (dedupe `create:<link>`), then calls Jira REST v3 (basic auth, ADF description, severity/rule/path context). Live against a stub Jira on the compose network: issue `SEC-1` created from a CRITICAL finding, link `linked`, outcome `sent`. |
+| Idempotency | PASS | A second link for the same finding → 409; outbox dedupe keys (`create:`, `assignee:`, `transition:`) prevent duplicate issues/transitions on retry; repeated webhooks report `changed: []`. |
+| Webhook | PASS live | `POST /jira/webhook` requires `X-Barad-Secret` (hmac.compare_digest; missing secret config → 503, wrong → 401), is idempotent and **never closes a finding**: Done flipped the link to `verification_required` while the finding stayed `open` (verified live). |
+| Permitted sync | PASS | `POST /jira/links/{id}/sync` pushes only assignee and explicit transitions (whitelisted by exact status name); unconfigured Jira → 503, no silent success. |
+| Reconciliation | PASS | `POST /jira/reconcile` pulls status/assignee per linked issue, audits `jira.drift_detected`, flips links to `verification_required` on terminal statuses and returns `verification_required` finding ids — never edits finding status. |
+| Audit | PASS | `jira.link_created`, `jira.link_synced`, `jira.webhook`, `jira.drift_detected` on the existing per-org hash chain. |
+| Tests | PASS | 4 in `test_bl050_jira.py` against a REAL local HTTP stub (no mocks): create+push, webhook-never-closes, reconcile drift, isolation. Suite total 98. |
+| Console | PASS | 13th tab `jira`: links table (issue link, remote status/assignee, sync state, last error), in-progress/done actions, reconcile summary, and a "link to jira" action from the finding detail. |
+
+Operational notes: integration is dormant until `JIRA_BASE_URL`, `JIRA_EMAIL`,
+`JIRA_TOKEN` and `JIRA_WEBHOOK_SECRET` are set (compose passes them through);
+while unconfigured, links queue as `pending` and the API reports
+`jira_configured:false` instead of pretending to sync. Verified against a
+controlled stub, not a customer Jira tenant — the REST shapes used are the
+documented v3 endpoints.
+
 ## 2026-10-31 BL-070 pentest management
 
 | Item | Result | Evidence |

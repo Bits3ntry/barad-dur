@@ -879,3 +879,46 @@ class PentestFinding(Base, TimestampMixin):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── BL-050: Jira bridge ───────────────
+
+class JiraLink(Base, TimestampMixin):
+    """Mapping finding <-> Jira issue. Barad-dûr owns findings; Jira owns its
+    own workflow — a Done ticket never closes a finding by itself."""
+
+    __tablename__ = "jira_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("findings.id"), index=True)
+    project_key: Mapped[str] = mapped_column(String(64))
+    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    issue_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    external_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    external_assignee: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sync_state: Mapped[str] = mapped_column(String(32), default="pending")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class JiraOutbox(Base):
+    """Idempotent outbound queue (dedupe_key unique per org)."""
+
+    __tablename__ = "jira_outbox"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    link_id: Mapped[str] = mapped_column(String(36), ForeignKey("jira_links.id"))
+    action: Mapped[str] = mapped_column(String(32))
+    payload: Mapped[str] = mapped_column(Text)
+    dedupe_key: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

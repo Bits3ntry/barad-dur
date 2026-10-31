@@ -52,6 +52,17 @@ docker exec -i barad-dur-postgres-1 pg_restore -U dtrack -d barad_platform_resto
 The `barad-dur_migration-backup` volume holds the pre-cutover dumps and is
 external + read-only by contract (never removed by `down -v`).
 
+## Jira integration (BL-050)
+
+Dormant until configured: set `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_TOKEN`
+(API token) and `JIRA_WEBHOOK_SECRET` in `.env`, then
+`docker compose up -d platform-api`. Point the Jira webhook at
+`https://<barad-host>/api/v1/jira/webhook` with header `X-Barad-Secret`.
+While unconfigured, links are queued in `jira_outbox` (dedupe keys) and the
+API reports `jira_configured: false` — it never fakes a sync. A Jira issue
+reaching Done flips the link to `verification_required`; findings still need
+their own verification.
+
 ## Secrets
 
 All secrets live in the deployment `.env` (gitignored, chmod 600):
