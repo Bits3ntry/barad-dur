@@ -91,15 +91,20 @@ def finish(platform_url, api_key, job_id, worker_id, outcome, summary,
 
 
 def run_scan(target_path: Path, output_dir: Path, cli_module="barad",
-             timeout=900, isolate_image: str | None = None) -> dict:
+             timeout=900, isolate_image: str | None = None,
+             isolate_config: str | None = None) -> dict:
     """Run the CLI scan locally, or inside an ephemeral sandbox container."""
     if isolate_image:
         from . import sandbox
 
+        # The sandbox root and the target are read-only by design; the CLI
+        # still needs a writable cwd for its own scratch state, so it runs
+        # from the tmpfs while the target stays mounted read-only.
+        argv = ["barad", "run", "/target", "-O", "/out", "--json"]
+        if isolate_config:
+            argv += ["--config", isolate_config]
         command = sandbox.build_command(
-            isolate_image,
-            ["barad", "run", "/target", "-O", "/out", "--json"],
-            "/target", target_path, output_dir)
+            isolate_image, argv, "/tmp", target_path, output_dir)
         try:
             returncode, stdout, stderr = sandbox.run(command, timeout=timeout)
         except sandbox.SandboxError as exc:
@@ -224,22 +229,61 @@ def find_artifacts(workdir: Path) -> dict:
 
 
 def _counts_from(artifacts: dict) -> dict:
+    """Severity counters computed from the artifacts the scan really wrote.
+
+    The CLI's `--json` summary does not always carry counters (it depends on
+    the target and the config), so the worker derives them from the sanitized
+    Trivy report and the OpenGrep SARIF rather than reporting an empty result.
+    """
+    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0,
+              "secrets": 0, "misconfigurations": 0, "sast": 0}
+
+    def bump(severity: str | None, key: str | None = None) -> None:
+        bucket = (severity or "").upper()
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+            return
+        if bucket in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+            counts[bucket.lower()] += 1
+
     sanitized = artifacts.get("security.sanitized.json")
-    if sanitized is None:
-        return {}
-    try:
-        document = json.loads(sanitized.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
-    if isinstance(document, dict):
-        for key in ("counts", "summary"):
-            if isinstance(document.get(key), dict):
-                return document[key]
-    return {}
+    if sanitized is not None:
+        try:
+            document = json.loads(sanitized.read_text())
+        except (json.JSONDecodeError, OSError):
+            document = {}
+        if isinstance(document, dict):
+            if isinstance(document.get("counts"), dict):
+                return document["counts"]
+            for result in document.get("Results") or []:
+                for item in result.get("Vulnerabilities") or []:
+                    bump(item.get("Severity"))
+                for item in result.get("Misconfigurations") or []:
+                    bump(item.get("Severity"), "misconfigurations")
+                for _item in result.get("Secrets") or []:
+                    bump(None, "secrets")
+
+    sast = artifacts.get("sast.json")
+    if sast is not None:
+        try:
+            run = json.loads(sast.read_text())
+        except (json.JSONDecodeError, OSError):
+            run = {}
+        for result in (run.get("results") if isinstance(run, dict) else None) or []:
+            severity = ((result.get("extra") or {}).get("severity")
+                        or (result.get("properties") or {}).get("severity")
+                        or "WARNING")
+            counts["sast"] += 1
+            if severity.upper() in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+                counts[severity.lower()] += 1
+    counts["total"] = sum(counts.get(key, 0) for key in
+                          ("critical", "high", "medium", "low"))
+    return counts
 
 
 def execute_job(platform_url, api_key, worker_id, job, worker_token=None,
-                isolate_image: str | None = None) -> dict:
+                isolate_image: str | None = None,
+                isolate_config: str | None = None) -> dict:
     """Run one claimed job; returns the finish payload outcome."""
     profile = job.get("profile") or {}
     target_path = Path(profile.get("target_path") or "").expanduser()
@@ -254,7 +298,8 @@ def execute_job(platform_url, api_key, worker_id, job, worker_token=None,
                    or f"/tmp/barad-worker-{job['id'][:8]}").expanduser()
     workdir.mkdir(parents=True, exist_ok=True)
     try:
-        manifest = run_scan(target_path, workdir, isolate_image=isolate_image)
+        manifest = run_scan(target_path, workdir, isolate_image=isolate_image,
+                            isolate_config=isolate_config)
     except (WorkerError, subprocess.TimeoutExpired) as exc:
         finish(platform_url, api_key, job["id"], worker_id, "failed",
                {"reason": "scan_error"}, [], error=str(exc)[:900])
@@ -304,7 +349,8 @@ def execute_job(platform_url, api_key, worker_id, job, worker_token=None,
 
 def serve(platform_url, api_key, name="shauron-worker", capabilities=None,
           max_concurrent=1, once=False, poll=DEFAULT_POLL, limit=None,
-          worker_token=None, isolate_image: str | None = None):
+          worker_token=None, isolate_image: str | None = None,
+          isolate_config: str | None = None):
     """Register, then poll for jobs until stopped (or `limit` jobs)."""
     capabilities = capabilities or ["vulnerability_analysis"]
     worker = register(platform_url, api_key, name, capabilities, max_concurrent)
@@ -328,7 +374,7 @@ def serve(platform_url, api_key, name="shauron-worker", capabilities=None,
             handled += 1
             continue
         execute_job(platform_url, api_key, worker_id, job, worker_token,
-                    isolate_image=isolate_image)
+                    isolate_image=isolate_image, isolate_config=isolate_config)
         handled += 1
         if once or (limit is not None and handled >= limit):
             return {"worker": worker_id, "handled": handled}

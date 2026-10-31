@@ -23,6 +23,9 @@ SANDBOX_FLAGS = [
     "--network", "none",
     "--read-only",
     "--tmpfs", "/tmp:rw,noexec,nosuid,size=256m",
+    # the SAST engine execs a helper it writes at runtime, so one small
+    # mount must allow exec; /tmp stays noexec for scratch data
+    "--tmpfs", "/var/tmp:rw,exec,nosuid,size=512m",
     "--cap-drop", "ALL",
     "--security-opt", "no-new-privileges",
     "--user", "65534:65534",

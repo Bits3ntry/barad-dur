@@ -2,6 +2,19 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Shauron sandbox image (real scan, no network)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Image | PASS live | `deploy/shauron/Dockerfile` builds a digest-pinned image carrying the CLI, the repo-level `integrations` package, Trivy 0.76.1 (pinned by sha256), the verified OpenGrep 1.33.1 engine and `sandbox.barad.yml`. The build fails loudly if either `barad --version` or the engine resolution fails, so a half-built image cannot exist. |
+| Scan inside the sandbox | PASS live | A job created through `POST /orchestration/jobs` was claimed by `barad worker --isolate-image ... --isolate-config /app/sandbox.barad.yml`, ran inside the container and reached `succeeded` with `manifest` and `log` artifacts; the run directory holds `sast.json`, `sbom.cdx.json`, `security.json`, `security.sanitized.json`. The SAST stage reported 2 findings (subprocess shell=True, unsafe yaml.load) and the SBOM 3 components — real output, no network. |
+| Counters | PASS | `_counts_from` now derives severity counters from the sanitized Trivy report plus the OpenGrep SARIF instead of reporting `{}` when the CLI summary omits them; live value: `sast: 2`. Pinned by two unit tests. |
+| Isolation details discovered | PASS | Three real obstacles were found and fixed, not papered over: the CLI needs a writable cwd (runs from the tmpfs while `/target` stays read-only), the SAST engine re-execs a copy it unpacks into a cache dir (so one mount must allow exec while `/tmp` stays noexec), and that cache needs ~48MB, so dropping it to 64MB produced a genuine "no space left" failure. |
+
+Known limits: the image is built for `linux/arm64` (this host) — a different
+architecture needs its own Trivy asset; the Trivy database cannot be updated
+inside the sandbox, so vulnerability matching uses whatever the image carries.
+
 ## 2026-10-31 Worker container isolation (Shauron sandbox)
 
 | Item | Result | Evidence |

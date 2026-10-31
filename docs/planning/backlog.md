@@ -115,3 +115,10 @@ throwaway container (no network, read-only rootfs, noexec tmp, all caps
 dropped, uid 65534, 1g/1cpu/256 pids, target read-only) and refuses to build
 anything unsafe. Remaining: ship a Shauron image that carries the scanners so
 the sandbox can run a real scan without the host engines.
+
+## BL-020c — Sandbox image shipped (done)
+
+`deploy/shauron/Dockerfile` + `sandbox.barad.yml` produce an image that runs a
+real scan (Trivy secret/misconfig + OpenGrep SAST) with no network, read-only
+root and non-root user. Verified through the orchestration API. Remaining: a
+multi-arch build (arm64 today) and shipping a pre-populated Trivy database.

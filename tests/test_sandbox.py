@@ -88,3 +88,39 @@ class SandboxContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CountsFromArtifactsTest(unittest.TestCase):
+    def test_counts_come_from_the_artifacts(self):
+        import json
+        import tempfile
+
+        from barad import worker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "security.sanitized.json").write_text(json.dumps({
+                "Results": [{
+                    "Vulnerabilities": [{"Severity": "HIGH"}, {"Severity": "LOW"}],
+                    "Misconfigurations": [{"Severity": "MEDIUM"}],
+                    "Secrets": [{"RuleID": "aws-key"}],
+                }]}))
+            (root / "sast.json").write_text(json.dumps({
+                "results": [{"extra": {"severity": "ERROR"}},
+                            {"extra": {"severity": "WARNING"}}]}))
+            counts = worker._counts_from(worker.find_artifacts(root))
+        self.assertEqual(counts["high"], 1)
+        self.assertEqual(counts["low"], 1)
+        # misconfigurations are counted in their own bucket, not by severity
+        self.assertEqual(counts["medium"], 0)
+        self.assertEqual(counts["misconfigurations"], 1)
+        self.assertEqual(counts["secrets"], 1)
+        self.assertEqual(counts["sast"], 2)
+        self.assertEqual(counts["total"], 2)
+
+    def test_missing_artifacts_give_zeroes_not_an_exception(self):
+        from barad import worker
+
+        counts = worker._counts_from({})
+        self.assertEqual(counts["total"], 0)
+        self.assertEqual(counts["sast"], 0)

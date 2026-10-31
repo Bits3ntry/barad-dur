@@ -1,0 +1,21 @@
+# Configuration used when the Shauron CLI runs inside the worker sandbox.
+#
+# The sandbox has no network and a read-only root, so: the local Trivy binary
+# is used (never the docker runner, which cannot work without a socket) and
+# only scanners that ship their policies with the binary are enabled.
+version: 1
+
+project:
+  name: shauron-sandbox
+
+scan:
+  target_type: fs
+  runner: local
+  executable: trivy
+  scanners: [secret, misconfig]
+
+sast:
+  enabled: true
+
+output:
+  directory: /out

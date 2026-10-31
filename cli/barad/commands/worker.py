@@ -23,6 +23,9 @@ def register(subparsers):
                         help=("run each scan in a digest-pinned throwaway "
                               "container (no network, read-only rootfs, "
                               "memory/cpu limits, non-root)"))
+    parser.add_argument("--isolate-config", default="",
+                        help="config file inside the sandbox image (e.g. "
+                             "/app/sandbox.barad.yml)")
     parser.add_argument("--name", default="shauron-worker",
                         help="worker name (stable identity)")
     parser.add_argument("--capability", action="append", default=None,
@@ -45,7 +48,8 @@ def _execute(args):
             capabilities=args.capability, max_concurrent=args.max_concurrent,
             once=args.once, poll=args.poll, limit=args.limit,
             worker_token=args.worker_token or None,
-            isolate_image=args.isolate_image or None)
+            isolate_image=args.isolate_image or None,
+            isolate_config=args.isolate_config or None)
     except worker_module.WorkerError as error:
         print(f"worker error: {error}", file=sys.stderr)
         return EXIT_FAILURE
