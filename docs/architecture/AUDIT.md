@@ -2,6 +2,21 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 GitLab publishing (SCM parity)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Provider detection | PASS live | The provider is derived from the repository remote (`gitlab` in the URL → GitLab, `github` → GitHub); anything else is a 422 `scm_provider_unknown` instead of a guess (pinned by test with a gitea remote). |
+| Commit status | PASS live | GitLab path posts `POST /projects/:id/statuses/:sha` with `name=barad-dur/security` and GitLab's own state vocabulary (`success`/`failed`, not `failure`). Live against a stub on the compose network: `state failed`, name correct. |
+| Idempotent MR note | PASS live | Notes use `PRIVATE-TOKEN`; the first publish creates the marker note, the second updates the same note (live: `note created` → `note updated`, same `comment_id`). |
+| Per-provider credential | PASS | Publishing a GitLab remote without `GITLAB_TOKEN` → 503 naming the exact variable; the GitHub path keeps requiring `GITHUB_TOKEN`. |
+| Console + audit | PASS | The existing `publish` action works for both providers; the audit detail now records `provider:slug#number state`. |
+| Tests | PASS | 3 in `test_scm_gitlab.py` against a real GitLab stub (status+note idempotency, own-token requirement, unknown provider). Suite total 160. |
+
+Known limits: GitHub and GitLab only (no Bitbucket/Gitea), no GitLab MR
+approval or inline discussions, and the integration stays dormant until
+`GITLAB_TOKEN` is set.
+
 ## 2026-10-31 SBOM baselines
 
 | Item | Result | Evidence |

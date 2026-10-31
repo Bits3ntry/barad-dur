@@ -516,22 +516,35 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
     if not (pr.repository_id and pr.head_sha):
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "publishing needs a repository and the head commit SHA")
-    if not scm_client.configured():
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "scm_not_configured: set GITHUB_TOKEN")
     repo = session.get(models.Repository, pr.repository_id)
     if repo is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "repository not found")
+    try:
+        provider = scm_client.provider_for(repo.remote_url)
+    except scm_client.ScmError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    token_hint = "GITLAB_TOKEN" if provider == "gitlab" else "GITHUB_TOKEN"
+    if not scm_client.configured(provider):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            f"scm_not_configured: set {token_hint}")
     try:
         slug = scm_client.repo_slug(repo.remote_url)
         state = "success" if pr.gate_verdict == "pass" else "failure"
         description = (f"Barad-dûr gate {pr.gate_verdict}: "
                        f"{pr.gate_reason or 'see console'}")[:140]
-        status_response = scm_client.post_commit_status(
-            slug, pr.head_sha, state, description,
-            target_url=payload.target_url)
         body = f"{scm_client.COMMENT_MARKER}\n{pr.comment or 'No findings.'}"
-        comment = scm_client.upsert_pr_comment(slug, pr.number, body)
+        if provider == "gitlab":
+            # GitLab statuses use success/failed, not failure
+            gitlab_state = "success" if state == "success" else "failed"
+            status_response = scm_client.post_gitlab_commit_status(
+                slug, pr.head_sha, gitlab_state, description,
+                target_url=payload.target_url)
+            comment = scm_client.upsert_gitlab_mr_note(slug, pr.number, body)
+        else:
+            status_response = scm_client.post_commit_status(
+                slug, pr.head_sha, state, description,
+                target_url=payload.target_url)
+            comment = scm_client.upsert_pr_comment(slug, pr.number, body)
     except scm_client.ScmError as exc:
         _audit_log(session, org.id, payload.actor, "code.pr_publish_failed",
                    "pull_request", pr.id, str(exc)[:300])
@@ -540,8 +553,9 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
                             str(exc)) from None
     _audit_log(session, org.id, payload.actor, "code.pr_published",
                "pull_request", pr.id,
-               f"{slug}#{pr.number} {state}")
+               f"{provider}:{slug}#{pr.number} {state}")
     session.commit()
-    return {"data": {"repository": slug, "sha": pr.head_sha, "state": state,
+    return {"data": {"provider": provider, "repository": slug,
+                     "sha": pr.head_sha, "state": state,
                      "status_id": status_response.get("id"),
                      "comment_id": comment.get("id")}}

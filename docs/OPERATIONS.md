@@ -104,8 +104,13 @@ Deliveries are deduped per channel per day; failures are recorded in
 
 ## SCM publishing
 
-Set `GITHUB_TOKEN` (repo:status + pull_requests:write) and optionally
-`GITHUB_API_URL` (defaults to `https://api.github.com`), then
+GitHub: set `GITHUB_TOKEN` (repo:status + pull_requests:write) and optionally
+`GITHUB_API_URL` (defaults to `https://api.github.com`).
+GitLab: set `GITLAB_TOKEN` (api scope) and optionally `GITLAB_API_URL`
+(defaults to `https://gitlab.com/api/v4`). The provider is chosen from the
+repository remote; an unrecognised host is rejected instead of guessed.
+
+Then
 `docker compose up -d platform-api`. The publish action posts a commit
 status (`barad-dur/security`, state from the gate verdict) and keeps a
 single marker comment per PR, updating it on re-runs. Unset token ⇒ 503
