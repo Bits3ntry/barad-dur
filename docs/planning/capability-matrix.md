@@ -37,7 +37,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | SBOM baseline | COMPLETE | per-version frozen component set + diff endpoint |
 | Cross-project component impact | COMPLETE | `/components/impact` (id/purl/name) with usage + findings; console panel |
 | Scan scheduling | COMPLETE | interval definitions for scan **and easm** jobs, idempotent tick (cron), authorization re-checked per fire, console panel with tick-now |
-| Pentest report export | PARTIAL | printable self-contained HTML report (escaped); no PDF renderer or template editor |
+| Pentest report export | COMPLETE | printable self-contained HTML **and** dependency-free PDF (scope, tests, evidence, remediation, verification); no template editor |
 | Scanner orchestration / Shauron contract | PARTIAL | BL-020 registry/workers/leased jobs/artifacts/revalidation + real `barad worker` execution (OpenGrep+SBOM) live; no worker tokens, scheduler or container isolation |
 | Dashboards / reporting | COMPLETE (v1) | BL-110: real-data summary + project posture + console tab |
 | Console pages | PARTIAL | 11 tabs; no pentest pages yet |

@@ -9,6 +9,7 @@ This ledger records observed checks for the current architecture. It does not tu
 | PDF endpoint | PASS live | `GET /api/v1/pentest/engagements/{id}/report.pdf` renders scope, methodology, test table, every finding with reproduction, HTTP request/response evidence, remediation and verification, plus the rule that only verification evidence closes a finding. Live: HTTP 200, `application/pdf`, 2158 bytes, parsed by pypdf (1 page, 691 chars, content intact). |
 | Writer | PASS | `pdf_report.py` emits a real PDF 1.4 (catalog, page tree, base-14 Helvetica, cp1252 text, correct xref offsets) with zero third-party dependencies, so the image gains no renderer. WinAnsi covers em dashes and middle dots; arrows and typographic quotes are mapped explicitly instead of silently mangled. |
 | Tenant scope | PASS | A foreign org gets 404 for another org's engagement PDF (tenant-scoped test). |
+| Console link | PASS live | The pentest detail now offers **printable html** and **download pdf**; both were fetched through the console proxy (`console:200`, `pdf_via_console:200`), so the visible action is not a dead button. |
 | Tests | PASS | 3 in `test_pentest_pdf.py`: wrapping/escaping, end-to-end report parsed back out of the bytes, and the foreign-tenant 404. Total suite 169. |
 
 Known limits: no images, no charts and no custom branding; multi-page
