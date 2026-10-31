@@ -21,7 +21,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | Finding lifecycle (dedupe, suppressions, priority, SLA) | COMPLETE | B1 + F2 gates |
 | Occurrences | COMPLETE | BL-040 |
 | Remediation tasks | COMPLETE | one-open-task contract |
-| License management | **IN PROGRESS (BL-060, this round)** | component.license capture exists; no inventory/policies/verdicts yet |
+| License management | COMPLETE | BL-060 (`9139ecf`): inventory, policies, evaluator, exceptions, console tab, live gate |
 | CI registry + fail-closed gate | PARTIAL | runs/verdicts; policies hard-coded threshold |
 | Quality Gates / policies engine | MISSING | BL-055 |
 | SAST (OpenGrep) execution | COMPLETE (CLI) | engine pinned; no SARIF ingest/PR view |

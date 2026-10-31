@@ -27,8 +27,9 @@ picture) | `todo`. Anything else is NOT implemented.
   live gate).
 - **BL-060 License policies** — objective: license set per component, policies
   with allow/deny + report per version. **P1** | deps components (live) |
-  AC: upload SBOM with licenses → component carries license + policy verdict;
-  T: pytest; status `todo`.
+  status `landed` (`9139ecf`: component_licenses (multi-license, idempotent),
+  org/project policies, deterministic evaluator, expiring exceptions, 6 tests
+  + live gate: GPL denied → exception → excepted; console Licenses tab).
 - **BL-025 SPDX export + ingest receipts surfacing** — objective: SPDX 2.3
   export alongside CycloneDX. **P2** | deps none.
 - **BL-065 Signed feed trust** — objective: office signing of the

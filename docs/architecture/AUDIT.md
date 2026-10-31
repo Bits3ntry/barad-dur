@@ -2,6 +2,23 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 BL-060 license management
+
+| Item | Result | Evidence |
+|---|---|---|
+| License inventory | PASS live | SBOM with licenses=[Apache-2.0, GPL-3.0-only, MIT+BSD-3-Clause] → 4 license rows; re-ingest adds none (uq component+license); legacy single `license` column unchanged. |
+| Policies | PASS | org- and project-scoped; allow/deny CSV lists; deny-list wins; project policy overrides org (test); unknown_action carried. |
+| Evaluation | PASS live | counts `{components:3, denied:1, allowed:3}`; per-row verdict+reason; unlicensed components counted separately (never silently allowed). |
+| Exceptions | PASS live | expiry-aware waiver: GPL denied → exception (90d) → `excepted` with approver/reason; expired → back to denied (test). |
+| Console | PASS | Licenses tab: project/version picker, evaluate, counts pills, verdict table, policy create/disable, exceptions create/list. |
+| Audit | PASS | `license.policy_created/policy_status/exception_created` in the hash chain (`chain_ok: true`). |
+| Tests | PASS | 6 in `test_bl060_licenses.py` + suite total 72; tenant isolation asserted. |
+
+Known limits: SBOM license expressions are compared as raw strings (no SPDX
+normalization yet); policies have no approval workflow (single-actor create);
+license violations are not yet materialized as findings for the findings
+pipeline — evaluator-only for now.
+
 ## 2026-10-31 Console-round pre-merge validation (gate run)
 
 | Gate | Result | Evidence |
