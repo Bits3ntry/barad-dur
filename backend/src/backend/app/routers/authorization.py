@@ -60,7 +60,9 @@ def grant_data(grant: models.ScanGrant) -> dict:
             "status": grant.status,
             "valid_from": grant.valid_from.isoformat(),
             "valid_until": grant.valid_until.isoformat(),
-            "revoked_at": grant.revoked_at.isoformat() if grant.revoked_at else None}
+            "revoked_at": grant.revoked_at.isoformat() if grant.revoked_at else None,
+            "revoked_by": grant.revoked_by,
+            "revocation_reason": grant.revocation_reason}
 
 
 @router.get("/capabilities")
