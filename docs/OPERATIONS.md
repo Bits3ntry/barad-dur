@@ -64,7 +64,8 @@ entry on the host (crontab -e):
 
 Each due schedule advances its clock before queueing, so an overlapping tick
 cannot duplicate a run; a denied schedule records the denial and still waits
-for its next interval.
+for its next interval. Schedules can be `scan` (scanner + repository targets)
+or `easm` (domain asset → DNS observation snapshot).
 
 ## Shauron worker
 

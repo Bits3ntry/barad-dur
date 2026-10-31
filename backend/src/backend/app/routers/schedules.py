@@ -25,7 +25,8 @@ router = APIRouter(prefix="/api/v1/orchestration/schedules", tags=["orchestratio
 def _schedule_data(row: models.ScanSchedule, now: datetime.datetime | None = None) -> dict:
     now = auth_local.ensure_aware(now or models.utcnow())
     due = auth_local.ensure_aware(row.next_run_at) <= now
-    return {"id": row.id, "name": row.name, "scanner": row.scanner,
+    return {"id": row.id, "name": row.name, "kind": row.kind,
+            "asset_id": row.asset_id, "scanner": row.scanner,
             "capability": row.capability, "principal": row.principal,
             "targets": json.loads(row.targets or "[]"),
             "environment": row.environment,
@@ -39,10 +40,12 @@ def _schedule_data(row: models.ScanSchedule, now: datetime.datetime | None = Non
 
 class ScheduleIn(BaseModel):
     name: str = Field(min_length=2, max_length=128)
-    scanner: str
-    capability: str
+    kind: str = "scan"
+    asset_id: str | None = None
+    scanner: str = ""
+    capability: str = ""
     principal: str = Field(min_length=2, max_length=255)
-    targets: list[dict]
+    targets: list[dict] = []
     environment: str | None = None
     profile: dict = {}
     interval_minutes: int = Field(default=1440, ge=15, le=525600)
@@ -56,17 +59,32 @@ def create_schedule(payload: ScheduleIn = None,
                     session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
-    if payload.capability not in authorization.CAPABILITIES:
+    if payload.kind not in {"scan", "easm"}:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            f"capability must be one of {sorted(authorization.CAPABILITIES)}")
-    scanner = (session.query(models.Scanner)
-               .filter_by(org_id=org.id, name=payload.scanner).one_or_none())
-    if scanner is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "scanner not registered")
-    if scanner.capability != payload.capability:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            f"scanner {scanner.name} is registered for "
-                            f"'{scanner.capability}'")
+                            "kind must be scan | easm")
+    if payload.kind == "scan":
+        if payload.capability not in authorization.CAPABILITIES:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"capability must be one of "
+                                f"{sorted(authorization.CAPABILITIES)}")
+        scanner = (session.query(models.Scanner)
+                   .filter_by(org_id=org.id, name=payload.scanner).one_or_none())
+        if scanner is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "scanner not registered")
+        if scanner.capability != payload.capability:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"scanner {scanner.name} is registered for "
+                                f"'{scanner.capability}'")
+    else:
+        if not payload.asset_id:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                "easm schedules need an asset_id")
+        asset = session.get(models.Asset, payload.asset_id)
+        if asset is None or asset.org_id != org.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+        if asset.type not in {"domain", "subdomain"}:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                "easm schedules support domain assets only")
     if session.query(models.ScanSchedule).filter_by(org_id=org.id,
                                                     name=payload.name).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "schedule name already used")
@@ -76,6 +94,7 @@ def create_schedule(payload: ScheduleIn = None,
         capability=payload.capability, principal=payload.principal,
         targets=json.dumps(payload.targets), environment=payload.environment,
         profile=json.dumps(payload.profile),
+        kind=payload.kind, asset_id=payload.asset_id,
         interval_minutes=payload.interval_minutes, enabled=payload.enabled,
         next_run_at=now, created_by=payload.actor,
         created_at=now, updated_at=now)
@@ -152,6 +171,47 @@ def tick(payload: TickIn = None,
         row.next_run_at = now + datetime.timedelta(minutes=row.interval_minutes)
         row.last_run_at = now
         row.updated_at = now
+        if row.kind == "easm":
+            from backend.app.routers.easm import _dns_lookup
+
+            asset = session.get(models.Asset, row.asset_id) if row.asset_id else None
+            if asset is None:
+                row.last_error = "asset missing"
+                results.append({"schedule": row.name, "result": "skipped",
+                                "reason": "asset missing"})
+                continue
+            decision = authorization.authorize(
+                session, row.org_id, row.principal, "passive_discovery",
+                [{"type": "domain", "value": asset.value}], tool="dns-collector")
+            if decision["decision"] == "deny":
+                row.last_error = f"denied: {decision['reason']}"[:500]
+                results.append({"schedule": row.name, "result": "denied",
+                                "reason": decision["reason"][:200]})
+                _audit_log(session, row.org_id, payload.actor,
+                           "orchestration.schedule_denied", "scan_schedule",
+                           row.id, decision["reason"][:300])
+                continue
+            try:
+                observation = {"dns": _dns_lookup(asset.value)}
+            except HTTPException as exc:
+                row.last_error = str(exc.detail)[:500]
+                results.append({"schedule": row.name, "result": "error",
+                                "reason": str(exc.detail)[:200]})
+                continue
+            snapshot = models.AssetSnapshot(
+                org_id=row.org_id, asset_id=asset.id, observed_at=now,
+                source="scheduled-collector",
+                data=json.dumps(observation, sort_keys=True), created_at=now)
+            session.add(snapshot)
+            asset.last_seen_at = now
+            row.last_error = None
+            results.append({"schedule": row.name, "result": "collected",
+                            "asset": asset.value,
+                            "ipv4": len(observation["dns"]["ipv4"])})
+            _audit_log(session, row.org_id, payload.actor,
+                       "orchestration.schedule_collected", "scan_schedule",
+                       row.id, asset.value)
+            continue
         decision = authorization.authorize(
             session, row.org_id, row.principal, row.capability,
             json.loads(row.targets or "[]"), tool=row.scanner,

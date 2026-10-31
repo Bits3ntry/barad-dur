@@ -12,6 +12,10 @@ export default function Orchestration() {
   const [scanner, setScanner] = useState({ name: '', capability: CAPS[2], version: '' })
   const [worker, setWorker] = useState({ name: '', capabilities: [CAPS[2]], max_concurrent: 1 })
   const [job, setJob] = useState({ scanner: '', capability: CAPS[2], principal: 'ci', target: '', environment: 'ci' })
+  const [schedules, setSchedules] = useState([])
+  const [assets, setAssets] = useState([])
+  const [schedule, setSchedule] = useState({ name: '', kind: 'scan', scanner: '', asset_id: '', principal: 'ci', target: '', interval_minutes: 1440 })
+  const [tickInfo, setTickInfo] = useState('')
 
   useEffect(() => { load() }, [])
 
@@ -21,8 +25,12 @@ export default function Orchestration() {
       api.get('/api/v1/orchestration/scanners'),
       api.get('/api/v1/orchestration/workers'),
       api.get('/api/v1/orchestration/jobs'),
-    ]).then(([s, w, j]) => { setScanners(s.data); setWorkers(w.data); setJobs(j.data) })
-      .catch((e) => setError(String(e.message || e)))
+      api.get('/api/v1/orchestration/schedules'),
+      api.get('/api/v1/assets'),
+    ]).then(([s, w, j, sc, a]) => {
+      setScanners(s.data); setWorkers(w.data); setJobs(j.data)
+      setSchedules(sc.data); setAssets(a.data)
+    }).catch((e) => setError(String(e.message || e)))
   }
 
   async function addScanner() {
@@ -57,6 +65,42 @@ export default function Orchestration() {
     try {
       await api.post(`/api/v1/orchestration/jobs/${row.id}/${action}`,
         { actor: 'console', reason: action === 'cancel' ? 'console cancel' : undefined })
+      load()
+    } catch (e) { setError(String(e.message || e)) }
+  }
+
+  async function addSchedule() {
+    try {
+      const payload = {
+        name: schedule.name, kind: schedule.kind, principal: schedule.principal,
+        interval_minutes: Number(schedule.interval_minutes), actor: 'console',
+      }
+      if (schedule.kind === 'easm') {
+        payload.asset_id = schedule.asset_id
+      } else {
+        payload.scanner = schedule.scanner
+        payload.capability = scanners.find((s) => s.name === schedule.scanner)?.capability || CAPS[2]
+        payload.targets = [{ type: 'repository', value: schedule.target }]
+      }
+      await api.post('/api/v1/orchestration/schedules', payload)
+      setSchedule((s) => ({ ...s, name: '' }))
+      load()
+    } catch (e) { setError(String(e.message || e)) }
+  }
+
+  async function toggleSchedule(row) {
+    try {
+      await api.patch(`/api/v1/orchestration/schedules/${row.id}`,
+        { enabled: !row.enabled, actor: 'console' })
+      load()
+    } catch (e) { setError(String(e.message || e)) }
+  }
+
+  async function tickNow() {
+    try {
+      const r = await api.post('/api/v1/orchestration/schedules/tick', { actor: 'console' })
+      setTickInfo(`tick: ${r.data.processed} processed` +
+        (r.data.results.length ? ` (${r.data.results.map((x) => x.result).join(', ')})` : ''))
       load()
     } catch (e) { setError(String(e.message || e)) }
   }
@@ -104,6 +148,68 @@ export default function Orchestration() {
         </tbody>
       </table>
       {!jobs.length && <p className="empty">No jobs queued.</p>}
+
+      <h2 className="section">schedules</h2>
+      <div className="bar">
+        <span className="count">{schedules.length} schedules</span>
+        <button onClick={tickNow}>run tick now</button>
+        {tickInfo && <span className="muted">{tickInfo}</span>}
+      </div>
+      <table>
+        <thead><tr><th>name</th><th>kind</th><th>target</th><th>every</th><th>next run</th><th>last</th><th></th></tr></thead>
+        <tbody>
+          {schedules.map((row) => (
+            <tr key={row.id}>
+              <td className="title">{row.name}</td>
+              <td><span className="pill">{row.kind}</span></td>
+              <td className="muted">
+                {row.kind === 'easm'
+                  ? (assets.find((a) => a.id === row.asset_id)?.value || row.asset_id?.slice(0, 8))
+                  : (row.targets[0]?.value || '—')}
+              </td>
+              <td>{row.interval_minutes}m</td>
+              <td>{new Date(row.next_run_at).toLocaleString()}{row.due ? ' (due)' : ''}</td>
+              <td>{row.last_error ? <span className="error small">{row.last_error}</span>
+                : (row.last_run_at ? new Date(row.last_run_at).toLocaleTimeString() : 'never')}</td>
+              <td><button className="mini" onClick={() => toggleSchedule(row)}>
+                {row.enabled ? 'disable' : 'enable'}
+              </button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!schedules.length && <p className="empty">No schedules yet.</p>}
+      <div className="card">
+        <input placeholder="schedule name" value={schedule.name}
+          onChange={(e) => setSchedule((s) => ({ ...s, name: e.target.value }))} />
+        <select value={schedule.kind} onChange={(e) => setSchedule((s) => ({ ...s, kind: e.target.value }))}>
+          <option value="scan">scan job</option>
+          <option value="easm">easm collection</option>
+        </select>
+        {schedule.kind === 'scan' ? (
+          <>
+            <select value={schedule.scanner}
+              onChange={(e) => setSchedule((s) => ({ ...s, scanner: e.target.value }))}>
+              <option value="">scanner</option>
+              {scanners.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+            </select>
+            <input placeholder="repository target" value={schedule.target}
+              onChange={(e) => setSchedule((s) => ({ ...s, target: e.target.value }))} />
+          </>
+        ) : (
+          <select value={schedule.asset_id}
+            onChange={(e) => setSchedule((s) => ({ ...s, asset_id: e.target.value }))}>
+            <option value="">domain asset</option>
+            {assets.filter((a) => ['domain', 'subdomain'].includes(a.type))
+              .map((a) => <option key={a.id} value={a.id}>{a.value}</option>)}
+          </select>
+        )}
+        <input type="number" min="15" value={schedule.interval_minutes}
+          onChange={(e) => setSchedule((s) => ({ ...s, interval_minutes: e.target.value }))} />
+        <input placeholder="principal" value={schedule.principal}
+          onChange={(e) => setSchedule((s) => ({ ...s, principal: e.target.value }))} />
+        <button onClick={addSchedule}>add schedule</button>
+      </div>
 
       <h2 className="section">workers</h2>
       <table>

@@ -2,6 +2,20 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Scheduled EASM collection + schedules UI
+
+| Item | Result | Evidence |
+|---|---|---|
+| Schedule kinds | PASS live | Schedules now carry `kind` (`scan`/`easm`); an `easm` schedule references a domain/subdomain asset (foreign asset → 404, IP asset → 422, missing asset → 422), a `scan` schedule keeps the scanner/capability validation. Migration 0026 adds both columns with a FK. |
+| Scheduled collection | PASS live | The tick resolves DNS through the same authorization path (`passive_discovery` for the asset domain), stores a snapshot with source `scheduled-collector` and advances the clock before collecting. Live: `gate-dns` collected `api.councilbox.com` (1 IPv4) once; a second tick processed 0. |
+| Authorization | PASS | Without a grant the tick reports `denied: …`, writes `last_error`, stores **no snapshot** and still advances (no retry storm). Pinned by test. |
+| Console | PASS live | The orchestration tab finally has a schedules table (name, kind, target, interval, next run/due, last run or error, enable/disable) plus a create form that switches between scan and EASM, and a `run tick now` button. Verified in the live console: `gate-nightly` (scan) and `gate-dns` (easm → api.councilbox.com). |
+| Tests | PASS | 3 in `test_scheduled_easm.py` (collection + interval idempotency, denial leaves no snapshot, validation/isolation). Suite total 154. |
+
+Known limits: EASM schedules collect DNS only (TLS stays an explicit,
+grant-gated action), and schedules still depend on an external cron hitting
+the tick endpoint.
+
 ## 2026-10-31 Dashboard: scanner health + pentest posture
 
 | Item | Result | Evidence |

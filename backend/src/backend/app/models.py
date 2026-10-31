@@ -1169,6 +1169,9 @@ class ScanSchedule(Base, TimestampMixin):
     targets: Mapped[str] = mapped_column(Text, default="[]")
     environment: Mapped[str | None] = mapped_column(String(128), nullable=True)
     profile: Mapped[str] = mapped_column(Text, default="{}")
+    kind: Mapped[str] = mapped_column(String(16), default="scan")
+    asset_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("assets.id"), nullable=True)
     interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
