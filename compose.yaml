@@ -233,6 +233,9 @@ services:
       JIRA_WEBHOOK_SECRET: ${JIRA_WEBHOOK_SECRET:-}
       # First-run owner bootstrap; unset disables bootstrap entirely.
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
+      # SCM publishing (GitHub); unset keeps publishing disabled.
+      GITHUB_API_URL: ${GITHUB_API_URL:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     ports:
       # Console + CLI reach the API from the host; loopback-only.
       - "127.0.0.1:${PLATFORM_API_PORT:-8090}:8090"

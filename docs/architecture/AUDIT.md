@@ -2,6 +2,21 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 SCM publishing (GitHub)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Commit status | PASS live | `POST /code/pull-requests/{id}/publish` maps the gate verdict to a GitHub commit status (`success`/`failure`, context `barad-dur/security`, description from the gate reason). Live against a stub GitHub on the compose network: status `failure` for PR #1042 with 5 open ≥ HIGH findings. |
+| Idempotent comment | PASS live | One marker comment per PR: the first publish creates it (`comment created #1`), the next one PATCHes the same comment (`comment updated #1`) — no comment spam on re-runs. |
+| Preconditions | PASS | Publishing without a gate verdict → 409; without repository/head SHA → 409; unconfigured (`GITHUB_TOKEN` unset) → **503 `scm_not_configured`**, verified live after removing the env vars. |
+| Repository parsing | PASS | `owner/repo` extracted from https and ssh remotes (`https://github.com/acme/saria.git` → `acme/saria`); unparseable remotes raise an explicit error instead of guessing. |
+| Audit + console | PASS | `code.pr_published` / `code.pr_publish_failed` on the hash chain; the review panel shows a `publish` action for PRs that have a verdict. |
+| Tests | PASS | 3 in `test_scm_publish.py` against a real local GitHub stub (status + single comment, gate/config preconditions, tenant isolation). Suite total 133. |
+
+Known limits: GitHub only (no GitLab), no inline annotations/checks API, and
+the integration is dormant until `GITHUB_TOKEN` is set; verified against a
+controlled stub, not a live customer repository.
+
 ## 2026-10-31 Code diff viewer (PR base↔head)
 
 | Item | Result | Evidence |

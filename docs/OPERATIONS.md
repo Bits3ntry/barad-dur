@@ -80,6 +80,15 @@ the grant at claim time, and reports failure with the tool's own error text
 when a scan cannot produce evidence. Artifacts: SBOM (CycloneDX) and SAST
 (SARIF) are ingested back into the job's project version.
 
+## SCM publishing
+
+Set `GITHUB_TOKEN` (repo:status + pull_requests:write) and optionally
+`GITHUB_API_URL` (defaults to `https://api.github.com`), then
+`docker compose up -d platform-api`. The publish action posts a commit
+status (`barad-dur/security`, state from the gate verdict) and keeps a
+single marker comment per PR, updating it on re-runs. Unset token ⇒ 503
+`scm_not_configured`.
+
 ## Jira integration (BL-050)
 
 Dormant until configured: set `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_TOKEN`

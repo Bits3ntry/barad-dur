@@ -62,6 +62,14 @@ export default function CodeReview({ projects }) {
     } catch (e) { setError(String(e.message || e)) }
   }
 
+  async function publish(pr) {
+    try {
+      const r = await api.post(`/api/v1/code/pull-requests/${pr.id}/publish`,
+        { actor: 'console' })
+      window.alert(`published ${r.data.state} to ${r.data.repository}`)
+    } catch (e) { setError(String(e.message || e)) }
+  }
+
   async function setStatus(pr, status) {
     try {
       await api.post(`/api/v1/code/pull-requests/${pr.id}/status`, { status, actor: 'console' })
@@ -93,7 +101,10 @@ export default function CodeReview({ projects }) {
                 <td><span className={`status st-${pr.status}`}>{pr.status}</span></td>
                 <td>
                   <button className="mini" onClick={() => open(pr)}>review</button>{' '}
-                  {pr.status === 'open' && <button className="mini" onClick={() => setStatus(pr, 'merged')}>merge</button>}
+                  {pr.status === 'open' && <button className="mini" onClick={() => setStatus(pr, 'merged')}>merge</button>}{' '}
+                  {pr.gate_verdict && (
+                    <button className="mini" onClick={() => publish(pr)}>publish</button>
+                  )}
                 </td>
               </tr>
               {selected === pr.id && detail && (
