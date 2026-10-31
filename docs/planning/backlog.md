@@ -14,11 +14,17 @@ picture) | `todo`. Anything else is NOT implemented.
   `landed` (`d6bc72e`: 0009+0010 migrations on live Postgres, N:M links, asset
   polimórfico y finding-contexts, suite test_bl010_relationships.py toda
   verde + gate live en AUDIT.md).
-- **BL-015 observed-vs-authorized split** — objective: `scan_authorizations`
-  table binding assets/scopes to allowed profiles with approver + window;
-  intrusive endpoints reject without a grant. **P0** (safety-relevant), deps
-  BL-010 | AC: nuclei-class profile → 403 without grant; audit entry on grant;
-  T: pytest + live gate; status `designed` (see scopes doc).
+- **BL-015 observed-vs-authorized split** — objective: `scan_grants` +
+  `scan_grant_targets` binding principals to capabilities over targets with
+  approver + window; engine authorize() default-deny; exclusions beat grants;
+  Shauron surface under /api/v1/authorization. **P0** (safety-critical) | deps
+  BL-010 | status `landed` (`7500414`+`5f6865d`: engine + API + 10 tests with
+  multi-tenant isolation, gate live in AUDIT.md incl. mid-run revocation).
+- **BL-040 Occurrences** — objective: one finding keeps occurrence rows (per
+  scan run/asset/commit) instead of refresh counters; enables history replay.
+  **P1** | deps none | status `landed` (`f6725a5`: migration 0013, ingest
+  wired, GET /findings/{id}/occurrences, idempotent sighting keys, 3 tests +
+  live gate).
 - **BL-060 License policies** — objective: license set per component, policies
   with allow/deny + report per version. **P1** | deps components (live) |
   AC: upload SBOM with licenses → component carries license + policy verdict;
@@ -36,10 +42,6 @@ picture) | `todo`. Anything else is NOT implemented.
 
 ## Phase 3 (vuln management deepening)
 
-- **BL-040 Occurrences** — objective: one finding keeps occurrence rows (per
-  scan run/asset/commit) instead of refresh counters; enables history replay.
-  **P1** | deps none | AC: two scans same finding → 2 occurrences, one finding;
-  T: pytest + dedup unchanged.
 - **BL-045 Evidence vault** — objective: findings carry evidence refs (redacted
   boundary preserved); **P1** | deps BL-040.
 - **BL-055cf Gate policies** — objective: gate thresholds/hard_rules into

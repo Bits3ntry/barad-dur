@@ -2,6 +2,17 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 BL-015 scan authorization engine + BL-040 occurrences
+
+| Item | Result | Evidence |
+|---|---|---|
+| BL-015 engine | PASS live | `authorize()` (7500414): default deny (fixture request without grant → deny); grants carry principal/capabilities/targets/tools/environment/conditions/issuer/justification/policy_version/validity; exclusion (`thirdparty.example`) beats grants; wildcard `*.empresa.com` covers only own subdomains (apex + sibling TLD + IP + third-party denied); CIDR→IP containment; URL exact origin+path; repository/service id targets; invasive capabilities refuse self-authorization (409); expiry honored; revoke mid-run flips subsequent decisions immediately (real revoke → deny); revalidate exact path blocks target-switching (`does not cover`). 10 pytest in `test_bl015_authorization.py` incl. multi-tenant isolation (other org's key sees zero grants, same target denied). |
+| BL-015 audit integration | PASS | `/audit` chain recorded `authorization.granted/revoked/decision/revalidated` (19 entries, chain_ok true); grant responses expose revoked_by+reason (`5f6865d`). |
+| BL-040 occurrences | PASS live | Migration 0013; ingest (created or refreshed) records one occurrence per distinct sighting (idempotent via `uq(finding, sighting_key)`); live re-ingest of an existing finding → `refreshed=1` + occurrence with version/tool/source; endpoint `GET /findings/{id}/occurrences`; suppression workflow coexists (history preserved, chain_ok true). 3 pytest. |
+| Suites | PASS | 60 pytest + 151 unittest OK; live API 51 paths, migrations head 0013. |
+
+Deliberate non-goals honored: no nuclei execution, no worker orchestration, no EASM probing UI (backlog). Shauron will consume `/authorize` + `revalidate` as its contract surface; scanners stay decoupled from persistence.
+
 ## 2026-10-31 Phase 0 audit docs + BL-010 relationships + KEV rule (requested increments)
 
 | Item | Result | Evidence |
