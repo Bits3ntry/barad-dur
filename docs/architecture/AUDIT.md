@@ -2,6 +2,26 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 BL-020 orchestration (Shauron management side)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Scanner registry | PASS live | `POST /orchestration/scanners` registers name → capability (validated against the BL-015 catalogue), version and adapter; a job whose capability differs from the scanner's registration is rejected 422 (a scanner name never grants capabilities). |
+| Workers | PASS live | registration/upsert with capability list, labels and `max_concurrent`; heartbeat endpoint; listing computes stale (>120 s) as `offline`; claims above the concurrency ceiling → 409. |
+| Job lifecycle | PASS live | `queued → leased (900 s lease) → running → succeeded/failed/cancelled`; artifacts stored separately; live run: trivy job queued, leased with `authorization.decision=allow`, started, succeeded with `{"findings":2}`, 1 artifact persisted and readable. |
+| Authorization at queue time | PASS live | creation calls `authorize()` and stores the full decision (policy version included); no grant → **403, no job row** (verified live). |
+| Authorization at claim time | PASS live | the claim path re-evaluates `authorize()`; a grant revoked between queueing and claiming made the worker claim return `data:null` + rejection reason and the job go to `failed` with `authorization revalidation denied: ...` (verified live). |
+| Leases | PASS | expired leases return jobs to the queue until `max_attempts`, then fail with `lease expired and max attempts reached`; retry re-checks authorization before requeueing. |
+| Cancel / retry | PASS live | cancel works on queued/leased/running (409 on terminal); retry only from failed/cancelled and re-authorizes. |
+| Audit | PASS | `orchestration.scanner_registered`, `worker_registered`, `job_queued`, `job_denied`, `job_leased`, `job_revalidation_denied`, `job_cancelled`, `job_requeued`, `job_succeeded/failed`. |
+| Console | PASS | 15th tab `orchestration`: jobs table (status, attempts, cancel/retry), workers with claim-next, scanners table, and forms to register scanners/workers and queue jobs. |
+| Tests | PASS | 5 in `test_bl020_orchestration.py` (deny without grant, full lifecycle with lease+artifacts, revalidation after revoke, cancel/retry/isolation, scanner capability mismatch). Suite total 107. |
+
+Known limits: this is the **management side** only — no scanner execution,
+no container spawning, no worker auth tokens (worker identity is org API key
+today), and the Shauron CLI/contract live outside this repository. Artifacts
+are text (≤200 KB each, max 20 per job).
+
 ## 2026-10-31 BL-080 security regression suites
 
 | Item | Result | Evidence |

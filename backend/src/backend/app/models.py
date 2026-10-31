@@ -969,3 +969,76 @@ class RegressionRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ran_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── BL-020: orchestration (Shauron management side) ───────────────
+
+class Scanner(Base, TimestampMixin):
+    __tablename__ = "scanners"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_scanners_org_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(64))
+    display_name: Mapped[str] = mapped_column(String(128))
+    capability: Mapped[str] = mapped_column(String(64))
+    version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    adapter: Mapped[str] = mapped_column(String(64), default="cli")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Worker(Base):
+    __tablename__ = "workers"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_workers_org_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(128))
+    capabilities: Mapped[str] = mapped_column(Text, default="[]")
+    labels: Mapped[str] = mapped_column(Text, default="{}")
+    max_concurrent: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(16), default="online")
+    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_heartbeat: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ScanJob(Base):
+    __tablename__ = "scan_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    project_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_versions.id"), nullable=True)
+    scanner: Mapped[str] = mapped_column(String(64))
+    capability: Mapped[str] = mapped_column(String(64))
+    principal: Mapped[str] = mapped_column(String(255))
+    environment: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    targets: Mapped[str] = mapped_column(Text, default="[]")
+    profile: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    priority: Mapped[int] = mapped_column(Integer, default=5)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    worker_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("workers.id"), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    authorization: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class JobArtifact(Base):
+    __tablename__ = "job_artifacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("scan_jobs.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(32))
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
