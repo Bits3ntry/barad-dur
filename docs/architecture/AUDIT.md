@@ -2,6 +2,22 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Shauron image: real multi-arch (amd64 + arm64)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Multi-arch build | PASS live | `docker buildx build --platform linux/amd64,linux/arm64` produces an index with both architectures; bases are pinned per architecture by digest and the Trivy asset (plus its sha256) is selected from `TARGETARCH`. |
+| Binary correctness | PASS live | ELF headers checked inside each image: `linux/amd64` → `trivy x86_64`, `opengrep x86_64`; `linux/arm64` → `trivy aarch64`, `opengrep aarch64`. |
+| Real scan on amd64 | PASS live | The amd64 image ran a sandboxed scan under emulation with no network: `sast.json` and `sbom.cdx.json` produced (same 2 SAST findings and 3 components as arm64). |
+| Unsupported platforms | PASS | The build fails with "unsupported sandbox platform" for anything that is not linux/amd64 or linux/arm64 — including a Windows container image, which does not exist for this sandbox. |
+| Windows worker hosts | PASS | `mount_path()` hands Docker `C:/dir` instead of backslashes (pinned by test), and the Docker pipe is refused as a mount; a Windows x64 host gets no local engine because the lockfile only pins `windows-x86` — it fails closed and uses the sandbox instead (pinned by test). |
+
+Two bugs were found by building rather than by reading: a single `FROM ${ARG}@<index digest>`
+made buildx resolve the **amd64** manifest for the arm64 stage (both images shipped
+aarch64 binaries), and a defaulted `ARG TARGETARCH=arm64` shadowed BuildKit's value so
+even the amd64 image stayed arm64. Both are fixed and the fix is verified by reading
+ELF headers, not by trusting `uname`.
+
 ## 2026-10-31 GitLab inline discussions
 
 | Item | Result | Evidence |

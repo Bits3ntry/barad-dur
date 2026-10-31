@@ -120,5 +120,8 @@ the sandbox can run a real scan without the host engines.
 
 `deploy/shauron/Dockerfile` + `sandbox.barad.yml` produce an image that runs a
 real scan (Trivy secret/misconfig + OpenGrep SAST) with no network, read-only
-root and non-root user. Verified through the orchestration API. Remaining: a
-multi-arch build (arm64 today) and shipping a pre-populated Trivy database.
+root and non-root user. Verified through the orchestration API. Multi-arch build (linux/amd64 + linux/arm64,
+per-arch Trivy digests, per-arch base images) is verified in both architectures;
+remaining: shipping a pre-populated Trivy database, since the sandbox cannot
+update it, and a Windows container image (not supported — Windows hosts run the
+worker against these Linux images).

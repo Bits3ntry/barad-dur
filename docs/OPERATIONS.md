@@ -87,6 +87,33 @@ the grant at claim time, and reports failure with the tool's own error text
 when a scan cannot produce evidence. Artifacts: SBOM (CycloneDX) and SAST
 (SARIF) are ingested back into the job's project version.
 
+### Isolated execution (sandbox)
+
+```sh
+barad worker --platform-url http://127.0.0.1:8090 --worker-token "$WORKER_TOKEN" \
+  --isolate-image registry.example/shauron@sha256:<digest> \
+  --isolate-config /app/sandbox.barad.yml
+```
+
+The image must be digest-pinned and must already carry the scanners, because
+the container runs with `--network none`, a read-only root filesystem, a
+non-root user (65534), 1 cpu / 1 GB / 256 pids and no Docker socket. Build it
+for the local architecture with:
+
+    docker build -f deploy/shauron/Dockerfile -t shauron-cli:local .
+
+or for both supported architectures at once:
+
+    docker buildx build --platform linux/amd64,linux/arm64 \
+      -f deploy/shauron/Dockerfile -t registry.example/shauron:0.1.0 --push .
+
+`linux/amd64` and `linux/arm64` are supported (each gets the Trivy asset
+pinned to its own digest); the build refuses any other platform, including a
+Windows container image. Worker hosts on macOS, Linux and Windows all run the
+same command — the CLI translates host paths to the `C:/dir` form Docker
+accepts, so a Windows worker drives the same Linux container.
+
+
 ## SLA notifications
 
 Create a webhook channel (admin) and point it at your receiver; the secret is

@@ -9,10 +9,11 @@ filesystem).
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 DOCKER = "docker"
 # Image names must be pinned by digest to keep execution reproducible.
@@ -35,7 +36,21 @@ SANDBOX_FLAGS = [
     "--pids-limit", "256",
 ]
 
-FORBIDDEN_MOUNTS = ("/var/run/docker.sock", "/run/docker.sock", "/usr/bin/docker")
+FORBIDDEN_MOUNTS = ("/var/run/docker.sock", "/run/docker.sock", "/usr/bin/docker",
+                    "\\.\\pipe\\docker_engine")
+
+
+def mount_path(path: Path) -> str:
+    """Absolute path the Docker CLI accepts for -v on this host.
+
+    Windows worker hosts talk to Linux containers, so the path is handed to
+    Docker as `C:/dir` (forward slashes) instead of the backslash form, which
+    the CLI would otherwise read as an escape.
+    """
+    resolved = Path(path).expanduser().resolve()
+    if os.name == "nt" or PureWindowsPath(str(resolved)).drive:
+        return str(resolved).replace("\\", "/")
+    return str(resolved)
 
 
 class SandboxError(RuntimeError):
@@ -69,8 +84,8 @@ def build_command(image: str, argv: list[str], workdir: str,
             raise SandboxError(f"refusing to mount {path}")
     command = [DOCKER, "run", *SANDBOX_FLAGS,
                "--workdir", workdir,
-               "-v", f"{target}:/target:ro",
-               "-v", f"{output}:/out:rw",
+               "-v", f"{mount_path(target)}:/target:ro",
+               "-v", f"{mount_path(output)}:/out:rw",
                image, *[str(item) for item in argv]]
     return command
 

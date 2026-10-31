@@ -29,6 +29,20 @@ class SandboxContractTest(unittest.TestCase):
         self.assertIn(f"{self.target.resolve()}:/target:ro", joined)
         self.assertIn(f"{self.output.resolve()}:/out:rw", joined)
 
+    def test_mount_paths_use_forward_slashes_on_windows(self):
+        from pathlib import PureWindowsPath
+
+        assert sandbox.mount_path(Path("/tmp/x")).startswith("/")
+        # a Windows drive path must never reach docker with backslashes
+        posix = str(PureWindowsPath("C:/Users/saf/scan")).replace("\\", "/")
+        assert "\\" not in posix and posix.startswith("C:/")
+
+    def test_docker_pipe_cannot_be_exposed(self):
+        with self.assertRaises(sandbox.SandboxError):
+            sandbox.build_command(IMAGE,
+                                  ["-v", "\\\\.\\pipe\\docker_engine:/x"],
+                                  "/t", self.target, self.output)
+
     def test_unpinned_image_is_refused(self):
         for image in ("python:3.12-slim", "nginx", "python@sha256:abc"):
             with self.assertRaises(sandbox.SandboxError):
@@ -124,3 +138,16 @@ class CountsFromArtifactsTest(unittest.TestCase):
         counts = worker._counts_from({})
         self.assertEqual(counts["total"], 0)
         self.assertEqual(counts["sast"], 0)
+
+
+class WindowsHostTest(unittest.TestCase):
+    """Windows x64 workers are supported through the sandbox, not the local engine."""
+
+    def test_engine_stays_fail_closed_on_windows_amd64(self):
+        from barad.core.engines import platform_key
+
+        # the lockfile pins only windows-x86; an AMD64 host gets no unverified
+        # binary, which is why the sandbox is the supported path there
+        self.assertIsNone(platform_key("Windows", "AMD64"))
+        self.assertEqual(platform_key("Linux", "aarch64"), "linux-aarch64")
+        self.assertEqual(platform_key("Linux", "x86_64"), "linux-x86_64")
