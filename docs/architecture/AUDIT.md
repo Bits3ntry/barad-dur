@@ -2,6 +2,17 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 BL-025 SPDX export + operations runbook
+
+| Item | Result | Evidence |
+|---|---|---|
+| SPDX 2.3 export | PASS live | `/spdx/export?project=&version=` renders an SPDX 2.3 JSON document from stored components: packages with versionInfo, `licenseDeclared` (multi-license joined with AND), purl externalRefs and DESCRIBES relationships; unlicensed components get NOASSERTION. Live: `lic-live@1.0` → 3 packages / 3 relationships (`Apache-2.0`, `BSD-3-Clause AND MIT`, `GPL-3.0-only`). |
+| Tests | PASS | 2 in `test_bl025_spdx.py` (document shape + unknown version 404); suite total 90. |
+| Operations | PASS | `docs/OPERATIONS.md`: deploy/upgrade procedure, nightly pg_dump backup + restore into a fresh DB, secrets policy, health checks and the recurring drift/port/chain troubleshooting recipes. |
+
+Known limits: SPDX export is one-way (export only; SPDX ingest is the next
+item), and the runbook's backup step is documented, not yet scheduled.
+
 ## 2026-10-31 BL-090 asset snapshots + change detection
 
 | Item | Result | Evidence |
