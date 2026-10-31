@@ -30,8 +30,8 @@ picture) | `todo`. Anything else is NOT implemented.
   status `landed` (`9139ecf`: component_licenses (multi-license, idempotent),
   org/project policies, deterministic evaluator, expiring exceptions, 6 tests
   + live gate: GPL denied → exception → excepted; console Licenses tab).
-- **BL-025 SPDX export + ingest receipts surfacing** — objective: SPDX 2.3
-  export alongside CycloneDX. **P2** | deps none.
+- **BL-025 SPDX export + ingest receipts surfacing** — export `landed`
+  (SPDX 2.3 JSON, 2 tests, live gate); SPDX *ingest* still pending. **P2**.
 - **BL-065 Signed feed trust** — objective: office signing of the
   vulnerability catalog sync (concept from their vulnfeed) with key pinning.
   **P2** | deps BL-060 not blocking.
