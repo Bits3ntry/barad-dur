@@ -2,6 +2,19 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Dashboard: scanner health + pentest posture
+
+| Item | Result | Evidence |
+|---|---|---|
+| Orchestration block | PASS live | `/dashboard/summary` adds `orchestration`: worker totals with online/stale (empty-heartbeat > 120 s ⇒ stale), job counts by state, last-24h succeeded/failed, average duration of successful jobs, and the five most recent failure reasons. Live: 5 workers (all stale — none running), 4 succeeded / 1 failed / 1 leased, avg 5.4 s, failure reason `authorization revalidation denied: no active grant…` (a real denial from an earlier gate). |
+| Pentest block | PASS live | `pentest`: engagements by status plus open/total pentest findings. Live: 1 active engagement, 1/1 open. |
+| Console | PASS | Dashboard cards for workers online, jobs queued, jobs ok/failed 24 h, avg duration, active pentests and open pentest findings, plus a collapsible "recent job failures" panel showing scanner + error. |
+| Tenant scope | PASS | Both blocks are org-filtered; another org sees zeros (pinned by test). |
+| Tests | PASS | 2 in `test_dashboard_health.py` (health + pentest aggregation, tenant scoping). Suite total 151. |
+
+Known limits: averages are unweighted per job, and stale workers are a
+computed view (the worker row keeps its last heartbeat; no auto-delete).
+
 ## 2026-10-31 Organization settings + API-key lifecycle
 
 | Item | Result | Evidence |

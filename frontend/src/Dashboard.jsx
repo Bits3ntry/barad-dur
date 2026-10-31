@@ -78,7 +78,38 @@ export default function Dashboard({ projects }) {
           <Card label="denied licenses" value={summary.supply_chain.denied}
             tone={summary.supply_chain.denied ? 'bad' : ''} />
         )}
+        {summary.orchestration && (
+          <>
+            <Card label="workers online"
+              value={`${summary.orchestration.workers.online}/${summary.orchestration.workers.total}`}
+              tone={summary.orchestration.workers.stale ? 'warn' : 'good'} />
+            <Card label="jobs queued" value={summary.orchestration.jobs.queued} />
+            <Card label="jobs failed 24h" value={summary.orchestration.last_24h.failed}
+              tone={summary.orchestration.last_24h.failed ? 'bad' : ''} />
+            <Card label="jobs ok 24h" value={summary.orchestration.last_24h.succeeded} tone="good" />
+            <Card label="avg scan duration (s)"
+              value={summary.orchestration.avg_duration_s ?? '—'} />
+          </>
+        )}
+        {summary.pentest && (
+          <>
+            <Card label="pentests active" value={summary.pentest.engagements.active} />
+            <Card label="pentest findings open" value={summary.pentest.findings_open}
+              tone={summary.pentest.findings_open ? 'warn' : ''} />
+          </>
+        )}
       </div>
+
+      {summary.orchestration?.recent_failures?.length > 0 && (
+        <details className="card">
+          <summary>recent job failures ({summary.orchestration.recent_failures.length})</summary>
+          {summary.orchestration.recent_failures.map((row, index) => (
+            <p key={index} className="muted small">
+              <strong>{row.scanner}</strong>: {row.error}
+            </p>
+          ))}
+        </details>
+      )}
 
       {summary.gate?.reasons?.length > 0 && (
         <p className="error">gate: {summary.gate.reasons.join(' · ')}</p>

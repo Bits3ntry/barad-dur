@@ -105,6 +105,63 @@ def summary(project: str | None = Query(default=None),
     occurrences_week = (session.query(models.Occurrence).filter_by(org_id=org.id)
                         .filter(models.Occurrence.seen_at >= week_ago).count())
 
+
+    # Scanner execution health (management plane view of the Shauron workers).
+    day_ago = now - datetime.timedelta(hours=24)
+    workers = session.query(models.Worker).filter_by(org_id=org.id).all()
+    worker_online = 0
+    worker_stale = 0
+    for worker in workers:
+        stale = (now - _aware(worker.last_heartbeat)).total_seconds() > 120
+        if stale:
+            worker_stale += 1
+        else:
+            worker_online += 1
+    jobs = session.query(models.ScanJob).filter_by(org_id=org.id).all()
+    job_states = {"queued": 0, "leased": 0, "running": 0,
+                  "succeeded": 0, "failed": 0, "cancelled": 0}
+    recent_success = recent_failure = 0
+    durations = []
+    last_errors = []
+    for job in jobs:
+        if job.status in job_states:
+            job_states[job.status] += 1
+        if job.finished_at and _aware(job.finished_at) >= day_ago:
+            if job.status == "succeeded":
+                recent_success += 1
+            elif job.status == "failed":
+                recent_failure += 1
+                if job.error:
+                    last_errors.append({"scanner": job.scanner,
+                                        "error": job.error[:160]})
+        if job.started_at and job.finished_at and job.status == "succeeded":
+            durations.append(
+                (_aware(job.finished_at) - _aware(job.started_at)).total_seconds())
+    orchestration = {
+        "workers": {"total": len(workers), "online": worker_online,
+                    "stale": worker_stale},
+        "jobs": job_states,
+        "last_24h": {"succeeded": recent_success, "failed": recent_failure},
+        "avg_duration_s": round(sum(durations) / len(durations), 1) if durations else None,
+        "recent_failures": last_errors[:5],
+    }
+
+    # Pentest posture.
+    engagements = (session.query(models.PentestEngagement)
+                   .filter_by(org_id=org.id).all())
+    pentest_states = {"draft": 0, "active": 0, "completed": 0, "cancelled": 0}
+    for engagement in engagements:
+        if engagement.status in pentest_states:
+            pentest_states[engagement.status] += 1
+    pentest_findings = (session.query(models.PentestFinding)
+                        .filter_by(org_id=org.id).all())
+    pentest = {
+        "engagements": pentest_states,
+        "findings_open": sum(1 for row in pentest_findings
+                             if row.status not in {"closed", "false_positive"}),
+        "findings_total": len(pentest_findings),
+    }
+
     return {"data": {
         "scope": {"project": proj.slug if proj else None,
                   "version": pv.version if pv else None},
@@ -119,6 +176,8 @@ def summary(project: str | None = Query(default=None),
         "assets": {"total": assets_total, "discovered_last_7d": assets_week},
         "ci": {"runs_considered": len(ci_runs), "verdicts": verdicts},
         "remediation": remediation,
+        "orchestration": orchestration,
+        "pentest": pentest,
         "occurrences_last_7d": occurrences_week,
         "generated_at": now.isoformat(),
     }}
