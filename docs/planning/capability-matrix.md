@@ -34,6 +34,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | EASM probing (DNS/TLS/tech) | MISSING | BL-090 (crt.sh only) |
 | SLA notifications | PARTIAL | signed webhook channels + daily breach tick with dedupe; no email or per-finding push |
 | Scanner execution health | COMPLETE | dashboard orchestration block (workers/stale/jobs/24h/avg/failures) + UI cards |
+| SBOM baseline | COMPLETE | per-version frozen component set + diff endpoint |
 | Cross-project component impact | COMPLETE | `/components/impact` (id/purl/name) with usage + findings; console panel |
 | Scan scheduling | COMPLETE | interval definitions for scan **and easm** jobs, idempotent tick (cron), authorization re-checked per fire, console panel with tick-now |
 | Pentest report export | PARTIAL | printable self-contained HTML report (escaped); no PDF renderer or template editor |

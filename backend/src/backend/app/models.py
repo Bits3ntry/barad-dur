@@ -1232,3 +1232,20 @@ class NotificationDelivery(Base):
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SbomBaseline(Base):
+    """Frozen component set for a project version; future ingests diff against it."""
+
+    __tablename__ = "sbom_baselines"
+    __table_args__ = (UniqueConstraint("project_version_id", name="uq_baseline_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    project_version_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("project_versions.id"))
+    components: Mapped[str] = mapped_column(Text)
+    component_count: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

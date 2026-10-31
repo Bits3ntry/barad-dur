@@ -116,3 +116,131 @@ def compare_versions(project: str = Query(...), from_version: str = Query(...),
                                 "added": len(added), "removed": len(removed),
                                 "changed": len(changed)},
                      "added": added, "removed": removed, "changed": changed}}
+
+
+def _version_of(session, org_id: str, project: str, version: str):
+    project_row = (session.query(models.Project)
+                   .filter_by(org_id=org_id, slug=project).one_or_none())
+    if project_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    pv = (session.query(models.ProjectVersion)
+          .filter_by(project_id=project_row.id, version=version).one_or_none())
+    if pv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
+    return project_row, pv
+
+
+def _component_set(session, org_id: str, project_version_id: str) -> dict:
+    rows = (session.query(models.VersionComponent, models.Component)
+            .join(models.Component, models.VersionComponent.component_id == models.Component.id)
+            .filter(models.VersionComponent.project_version_id == project_version_id).all())
+    # A version can legitimately hold several builds of the same name while a
+    # stale link is being cleaned up; keep them all instead of hiding one.
+    collected: dict[str, dict] = {}
+    for _link, component in rows:
+        key = component.name or component.identity_key
+        entry = collected.setdefault(key, {"versions": [], "purl": component.purl})
+        if component.version:
+            entry["versions"].append(component.version)
+    for entry in collected.values():
+        entry["versions"] = sorted(set(entry["versions"]))
+        entry["version"] = entry["versions"][-1] if entry["versions"] else None
+    return collected
+
+
+def _baseline_diff(before: dict, after: dict) -> dict:
+    added = [{"name": name, **after[name]} for name in sorted(set(after) - set(before))]
+    removed = [{"name": name, **before[name]} for name in sorted(set(before) - set(after))]
+    changed = [{"name": name,
+                "from": ", ".join(before[name]["versions"]) or None,
+                "to": ", ".join(after[name]["versions"]) or None}
+               for name in sorted(set(before) & set(after))
+               if before[name]["versions"] != after[name]["versions"]]
+    return {"counts": {"baseline": len(before), "current": len(after),
+                       "added": len(added), "removed": len(removed),
+                       "changed": len(changed)},
+            "added": added, "removed": removed, "changed": changed}
+
+
+class BaselineIn(BaseModel):
+    project: str
+    version: str
+    note: str | None = None
+    actor: str
+
+
+@router.post("/sbom/baseline")
+def set_baseline(payload: BaselineIn = None,
+                 org: models.Organization = Depends(auth.require_org),
+                 session: Session = Depends(get_session)):
+    """Freeze the current component set of a version as its security baseline."""
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    _project, pv = _version_of(session, org.id, payload.project, payload.version)
+    current = _component_set(session, org.id, pv.id)
+    if not current:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "no components for that version; ingest an SBOM first")
+    row = (session.query(models.SbomBaseline)
+           .filter_by(project_version_id=pv.id).one_or_none())
+    now = models.utcnow()
+    if row is None:
+        row = models.SbomBaseline(org_id=org.id, project_version_id=pv.id,
+                                  created_at=now)
+        session.add(row)
+    row.components = json.dumps(current, sort_keys=True)
+    row.component_count = len(current)
+    row.note = payload.note
+    row.created_by = payload.actor
+    row.created_at = now
+    session.commit()
+    return {"data": {"project": payload.project, "version": payload.version,
+                     "component_count": row.component_count,
+                     "created_at": row.created_at.isoformat(),
+                     "replaced": True}}
+
+
+@router.get("/sbom/baseline")
+def get_baseline(project: str = Query(...), version: str = Query(...),
+                 org: models.Organization = Depends(auth.require_org),
+                 session: Session = Depends(get_session)):
+    _project, pv = _version_of(session, org.id, project, version)
+    row = (session.query(models.SbomBaseline)
+           .filter_by(project_version_id=pv.id).one_or_none())
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no baseline for that version")
+    return {"data": {"project": project, "version": version,
+                     "component_count": row.component_count,
+                     "note": row.note, "created_by": row.created_by,
+                     "created_at": row.created_at.isoformat()}}
+
+
+@router.delete("/sbom/baseline")
+def delete_baseline(project: str = Query(...), version: str = Query(...),
+                    org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    _project, pv = _version_of(session, org.id, project, version)
+    row = (session.query(models.SbomBaseline)
+           .filter_by(project_version_id=pv.id).one_or_none())
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no baseline for that version")
+    session.delete(row)
+    session.commit()
+    return {"data": {"deleted": True}}
+
+
+@router.get("/sbom/baseline/diff")
+def baseline_diff(project: str = Query(...), version: str = Query(...),
+                  org: models.Organization = Depends(auth.require_org),
+                  session: Session = Depends(get_session)):
+    """Current component set against the stored baseline (never invented)."""
+    _project, pv = _version_of(session, org.id, project, version)
+    row = (session.query(models.SbomBaseline)
+           .filter_by(project_version_id=pv.id).one_or_none())
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no baseline for that version")
+    before = json.loads(row.components)
+    after = _component_set(session, org.id, pv.id)
+    return {"data": {"project": project, "version": version,
+                     "baseline_at": row.created_at.isoformat(),
+                     **_baseline_diff(before, after)}}

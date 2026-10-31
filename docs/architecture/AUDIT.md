@@ -2,6 +2,21 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 SBOM baselines
+
+| Item | Result | Evidence |
+|---|---|---|
+| Freeze | PASS live | `POST /sbom/baseline` snapshots the current component set of a project version (name → versions + purl) into `sbom_baselines`; re-baselining replaces it. A version with no components → 409 ("ingest an SBOM first"). Live: `worker-live@1.0` baselined with 4 components. |
+| Diff | PASS live | `GET /sbom/baseline/diff` compares the stored snapshot against the live component set: added / removed / changed (with every version present listed, because ingest is additive), and returns `baseline_at`. Live: identical state → all counts 0, which is the honest result. |
+| Lifecycle | PASS live | `GET` metadata (count, note, author, date), `DELETE` removes it (404 afterwards), missing baseline → 404, cross-org → 404. |
+| Tests | PASS | 3 in `test_sbom_baseline.py` (freeze + diff across an additive ingest + re-baseline + delete, no-components guard, tenant scoping). Suite total 157. |
+
+Known limits: a baseline is one snapshot per version (no named baselines or
+approval workflow), and because ingestion is additive within a version, a
+"removed" component only disappears from the diff once its version link is
+cleaned up — the diff now reports every version present instead of hiding
+one behind the other.
+
 ## 2026-10-31 Scheduled EASM collection + schedules UI
 
 | Item | Result | Evidence |
