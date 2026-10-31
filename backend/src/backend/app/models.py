@@ -1151,3 +1151,30 @@ class OidcState(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+
+
+class ScanSchedule(Base, TimestampMixin):
+    """Recurring job definition; a tick queues due jobs through the same
+    authorization path as manual ones (never bypassing BL-015)."""
+
+    __tablename__ = "scan_schedules"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_schedules_org_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(128))
+    scanner: Mapped[str] = mapped_column(String(64))
+    capability: Mapped[str] = mapped_column(String(64))
+    principal: Mapped[str] = mapped_column(String(255))
+    targets: Mapped[str] = mapped_column(Text, default="[]")
+    environment: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    profile: Mapped[str] = mapped_column(Text, default="{}")
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

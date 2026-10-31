@@ -2,6 +2,20 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Scan schedules + printable pentest report
+
+| Item | Result | Evidence |
+|---|---|---|
+| Schedules | PASS live | Recurring definitions (scanner/capability/principal/targets/profile/interval 15 min–1 y) with enable/patch; scanner capability mismatch → 422, duplicate name → 409, cross-tenant access → 404. |
+| Tick | PASS live | `POST /orchestration/schedules/tick` queues due jobs through the same `authorize()` path. `next_run_at` advances **before** queueing, so a double tick cannot duplicate: live tick1 queued 1 job, tick2 processed 0. Denied schedules record `denied: <reason>`, queue nothing and still advance (no retry storm against unauthorized targets). |
+| Report | PASS live | `GET /pentest/engagements/{id}/report.html` renders a self-contained printable report (inline CSS, print rules) with metadata, test table, findings ordered by severity, HTTP evidence in `<pre>`, verification evidence and the footnote that a closed ticket elsewhere is not remediation. Live: 200, 2 185 bytes, verification block present. |
+| Escaping | PASS | Every interpolation goes through `html.escape`; a test pins that `<script>` in title/target/evidence never reaches the document as markup. |
+| Tests | PASS | 4 in `test_schedules_and_report.py` (tick once per interval, denied schedule behaviour, validation + isolation, report escaping/evidence). Suite total 119. |
+
+Known limits: scheduling needs an external cron/systemd calling the tick
+endpoint (the platform runs no background thread by design); the report is
+HTML only (no PDF renderer) and has no template editor yet.
+
 ## 2026-10-31 Users, sessions and RBAC
 
 | Item | Result | Evidence |

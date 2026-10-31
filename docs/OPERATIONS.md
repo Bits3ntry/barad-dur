@@ -52,6 +52,20 @@ docker exec -i barad-dur-postgres-1 pg_restore -U dtrack -d barad_platform_resto
 The `barad-dur_migration-backup` volume holds the pre-cutover dumps and is
 external + read-only by contract (never removed by `down -v`).
 
+## Recurring scans
+
+Schedules are queued by a tick the platform never runs by itself. Add a cron
+entry on the host (crontab -e):
+
+```cron
+* * * * * curl -s -X POST http://127.0.0.1:8090/api/v1/orchestration/schedules/tick \
+  -H "X-API-Key: $BARAD_CRON_KEY" -H 'Content-Type: application/json' -d '{"actor":"cron"}' >/dev/null
+```
+
+Each due schedule advances its clock before queueing, so an overlapping tick
+cannot duplicate a run; a denied schedule records the denial and still waits
+for its next interval.
+
 ## Shauron worker
 
 ```sh
