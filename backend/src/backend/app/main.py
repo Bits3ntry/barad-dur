@@ -3,12 +3,12 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from backend.app.auth import create_key, require_org
+from backend.app.auth import create_key, require_admin, require_org
 from backend.app.db import get_session, run_migrations
 from backend.app import models
 from backend.app.routers import authorization as authorization_router
 
-from backend.app.routers import accounts, ci, code_review, dashboard, easm, findings, gates as gates_router, identity, intelligence, inventory, jira, lifecycle, licenses as licenses_router, notifications, orchestration, pentest, regression, relationships, schedules, sarif, scope, sbom, spdx
+from backend.app.routers import accounts, ci, code_review, dashboard, easm, findings, gates as gates_router, identity, intelligence, inventory, jira, lifecycle, licenses as licenses_router, notifications, orchestration, organization, pentest, regression, relationships, schedules, sarif, scope, sbom, spdx
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -40,6 +40,7 @@ def create_app() -> FastAPI:
     app.include_router(accounts.router)
     app.include_router(schedules.router)
     app.include_router(notifications.router)
+    app.include_router(organization.router)
 
     @app.get("/healthz")
     def healthz(session: Session = Depends(get_session)):
@@ -53,7 +54,7 @@ def create_app() -> FastAPI:
 
     @management.post("/keys")
     def register_key(label: str = Query(default=""),
-                     org: models.Organization = Depends(require_org),
+                     org: models.Organization = Depends(require_admin),
                      session: Session = Depends(get_session)):
         """Issue a new API key for the caller's own organization.
 

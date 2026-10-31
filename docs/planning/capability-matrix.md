@@ -6,6 +6,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 
 | Area | Status | Evidence / gap |
 |---|---|---|
+| Org settings + API keys | COMPLETE | `/org` read/rename, key create/list/revoke with last-key guard; legacy `/keys` hardened |
 | Users / sessions / RBAC | COMPLETE | BL-`auth`: scrypt passwords, opaque sessions, bootstrap, 4 roles enforced in the auth dependency; OIDC guarded behind the optional crypto extra |
 | Multi-tenancy isolation | COMPLETE | every endpoint via `require_org`; isolation tests in bl015/console set |
 | Audit hash chain | COMPLETE | full-ledger verification independent of filters |

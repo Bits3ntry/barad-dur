@@ -2,6 +2,20 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 Organization settings + API-key lifecycle
+
+| Item | Result | Evidence |
+|---|---|---|
+| Org settings | PASS live | `GET /org` returns slug/name; `PATCH /org` renames (admin) and audits `org.renamed` on the hash chain. |
+| Key lifecycle | PASS live | `POST /org/keys` mints a service identity (raw key returned once, SHA-256 at rest), `GET /org/keys` lists metadata only (never the raw value), `POST /org/keys/{id}/revoke` kills it immediately. Live: new 64-char key worked (200), listing showed 3 keys with no secrets, revoke → the same key got 401. |
+| Safeguards | PASS | The last active key cannot be revoked (409 "cannot revoke the last active API key") so an org cannot lock itself out; double revoke → 409; cross-org access → 404. |
+| Hardened legacy route | FIXED | The older `POST /api/v1/keys` accepted any valid credential; it now requires admin. API keys (machine identities) are unaffected, viewer sessions are refused (live: 403). |
+| Console | PASS | Settings gains a service-identity panel: list with status, create (raw key shown once in a receipt line), revoke with confirmation. |
+| Tests | PASS | 4 in `test_org_keys.py` (read/rename + audit, key lifecycle, last-key guard, isolation). Suite total 149. |
+
+Known limits: no key expiry or per-key scopes (worker tokens cover the scoped
+case), and keys are not attributable to a creator beyond the audit entry.
+
 ## 2026-10-31 Cross-project component impact
 
 | Item | Result | Evidence |

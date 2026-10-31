@@ -5,13 +5,38 @@ export default function Settings({ onClose }) {
   const [form, setForm] = useState(api.settings())
   const [login, setLogin] = useState({ email: '', password: '', org_slug: '' })
   const [identity, setIdentity] = useState(null)
+  const [keys, setKeys] = useState({ rows: [], total: 0, error: '', fresh: '' })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  function loadKeys() {
+    api.get('/api/v1/org/keys')
+      .then((r) => setKeys((k) => ({ ...k, rows: r.data, total: r.total, error: '' })))
+      .catch((e) => setKeys((k) => ({ ...k, error: String(e.message || e) })))
+  }
+
+  async function createKey() {
+    try {
+      const r = await api.post('/api/v1/org/keys', { label: 'console', actor: 'console' })
+      setKeys((k) => ({ ...k, fresh: r.data.key, error: '' }))
+      loadKeys()
+    } catch (e) { setKeys((k) => ({ ...k, error: String(e.message || e) })) }
+  }
+
+  async function revokeKey(row) {
+    if (!window.confirm(`Revoke key "${row.label}"? Clients using it will get 401.`)) return
+    try {
+      await api.post(`/api/v1/org/keys/${row.id}/revoke`,
+        { actor: 'console', reason: 'revoked from console' })
+      loadKeys()
+    } catch (e) { setKeys((k) => ({ ...k, error: String(e.message || e) })) }
+  }
 
   useEffect(() => {
     api.get('/api/v1/auth/me')
       .then((r) => setIdentity(r.data))
       .catch(() => setIdentity(null))
+    loadKeys()
   }, [])
 
   function save(event) {
@@ -115,6 +140,35 @@ export default function Settings({ onClose }) {
         </label>
         <button type="submit" disabled={busy}>{busy ? 'signing in…' : 'sign in'}</button>
       </form>
+      <h3 className="section">service identities (API keys)</h3>
+      {keys.error && <p className="error">{keys.error}</p>}
+      {keys.fresh && (
+        <p className="receipt">
+          new key (shown once): <code>{keys.fresh}</code>
+        </p>
+      )}
+      <table>
+        <thead><tr><th>label</th><th>created</th><th>status</th><th></th></tr></thead>
+        <tbody>
+          {keys.rows.map((row) => (
+            <tr key={row.id}>
+              <td>{row.label || '—'}</td>
+              <td>{row.created_at ? new Date(row.created_at).toLocaleString() : '—'}</td>
+              <td><span className={`status st-${row.revoked_at ? 'disabled' : 'active'}`}>
+                {row.revoked_at ? 'revoked' : 'active'}
+              </span></td>
+              <td>{!row.revoked_at && (
+                <button className="mini" onClick={() => revokeKey(row)}>revoke</button>
+              )}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="card">
+        <button onClick={createKey}>create service key</button>
+        <span className="hint">admin only; the last active key cannot be revoked</span>
+      </div>
+
       <p className="hint">
         The first account is created with <code>POST /api/v1/auth/bootstrap</code>{' '}
         plus the deployment's <code>BOOTSTRAP_TOKEN</code>; later accounts are
