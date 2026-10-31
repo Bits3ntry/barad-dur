@@ -52,6 +52,20 @@ docker exec -i barad-dur-postgres-1 pg_restore -U dtrack -d barad_platform_resto
 The `barad-dur_migration-backup` volume holds the pre-cutover dumps and is
 external + read-only by contract (never removed by `down -v`).
 
+## Shauron worker
+
+```sh
+barad worker --platform-url http://127.0.0.1:8090 --api-key "$KEY" \
+  --name worker-1 --capability vulnerability_analysis --limit 1
+```
+
+Queue jobs from the console (orchestration tab) or the API with a profile
+`{"target_path": "/srv/repo", "project": "saria", "version": "1.4.0"}`.
+The worker only receives jobs the platform already authorized, re-validates
+the grant at claim time, and reports failure with the tool's own error text
+when a scan cannot produce evidence. Artifacts: SBOM (CycloneDX) and SAST
+(SARIF) are ingested back into the job's project version.
+
 ## Jira integration (BL-050)
 
 Dormant until configured: set `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_TOKEN`

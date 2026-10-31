@@ -4,15 +4,16 @@ from cli_support import CliTestCase, invoke
 
 
 class CommandSurfaceTests(CliTestCase):
-    def test_help_lists_exactly_scan_run_and_health(self):
+    def test_help_lists_the_command_surface(self):
         code, out, err = invoke(["--help"])
 
         self.assertEqual(code, 0)
-        self.assertIn("{scan,run,health}", out)
+        self.assertIn("{scan,run,health,worker}", out)
         from barad.cli import build_parser
         choices = next(action.choices for action in build_parser()._actions
                        if getattr(action, 'dest', None) == 'command')
-        self.assertEqual(list(choices), ['scan', 'run', 'health'])
+        # worker is part of the surface: it is how Shauron talks to the platform.
+        self.assertEqual(list(choices), ['scan', 'run', 'health', 'worker'])
         self.assertEqual(err, "")
 
     def test_unknown_command_is_rejected_with_usage_exit(self):
