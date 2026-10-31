@@ -11,11 +11,12 @@ import Components from './Components'
 import Findings from './Findings'
 import Jira from './Jira'
 import Pentest from './Pentest'
+import Regression from './Regression'
 import Pipelines from './Pipelines'
 import Settings from './Settings'
 import { api } from './api'
 
-const TABS = ['dashboard', 'findings', 'gates', 'licenses', 'pentest', 'jira', 'grants', 'audit', 'remediation', 'members', 'assets', 'components', 'pipelines']
+const TABS = ['dashboard', 'findings', 'gates', 'licenses', 'pentest', 'jira', 'regression', 'grants', 'audit', 'remediation', 'members', 'assets', 'components', 'pipelines']
 
 export default function App() {
   const [tab, setTab] = useState('dashboard')
@@ -61,6 +62,7 @@ export default function App() {
           {tab === 'licenses' && <Licenses projects={projects} />}
           {tab === 'pentest' && <Pentest projects={projects} />}
           {tab === 'jira' && <Jira />}
+          {tab === 'regression' && <Regression />}
           {tab === 'grants' && <Grants />}
           {tab === 'audit' && <Audit />}
           {tab === 'remediation' && <Lifecycle />}

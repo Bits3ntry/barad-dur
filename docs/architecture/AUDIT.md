@@ -2,6 +2,22 @@
 
 This ledger records observed checks for the current architecture. It does not turn unrun checks into claims.
 
+## 2026-10-31 BL-080 security regression suites
+
+| Item | Result | Evidence |
+|---|---|---|
+| Test definitions | PASS | HTTP checks with method, URL, headers, body, typed assertions (`status_equals`, `status_not_equals`, `body_contains`, `body_not_contains`, `header_equals`, `header_absent`), suite label, project/version scope and optional source pentest finding. |
+| Authorization gate | PASS live | Every run calls `authorize()` with capability `active_verification` for the exact URL target; no grant → **403 and nothing is sent** (verified live: 403, no run recorded). Methods POST/PUT/PATCH/DELETE additionally require `intrusive_testing` — a GET grant never implies them (403 pinned by test). |
+| Redaction | PASS live (after fix) | Request headers `authorization/cookie/x-api-key/...` stored as `[REDACTED]`; credential-looking body patterns (`token=`, `api_key=`, `password=`, ...) scrubbed. Live gate caught a real gap — `token=sk-...` in a JSON body was NOT scrubbed by the first pattern; the regex was extended and the case is now pinned (`api_key=[REDACTED]` assertion) and re-verified live (`token=[REDACTED]`, zero leakage). |
+| Regression detection | PASS live | `reintroduced` is true only when the previous run passed and the current one fails. Live: target vulnerable → failed; flipped to fixed → passed; flipped back → failed with `reintroduced: true`. |
+| Audit + history | PASS | `regression.test_created`, `regression.run`, `regression.denied` on the hash chain; run history keeps status, latency, redacted evidence and errors. |
+| Console | PASS | 14th tab `regression`: checks table with last result/reintroduced badge, run + history actions, run timeline, and a creation form (URL, method, suite, expected status, body-must-not-contain). |
+| Tests | PASS | 4 in `test_bl080_regression.py` against real local HTTP servers: deny-without-grant, full fail→pass→fail with redaction, mutating method needs intrusive grant, tenant isolation. Suite total 102. |
+
+Known limits: assertions cover status/body/header only (no JSON-path or
+timing assertions); runs are on-demand from the API/console, not scheduled
+by the future orchestration queue (BL-020).
+
 ## 2026-10-31 BL-050 Jira bridge
 
 | Item | Result | Evidence |

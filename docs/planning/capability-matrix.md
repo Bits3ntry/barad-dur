@@ -29,7 +29,7 @@ known gaps), **MISSING**, **BLOCKED** (external dependency). Evidence in
 | PR review / inline code view | PARTIAL | diff+findings API ready; viewer UI pending (BL-040b part 2) |
 | Pentest management | PARTIAL | BL-070 engagements/tests/findings/evidence/retest/report live; no PDF template/Jira link/regression conversion |
 | Jira bidirectional | PARTIAL | BL-050 links/outbox/webhook/reconcile live vs stub; no attachment sync or field mapping UI |
-| Regression suites | MISSING | BL-080 |
+| Regression suites | PARTIAL | BL-080 HTTP checks, authorized replay, redaction, reintroduction detection; no scheduler/JSON-path assertions |
 | EASM probing (DNS/TLS/tech) | MISSING | BL-090 (crt.sh only) |
 | Scanner orchestration / Shauron contract | PARTIAL | contract drafted; no job queue/workers |
 | Dashboards / reporting | COMPLETE (v1) | BL-110: real-data summary + project posture + console tab |

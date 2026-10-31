@@ -922,3 +922,50 @@ class JiraOutbox(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# ─────────────── BL-080: security regression suites ───────────────
+
+class RegressionTest(Base, TimestampMixin):
+    """Replayable HTTP check with assertions; execution requires an active
+    authorization grant for its target (BL-015)."""
+
+    __tablename__ = "regression_tests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True)
+    project_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_versions.id"), nullable=True)
+    suite: Mapped[str] = mapped_column(String(64), default="default")
+    name: Mapped[str] = mapped_column(String(255))
+    method: Mapped[str] = mapped_column(String(16), default="GET")
+    url: Mapped[str] = mapped_column(String(2048))
+    headers: Mapped[str] = mapped_column(Text, default="{}")
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assertions: Mapped[str] = mapped_column(Text, default="[]")
+    expected_outcome: Mapped[str] = mapped_column(String(16), default="pass")
+    source_finding_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("pentest_findings.id"), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RegressionRun(Base):
+    __tablename__ = "regression_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    test_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("regression_tests.id", ondelete="CASCADE"), index=True)
+    project_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_versions.id"), nullable=True)
+    result: Mapped[str] = mapped_column(String(16))
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reintroduced: Mapped[bool] = mapped_column(Boolean, default=False)
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ran_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
