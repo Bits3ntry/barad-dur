@@ -26,8 +26,13 @@ PATHS = {
     "saria-ios": f"{REPOS}/saria/ios",
     "bitsentry-xyz": f"{REPOS}/bitsentry.xyz",
 }
+# A repository with 180 MB of media and 1 GB of node_modules makes opengrep burn
+# CPU for twenty minutes with nothing to show. Scan the source roots instead.
+SCAN_TARGETS = {
+    "bitsentry-xyz": ["app", "components", "lib", "hooks"],
+}
 EXCLUDES = ["node_modules", ".venv", "venv", "dist", "build", "Pods", "DerivedData",
-            ".git", "site-packages", "vendor", ".next", "coverage"]
+            ".git", "site-packages", "vendor", ".next", "coverage", "public", "content"]
 
 
 def env_value(key):
@@ -55,9 +60,11 @@ def api(method, path, payload=None, timeout=180):
 
 def scan(slug, path, version):
     target = f"{OUT}/{slug}.sarif"
+    roots = [f"{path}/{name}" for name in SCAN_TARGETS.get(slug, [])]
+    roots = [root for root in roots if os.path.isdir(root)] or [path]
     command = [OPENGREP, "scan", "--config", "auto", "--quiet",
                "--max-target-bytes", "1000000", "--timeout", "60",
-               "--sarif", "--output", target, path]
+               "--sarif", "--output", target] + roots
     for name in EXCLUDES:
         command += ["--exclude", name]
     started = time.time()
@@ -69,9 +76,9 @@ def scan(slug, path, version):
     results = len(run.get("results") or [])
     status, body = api("POST", f"/api/v1/sarif?project={slug}&version={version}",
                        {"run": run, "actor": "opengrep"})
+    counts = body.get("counts") if isinstance(body, dict) else None
     return {"project": slug, "results": results, "ingest": status,
-            "ingested": (body.get("data") or {}).get("created") if isinstance(body, dict) else None,
-            "seconds": round(time.time() - started)}
+            "counts": counts, "seconds": round(time.time() - started)}
 
 
 def main():
