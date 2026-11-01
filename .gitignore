@@ -14,3 +14,6 @@ frontend/dist/
 # Python build artifacts
 *.egg-info/
 .barad/
+
+# built console bundle (deploy artifact, rsynced at release time)
+console_html/

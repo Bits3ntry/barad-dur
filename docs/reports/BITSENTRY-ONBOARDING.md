@@ -120,9 +120,17 @@ Cada uno tiene test de regresión: 186 pruebas de backend en verde
 # API (contenedor)
 open http://127.0.0.1:8090/healthz
 
-# Consola con el código nuevo
+# Consola servida por el contenedor (bundle nuevo, proxy /api al platform)
+open http://127.0.0.1:8092
+
+# Consola en modo desarrollo (HMR)
 cd frontend && npm run dev     # http://localhost:5173
 ```
+
+El contenedor `console` ahora monta `console_html/` de **este** checkout
+(gitignored, generado con `npm run build`), así que 8092 sirve la UI nueva.
+Verificado: asset `index-C8UjD9qc.js`, tema claro, shell `254px 1011px`,
+7 proyectos en alcance y 1.267 findings.
 
 Dos formas de identificarse:
 
