@@ -1,7 +1,7 @@
 """BL-110: dashboard aggregates over real data (no fabricated values)."""
 import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.app import auth, gates, licenses, models, severity as severity_mod
@@ -286,3 +286,92 @@ def projects_posture(org: models.Organization = Depends(auth.require_org),
     data.sort(key=lambda row: row["critical"] * 10 + row["high"],
               reverse=True)
     return {"data": data, "total": len(data)}
+
+
+@router.get("/dashboard/exposure-flow")
+def exposure_flow(window: int = Query(default=30, ge=1, le=365),
+                  project: str | None = Query(default=None),
+                  version: str | None = Query(default=None),
+                  org: models.Organization = Depends(auth.require_org),
+                  session: Session = Depends(get_session)):
+    """Exposure flow: what came in, what is actionable, and where it stands.
+
+    Every number is read from the findings table; nothing is estimated. Stages
+    that have no data in this deployment (in progress, fixed, accepted) are
+    returned as zero rather than omitted, so the diagram can render a complete
+    outcome column and a reader can tell "none yet" from "not tracked".
+    """
+    now = models.utcnow()
+    since = now - datetime.timedelta(days=window)
+
+    proj = None
+    if project is not None:
+        proj = (session.query(models.Project)
+                .filter_by(org_id=org.id, slug=project).one_or_none())
+        if proj is None:
+            # An unknown scope must not silently answer with the whole org.
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    pv = None
+    if proj is not None and version is not None:
+        pv = (session.query(models.ProjectVersion)
+              .filter_by(project_id=proj.id, version=version).one_or_none())
+        if pv is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
+
+    query = session.query(models.Finding).filter_by(org_id=org.id)
+    if proj is not None:
+        query = query.filter_by(project_id=proj.id)
+    if pv is not None:
+        query = query.filter_by(last_seen_version_id=pv.id)
+    findings = query.all()
+
+    received = [f for f in findings if f.first_seen_at and _aware(f.first_seen_at) >= since]
+    open_now = [f for f in findings if f.status not in NON_OPEN and f.status != "suppressed"]
+
+    sources: dict[tuple[str, str], int] = {}
+    for finding in received:
+        # The same engine arrives spelled OpenGrep / opengrep / Opengrep OSS;
+        # one row per tool, or the flow lies about how many sources there are.
+        tool = (finding.tool or finding.source or "import").strip().lower()
+        if tool.startswith("opengrep"):
+            tool = "opengrep"
+        sources[(finding.kind, tool)] = sources.get((finding.kind, tool), 0) + 1
+    source_rows = sorted(
+        ({"kind": kind, "tool": tool, "count": count}
+         for (kind, tool), count in sources.items()),
+        key=lambda row: (-row["count"], row["kind"], row["tool"]))
+
+    by_priority = {"P0": 0, "P1": 0, "P2": 0, "P3": 0, "unranked": 0}
+    for finding in open_now:
+        key = (finding.priority or "").upper()
+        by_priority[key if key in by_priority else "unranked"] += 1
+
+    past_sla = 0
+    for finding in open_now:
+        deadline = finding.sla_deadline
+        if deadline is not None and _aware(deadline) < now:
+            past_sla += 1
+
+    suppressed = sum(1 for f in findings if f.status == "suppressed")
+    in_progress = sum(1 for f in findings if f.status == "in_progress")
+    resolved = sum(1 for f in findings if f.status in NON_OPEN)
+    closed_in_window = sum(
+        1 for f in findings
+        if f.status in NON_OPEN and f.status_changed_at
+        and _aware(f.status_changed_at) >= since)
+
+    return {"data": {
+        "window_days": window,
+        "sources": source_rows,
+        "received": len(received),
+        "actionable": len(open_now),
+        "by_priority": by_priority,
+        "outcomes": {
+            "open": len(open_now),
+            "past_sla": past_sla,
+            "in_progress": in_progress,
+            "suppressed": suppressed,
+            "resolved": resolved,
+            "closed_in_window": closed_in_window,
+        },
+    }}
