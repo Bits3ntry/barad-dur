@@ -214,7 +214,31 @@ y cada línea donde aparece es una *occurrence*. Por eso 55 resultados de
 opengrep en aurea-backend son 27 findings: las repeticiones están registradas
 como sightings, no descartadas.
 
-## 7. Exposure flow en el dashboard
+## 7. Sidebar CTEM y gestión del ciclo
+
+La navegación sigue el ciclo, no los módulos. Arriba `Dashboard`; después el
+grupo **CTEM cycle** con `Cycle overview` y las cinco fases anidadas; luego
+`Work`, `Delivery`, `Supply chain` y `Administration`. Todos los grupos colapsan
+y el estado se recuerda en `localStorage`: veinte filas planas empujaban todo
+fuera de pantalla.
+
+Dos badges con datos reales: `Findings` lleva los críticos abiertos (27) y
+`Mobilization` los pasados de SLA. El brand muestra la organización (`bitsentry`).
+
+Cada fase del ciclo se mide contra su propia tabla:
+
+| Fase | Pregunta | Se juzga por | Estado hoy |
+|---|---|---|---|
+| Scoping | ¿sabemos qué es nuestro? | proyectos + versión escaneada + scope targets | **done** (7 proyectos, 2 assets, 9 targets) |
+| Discovery | ¿sabemos de qué está hecho? | componentes + importaciones recientes | **done** (3.194 componentes, 8 imports) |
+| Prioritization | ¿sabemos qué importa? | todo lo abierto con prioridad asignada | in progress (1.267 de 1.327) |
+| Validation | ¿la exposición es real? | engagements y cobertura de regresión | not started (0 y 0) |
+| Mobilization | ¿se está cerrando? | resueltos o tickets abiertos | in progress (0 resueltos, 0 tickets) |
+
+Una fase nunca figura sana porque su tabla esté vacía: sin datos el estado es
+`not started`, y `in progress` cuando hay algo pero el criterio no se cumple.
+
+## 8. Exposure flow en el dashboard
 
 Sankey dibujado en SVG (no cajas): fuentes → donut por prioridad → outcomes.
 Los números salen de `GET /api/v1/dashboard/exposure-flow?window=30` y se verifican
@@ -240,7 +264,7 @@ Decisiones que se ven en el dibujo:
   Resolved): así se distingue "no hay" de "no se mide".
 - Cada outcome es clickeable y abre Findings.
 
-## 8. Límites conocidos
+## 9. Límites conocidos
 
 - **Pipelines = 0**: no hay CI conectada todavía; la guía lo marca como paso
   pendiente (5 de 6 hechos).
