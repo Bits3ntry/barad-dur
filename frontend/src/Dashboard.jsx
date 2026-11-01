@@ -8,7 +8,7 @@ export default function Dashboard({ projects, onNavigate }) {
   const [project, setProject] = useState('')
   const [version, setVersion] = useState('')
   const [summary, setSummary] = useState(null)
-  const [posture, setPosture] = useState([])
+  const [portfolio, setPortfolio] = useState([])
   const [series, setSeries] = useState({ findings: [], occurrences: [] })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -25,9 +25,30 @@ export default function Dashboard({ projects, onNavigate }) {
       .then((r) => setSummary(r.data))
       .catch((e) => setError(String(e.message || e)))
       .finally(() => setLoading(false))
-    api.get('/api/v1/dashboard/projects')
-      .then((r) => setPosture(r.data || []))
-      .catch(() => setPosture([]))
+    // Portfolio rolls the same versions up by project, which is the grouping
+    // the per-project posture list cannot show (it has no component inventory).
+    api.get('/api/v1/inventory/portfolio')
+      .then((r) => {
+        const byProject = new Map()
+        for (const row of r.data || []) {
+          if (!byProject.has(row.project)) {
+            byProject.set(row.project, {
+              project: row.project, versions: 0, components: 0, findings: 0, kev: 0,
+              by_severity: { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, UNKNOWN: 0 },
+            })
+          }
+          const entry = byProject.get(row.project)
+          entry.versions += 1
+          entry.components += row.components.total
+          entry.findings += row.findings.total
+          entry.kev += row.findings.kev
+          for (const [severity, count] of Object.entries(row.findings.by_severity)) {
+            entry.by_severity[severity] = (entry.by_severity[severity] || 0) + count
+          }
+        }
+        setPortfolio([...byProject.values()].sort((a, b) => a.project.localeCompare(b.project)))
+      })
+      .catch(() => setPortfolio([]))
     api.get('/api/v1/dashboard/findings/severity/time-series?window=30')
       .then((r) => setSeries((prev) => ({ ...prev, findings: r.data || [] })))
       .catch(() => setSeries((prev) => ({ ...prev, findings: [] })))
@@ -134,6 +155,52 @@ export default function Dashboard({ projects, onNavigate }) {
             tone={f.resolved_last_7d ? 'good' : ''} />
         </div>
       </Card>
+
+      {portfolio.length > 0 && (
+        <Card title="Portfolio by project"
+          actions={onNavigate && (
+            <button className="mini" onClick={() => onNavigate('projects')}>open projects</button>
+          )}>
+          <table>
+            <thead>
+              <tr>
+                <th>project</th><th>versions</th><th>components</th><th>findings</th>
+                <th>critical</th><th>high</th><th>medium</th><th>kev</th>
+              </tr>
+            </thead>
+            <tbody>
+              {portfolio.map((row) => (
+                <tr key={row.project} className="clickable"
+                  onClick={() => { setProject(row.project); setVersion('') }}>
+                  <td className="title">{row.project}</td>
+                  <td className="num">{row.versions}</td>
+                  <td className="num">{row.components}</td>
+                  <td className="num">{row.findings}</td>
+                  <td className="num">
+                    {row.by_severity.CRITICAL
+                      ? <span className="sev sev-critical">{row.by_severity.CRITICAL}</span>
+                      : <span className="muted">0</span>}
+                  </td>
+                  <td className="num">
+                    {row.by_severity.HIGH
+                      ? <span className="sev sev-high">{row.by_severity.HIGH}</span>
+                      : <span className="muted">0</span>}
+                  </td>
+                  <td className="num">
+                    {row.by_severity.MEDIUM
+                      ? <span className="sev sev-medium">{row.by_severity.MEDIUM}</span>
+                      : <span className="muted">0</span>}
+                  </td>
+                  <td className="num">
+                    {row.kev ? <span className="sev sev-critical">{row.kev}</span>
+                      : <span className="muted">0</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
 
       {/* Charts — real data from /api/v1/dashboard/summary */}
       <div className="grid grid-2">
@@ -273,27 +340,6 @@ export default function Dashboard({ projects, onNavigate }) {
         </div>
       )}
 
-      <Card
-        title="Project posture"
-        actions={<span className="count">updated {new Date(summary.generated_at).toLocaleTimeString()}</span>}
-      >
-        <Table
-          head={['project', 'open', 'critical', 'high', 'total']}
-          empty={<EmptyState title="No projects yet"
-            hint="Create a project and ingest an SBOM to see posture here." />}
-        >
-          {posture.map((row) => (
-            <tr key={row.project} className="clickable"
-              onClick={() => { setProject(row.project); setVersion('') }}>
-              <td className="title">{row.project}</td>
-              <td>{row.open}</td>
-              <td>{row.critical ? <span className="sev sev-critical">{row.critical}</span> : 0}</td>
-              <td>{row.high}</td>
-              <td>{row.total}</td>
-            </tr>
-          ))}
-        </Table>
-      </Card>
     </div>
   )
 }
