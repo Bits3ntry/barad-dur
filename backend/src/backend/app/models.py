@@ -65,6 +65,11 @@ class Project(Base, TimestampMixin):
     org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
     name: Mapped[str] = mapped_column(String(255))
     slug: Mapped[str] = mapped_column(String(255))
+    # A product or account that owns several repositories ("Aurea" holds the
+    # frontend, backend, fx and document services). Free text on purpose: the
+    # grouping is whatever the organization calls it, and it can be re-assigned
+    # without a migration.
+    group_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class ProjectVersion(Base, TimestampMixin):

@@ -2,6 +2,7 @@
 from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app import auth, models, severity as severity_mod
@@ -85,6 +86,7 @@ def _serialize_version_profile(session: Session, org_id: str,
     return {
         "project": project.slug,
         "project_name": project.name,
+        "group": project.group_name or "ungrouped",
         "version": version.version,
         "version_id": version.id,
         "components": {"total": len(links), "direct": direct,
@@ -108,24 +110,60 @@ def _serialize_version_profile(session: Session, org_id: str,
 @router.get("/inventory/portfolio")
 def portfolio(org: models.Organization = Depends(auth.require_org),
               session: Session = Depends(get_session)):
-    """Every project version with its component/finding rollup."""
+    """Every project version with its component/finding rollup.
+
+    Grouping has three levels — group -> project -> version — and accounting is
+    always "the selected version, otherwise the latest". Each row says whether
+    it is the latest for its project, and `groups` is the rollup a reader wants
+    at the top: per product, counting one version per project (not the sum of
+    every historical version, which double-counts components).
+    """
     rows = []
     for project in (session.query(models.Project).filter_by(org_id=org.id)
                     .order_by(models.Project.name).all()):
-        for version in (session.query(models.ProjectVersion)
-                        .filter_by(project_id=project.id)
-                        .order_by(models.ProjectVersion.created_at.desc()).all()):
-            rows.append(_serialize_version_profile(session, org.id, project, version))
+        versions = (session.query(models.ProjectVersion)
+                    .filter_by(project_id=project.id)
+                    .order_by(models.ProjectVersion.created_at.desc()).all())
+        for index, version in enumerate(versions):
+            row = _serialize_version_profile(session, org.id, project, version)
+            row["is_latest"] = index == 0
+            rows.append(row)
 
-    totals = {
-        "versions": len(rows),
-        "components": sum(row["components"]["total"] for row in rows),
-        "findings": sum(row["findings"]["total"] for row in rows),
-        "kev": sum(row["findings"]["kev"] for row in rows),
-        "by_severity": {sev: sum(row["findings"]["by_severity"][sev] for row in rows)
-                        for sev in SEVERITIES},
-    }
-    return {"data": rows, "totals": totals}
+    def _blank():
+        return {"versions": 0, "projects": 0, "components": 0, "findings": 0, "kev": 0,
+                "by_severity": {sev: 0 for sev in SEVERITIES}}
+
+    def _add(target, row):
+        target["versions"] += 1
+        target["components"] += row["components"]["total"]
+        target["findings"] += row["findings"]["total"]
+        target["kev"] += row["findings"]["kev"]
+        for sev in SEVERITIES:
+            target["by_severity"][sev] += row["findings"]["by_severity"][sev]
+
+    totals = _blank()
+    latest_totals = _blank()
+    groups = {}
+    for row in rows:
+        _add(totals, row)
+        bucket = groups.setdefault(row["group"], {**_blank(), "group": row["group"],
+                                                  "projects": []})
+        if row["project"] not in bucket["projects"]:
+            bucket["projects"].append(row["project"])
+            bucket["projects_count"] = len(bucket["projects"])
+        if row["is_latest"]:
+            _add(latest_totals, row)
+            _add(bucket, row)
+            bucket.setdefault("latest_versions", []).append(
+                {"project": row["project"], "version": row["version"]})
+
+    totals["projects"] = len({row["project"] for row in rows})
+    latest_totals["projects"] = totals["projects"]
+    for bucket in groups.values():
+        bucket["versions"] = len(bucket.get("latest_versions") or [])
+        bucket["projects_count"] = len(bucket["projects"])
+    return {"data": rows, "totals": totals, "latest_totals": latest_totals,
+            "groups": sorted(groups.values(), key=lambda item: item["group"].lower())}
 
 
 @router.get("/inventory/profile")
@@ -155,8 +193,34 @@ def list_projects(org: models.Organization = Depends(auth.require_org),
                     .filter_by(project_id=project.id)
                     .order_by(models.ProjectVersion.created_at).all())
         data.append({"id": project.id, "name": project.name, "slug": project.slug,
+                     "group": project.group_name,
                      "versions": [v.version for v in versions]})
     return {"data": data}
+
+
+class ProjectGroupIn(BaseModel):
+    group: str | None = Field(
+        default=None,
+        description="Product or account that owns this repository; null ungroups it")
+
+
+@router.patch("/projects/{slug}")
+def set_project_group(slug: str, payload: ProjectGroupIn,
+                      org: models.Organization = Depends(auth.require_org),
+                      session: Session = Depends(get_session)):
+    """Assign the project to a group (or clear it).
+
+    Free text rather than a table: the hierarchy reads Aurea > backend, but a
+    new organization decides its own labels, and moving a repository between
+    products must not need a migration.
+    """
+    project = (session.query(models.Project)
+               .filter_by(org_id=org.id, slug=slug).one_or_none())
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    project.group_name = (payload.group or "").strip() or None
+    session.commit()
+    return {"data": {"slug": project.slug, "group": project.group_name}}
 
 
 @router.get("/components")
