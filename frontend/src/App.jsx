@@ -19,43 +19,51 @@ import Pipelines from './Pipelines'
 import Settings from './Settings'
 import Setup from './Setup'
 import Projects from './Projects'
+import CtemCycle from './CtemCycle'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
 import { Modal } from './ui'
 
-/* Navigation is grouped by what a person is trying to do, not by module name:
-   16 flat tabs were unreadable and overflowed on a laptop screen. */
+/* Navigation follows the CTEM loop: the five phases are the spine, and the
+   screens that feed them sit underneath. Groups collapse, because 20 flat rows
+   pushed everything below the fold — the sidebar is a map, not a list. */
 const NAV = [
-  { group: 'Overview', items: [
-    { key: 'setup', label: 'Setup guide' },
+  { group: '', collapsible: false, items: [
     { key: 'dashboard', label: 'Dashboard' },
+  ] },
+  { group: 'CTEM cycle', collapsible: true, defaultOpen: true, items: [
+    { key: 'ctem', label: 'Cycle overview' },
+    { key: 'scoping', label: 'Scoping' },
+    { key: 'discovery', label: 'Discovery' },
+    { key: 'prioritization', label: 'Prioritization' },
+    { key: 'validation', label: 'Validation' },
+    { key: 'mobilization', label: 'Mobilization', badge: 'sla' },
+  ] },
+  { group: 'Work', collapsible: true, defaultOpen: true, items: [
+    { key: 'findings', label: 'Findings', badge: 'critical' },
     { key: 'projects', label: 'Projects' },
-    { key: 'findings', label: 'Findings' },
     { key: 'assets', label: 'Attack surface' },
-    { key: 'notifications', label: 'Notifications' },
-  ] },
-  { group: 'Supply chain', items: [
     { key: 'components', label: 'Components' },
-    { key: 'licenses', label: 'Licenses' },
   ] },
-  { group: 'Code', items: [
-    { key: 'code', label: 'Pull requests' },
+  { group: 'Delivery', collapsible: true, items: [
     { key: 'pipelines', label: 'Pipelines' },
     { key: 'gates', label: 'Quality gates' },
-  ] },
-  { group: 'Testing', items: [
+    { key: 'code', label: 'Pull requests' },
     { key: 'pentest', label: 'Pentests' },
     { key: 'regression', label: 'Regression' },
   ] },
-  { group: 'Operations', items: [
+  { group: 'Supply chain', collapsible: true, items: [
+    { key: 'licenses', label: 'Licenses' },
     { key: 'orchestration', label: 'Orchestration' },
     { key: 'jira', label: 'Jira' },
     { key: 'remediation', label: 'Remediation' },
   ] },
-  { group: 'Administration', items: [
+  { group: 'Administration', collapsible: true, items: [
+    { key: 'notifications', label: 'Notifications' },
     { key: 'grants', label: 'Grants' },
-    { key: 'audit', label: 'Audit trail' },
     { key: 'members', label: 'Members' },
+    { key: 'audit', label: 'Audit trail' },
+    { key: 'setup', label: 'Setup guide' },
   ] },
 ]
 
@@ -72,6 +80,8 @@ export default function App() {
   const [projectsError, setProjectsError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [session, setSession] = useState(() => api.settings())
+  const [org, setOrg] = useState(null)
+  const [badges, setBadges] = useState({})
 
   const needsKey = !session.key && !session.token
   const [providerUrl, setProviderUrl] = useState(session.url || '')
@@ -97,7 +107,36 @@ export default function App() {
   useEffect(() => {
     if (needsKey) return
     loadProjects()
+    api.get('/api/v1/org').then((r) => setOrg(r.data)).catch(() => setOrg(null))
+    // Badges are the one number worth carrying into the sidebar: what is
+    // critical and what is past its SLA.
+    api.get('/api/v1/dashboard/summary')
+      .then((r) => {
+        const finding = r.data.findings || {}
+        setBadges({
+          critical: (finding.by_severity_open || {}).CRITICAL || 0,
+          sla: finding.sla_breached || 0,
+        })
+      })
+      .catch(() => setBadges({}))
   }, [needsKey, settingsOpen])
+
+  // Collapsed nav groups, remembered across reloads.
+  const [closedGroups, setClosedGroups] = useState(() => {
+    try {
+      const stored = localStorage.getItem('barad.nav.closed')
+      if (stored) return new Set(JSON.parse(stored))
+    } catch { /* first run */ }
+    return new Set(NAV.filter((entry) => entry.collapsible && !entry.defaultOpen)
+      .map((entry) => entry.group))
+  })
+
+  function toggleGroup(group) {
+    const next = new Set(closedGroups)
+    if (next.has(group)) next.delete(group); else next.add(group)
+    setClosedGroups(next)
+    localStorage.setItem('barad.nav.closed', JSON.stringify([...next]))
+  }
 
   const go = (key) => {
     setTab(key)
@@ -122,6 +161,13 @@ export default function App() {
   const screen = () => {
     switch (tab) {
       case 'setup': return <Setup onNavigate={go} />
+      case 'ctem': return <CtemCycle onNavigate={go} />
+      case 'scoping':
+      case 'discovery':
+      case 'prioritization':
+      case 'validation':
+      case 'mobilization':
+        return <CtemCycle focus={tab} onNavigate={go} />
       case 'projects': return <Projects onNavigate={go} />
       case 'findings': return <Findings projects={projects} />
       case 'code': return <CodeReview projects={projects} />
@@ -149,25 +195,47 @@ export default function App() {
         <div className="brand">
           <BrandMark size={26} />
           <span className="brand-text">
-            <span className="brand-name">BARAD-DÛR</span>
-            <span className="brand-sub">security management</span>
+            <span className="brand-name">{org ? org.name : 'BARAD-DÛR'}</span>
+            <span className="brand-sub">continuous exposure</span>
           </span>
         </div>
-        {NAV.map((entry) => (
-          <div className="nav-group" key={entry.group}>
-            <div className="nav-group-title">{entry.group}</div>
-            {entry.items.map((item) => (
-              <button
-                key={item.key}
-                className={`nav-item ${tab === item.key ? 'active' : ''}`}
-                aria-current={tab === item.key ? 'page' : undefined}
-                onClick={() => go(item.key)}
-              >
-                <span>{item.label}</span>
-              </button>
-            ))}
-          </div>
-        ))}
+        {NAV.map((entry) => {
+          const closed = entry.collapsible && closedGroups.has(entry.group)
+          return (
+            <div className="nav-group" key={entry.group || 'primary'}>
+              {entry.group && (entry.collapsible ? (
+                <button className="nav-group-title collapsible"
+                  aria-expanded={!closed}
+                  onClick={() => toggleGroup(entry.group)}>
+                  <span>{entry.group}</span>
+                  <span className={`nav-chevron${closed ? '' : ' open'}`}
+                    aria-hidden="true" />
+                </button>
+              ) : (
+                <div className="nav-group-title">{entry.group}</div>
+              ))}
+              {!closed && entry.items.map((item) => {
+                const count = item.badge ? badges[item.badge] : 0
+                return (
+                  <button
+                    key={item.key}
+                    className={`nav-item${entry.group === 'CTEM cycle' && item.key !== 'ctem' ? ' nested' : ''}`
+                      + `${tab === item.key ? ' active' : ''}`}
+                    aria-current={tab === item.key ? 'page' : undefined}
+                    onClick={() => go(item.key)}
+                  >
+                    <span>{item.label}</span>
+                    {count > 0 && (
+                      <span className={`badge-count${item.badge === 'critical' ? ' bad' : ''}`}>
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          )
+        })}
       </aside>
 
       <div className="main">

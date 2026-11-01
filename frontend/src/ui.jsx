@@ -166,11 +166,12 @@ export function Table({ head, children, empty }) {
 }
 
 /* ── Stat ── */
-export function Stat({ value, label, tone }) {
+export function Stat({ value, label, hint, tone }) {
   return (
     <div className={`metric ${tone || ''}`}>
       <div className="metric-value">{value}</div>
       <div className="metric-label">{label}</div>
+      {hint && <div className="metric-hint">{hint}</div>}
     </div>
   )
 }
