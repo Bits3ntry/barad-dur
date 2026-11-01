@@ -310,7 +310,6 @@ def collect(asset_id: str, payload: CollectIn = None,
         session.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             f"not authorized: {decision['reason']}")
-
     observation: dict = {"dns": _dns_lookup(asset.value)}
     if payload.tls:
         tls_decision = authorization.authorize(
@@ -338,3 +337,135 @@ def collect(asset_id: str, payload: CollectIn = None,
     session.commit()
     return {"data": {"snapshot_id": row.id, "observed_at": now.isoformat(),
                      "observation": observation}}
+
+
+class ScheduleIn(BaseModel):
+    strategy: str = Field(default="cron", max_length=32)
+    expression: str = Field(min_length=1, max_length=255)
+    enabled: bool = True
+    actor: str | None = None
+
+
+@router.get("/schedules")
+def list_schedules(org: models.Organization = Depends(auth.require_org),
+                   session: Session = Depends(get_session)):
+    """List EASM scan schedules for the organization."""
+    schedules = (session.query(models.EasmSchedule)
+                 .filter_by(org_id=org.id)
+                 .order_by(models.EasmSchedule.enabled.desc(),
+                          models.EasmSchedule.created_at.desc()).all())
+    return {"data": [{"id": s.id, "strategy": s.strategy,
+                      "expression": s.expression, "enabled": s.enabled,
+                      "next_run": s.next_run.isoformat() if s.next_run else None,
+                      "created_at": s.created_at.isoformat()} for s in schedules]}
+
+
+@router.post("/schedules", status_code=status.HTTP_201_CREATED)
+def create_schedule(payload: ScheduleIn = None,
+                   org: models.Organization = Depends(auth.require_org),
+                   session: Session = Depends(get_session)):
+    """Create an EASM scan schedule."""
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    if payload.strategy not in {"cron", "interval"}:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "strategy must be 'cron' or 'interval'")
+    schedule = models.EasmSchedule(
+        org_id=org.id, strategy=payload.strategy,
+        expression=payload.expression, enabled=payload.enabled,
+        actor=payload.actor or "system", created_at=models.utcnow())
+    session.add(schedule)
+    session.flush()
+    _audit_log(session, org.id, payload.actor or "system", "easm.schedule.added",
+               "schedule", schedule.id, payload.expression)
+    session.commit()
+    return {"data": {"id": schedule.id, "strategy": schedule.strategy,
+                      "expression": schedule.expression, "enabled": schedule.enabled}}
+
+
+@router.patch("/schedules/{schedule_id}", status_code=status.HTTP_200_OK)
+def update_schedule(schedule_id: str, payload: ScheduleIn = None,
+                    org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    """Update an EASM scan schedule."""
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    schedule = session.get(models.EasmSchedule, schedule_id)
+    if schedule is None or schedule.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "schedule not found")
+    if payload.strategy:
+        schedule.strategy = payload.strategy
+    if payload.expression:
+        schedule.expression = payload.expression
+    if payload.enabled is not None:
+        schedule.enabled = payload.enabled
+    session.commit()
+    return {"data": {"id": schedule.id, "strategy": schedule.strategy,
+                      "expression": schedule.expression, "enabled": schedule.enabled}}
+
+
+@router.delete("/schedules/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_schedule(schedule_id: str,
+                    org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    """Delete an EASM scan schedule."""
+    schedule = session.get(models.EasmSchedule, schedule_id)
+    if schedule is None or schedule.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "schedule not found")
+    session.delete(schedule)
+    session.commit()
+    return None
+
+
+class SweepTrigger(BaseModel):
+    actor: str | None = None
+    domain: str | None = None
+    asset_id: str | None = None
+
+
+@router.post("/schedules/trigger")
+def trigger_schedule(payload: SweepTrigger = None,
+                     org: models.Organization = Depends(auth.require_org),
+                     session: Session = Depends(get_session)):
+    """Trigger a manual EASM sweep for testing."""
+    from backend.app import authorization
+
+    targets = []
+    if payload.domain:
+        targets.append({"type": "domain", "value": payload.domain})
+    elif payload.asset_id:
+        asset = session.get(models.Asset, payload.asset_id)
+        if asset is None or asset.org_id != org.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+        targets.append({"type": "domain", "value": asset.value})
+
+    if not targets:
+        assets = session.query(models.Asset).filter_by(org_id=org.id).all()
+        targets = [{"type": a.type, "value": a.value} for a in assets]
+
+    for target in targets:
+        decision = authorization.authorize(
+            session, org.id, payload.actor or "system",
+            "passive_discovery" if target["type"] == "domain" else "asset.collection",
+            target, tool="easm-scheduler")
+        if decision["decision"] == "deny":
+            _audit_log(session, org.id, payload.actor or "system",
+                       "easm.trigger_denied", "asset", None, decision["reason"][:300])
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                               f"not authorized: {decision['reason']}")
+
+    result = {"sweeps": [], "total": len(targets), "denied": 0}
+    for target in targets:
+        domain = target["value"]
+        try:
+            found = crtsh_subdomains(domain)
+            result["sweeps"].append({"domain": domain, "subdomains_found": len(found)})
+        except Exception as e:
+            result["sweeps"].append({"domain": domain, "error": str(e)})
+            result["denied"] += 1
+
+    _audit_log(session, org.id, payload.actor or "system",
+               "easm.sweep.triggered", "asset", None,
+               f"{len(targets)} targets, {result['denied']} denied")
+    session.commit()
+    return {"data": result}
