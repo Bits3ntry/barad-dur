@@ -37,10 +37,12 @@ const TOKENS = {
 const ROOT = document.documentElement
 
 export function getTheme() {
-  if (typeof window === 'undefined') return 'dark'
+  if (typeof window === 'undefined') return 'light'
   const stored = localStorage.getItem('barad.theme')
   if (stored === 'dark' || stored === 'light' || stored === 'system') return stored
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  // Readable by default: a dark console was hard to read for long sessions.
+  // Anyone who prefers dark keeps it via Settings (stored) or "system".
+  return 'light'
 }
 
 export function getDensity() {
@@ -71,12 +73,12 @@ function applyDensity() {
   ROOT.style.setProperty('--font-scale', d === 'compact' ? '0.92' : '1')
 }
 
-/* ── auto theme on load ── */
-useEffect(() => {
-  const t = getTheme()
-  document.documentElement.setAttribute('data-theme', t)
-  applyDensity()
-}, [])
+/* ── apply theme and density once, at module init ──
+   This is not a component, so calling a hook here would run outside React's
+   dispatcher and throw ("Cannot read properties of null (reading 'useEffect')"),
+   which unmounted the whole console. Plain DOM writes are the correct tool. */
+document.documentElement.setAttribute('data-theme', getTheme())
+applyDensity()
 
 /* ── PageHeader ── */
 export function PageHeader({ title, subtitle, actions }) {

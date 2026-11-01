@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { EmptyState, ErrorBanner, Loading, PageHeader, Table, Drawer,
-         Tabs, StatusBadge } from './ui'
+import { Dialog, EmptyState, ErrorBanner, Input, Loading, PageHeader, Table,
+         Drawer, Tabs, StatusBadge } from './ui'
 import { VexSection } from './Vex'
 
 const tabs = [

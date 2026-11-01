@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { PageHeader } from './ui'
+import { Dialog, PageHeader } from './ui'
 
 const CAPABILITIES = ['passive_discovery', 'active_verification',
   'vulnerability_analysis', 'intrusive_testing']

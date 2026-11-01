@@ -3,7 +3,7 @@ import React from 'react'
 /* ── SVG chart primitives (lightweight, no third-party dependency) ── */
 
 /* Single axis + gridline chart. */
-export function LineChart({ data, height = 160, color = '#ff7b00', gridColor = '#30363d' }) {
+export function LineChart({ data, height = 160, color = '#ff7b00', gridColor = 'var(--line)' }) {
   const w = 600
   const h = height
   const pad = { top: 10, bottom: 24, left: 44, right: 10 }
@@ -124,7 +124,7 @@ export function DonutChart({ data, height = 160 }) {
 
   let angle = -Math.PI / 2
   const arcs = data.map((d, i) => {
-    const frac = d.value / total
+    const frac = total > 0 ? d.value / total : 0
     const startAngle = angle
     const endAngle = angle + frac * 2 * Math.PI
     const largeArc = frac > 0.5 ? 1 : 0
@@ -139,20 +139,21 @@ export function DonutChart({ data, height = 160 }) {
       <li key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <span style={{ width: 10, height: 10, borderRadius: '2px', display: 'inline-block',
           background: colors[i % colors.length] }} />
-        <span style={{ fontSize: 12 }}>{d.label}: {d.value}</span>
+        <span style={{ fontSize: 12.5 }}>{d.label}: {d.value}</span>
       </li>
     )
 
     return {
-      x1, y1, x2, y2, startAngle, endAngle, color: colors[i % colors.length], value: d.value
+      x1, y1, x2, y2, startAngle, endAngle, largeArc,
+      color: colors[i % colors.length], value: d.value,
     }
   })
 
   const arcPaths = arcs.map((a, i) => {
-    if (a.value === 0) return null
+    if (a.value === 0 || total <= 0) return null
     return (
-      <path key={i} d={`M ${cx} ${cy} L ${a.x1} ${a.y1} A ${radius} ${radius} 0 ${largeArc} 1 ${a.x2} ${a.y2} Z`}
-        fill={a.color} stroke="#0d1117" strokeWidth="1">
+      <path key={i} d={`M ${cx} ${cy} L ${a.x1} ${a.y1} A ${radius} ${radius} 0 ${a.largeArc} 1 ${a.x2} ${a.y2} Z`}
+        fill={a.color} stroke="var(--panel)" strokeWidth="1">
         <title>{a.value}</title>
       </path>
     )
@@ -162,8 +163,12 @@ export function DonutChart({ data, height = 160 }) {
     <div>
       <svg viewBox={`0 0 ${w} ${h}`} className="chart" role="img" aria-label="donut chart">
         {arcPaths}
-        <circle cx={cx} cy={cy} r={radius} fill="none" stroke="#30363d" strokeWidth="8" />
-        <circle cx={cx} cy={cy} r={innerRadius} fill="none" stroke="#0d1117" strokeWidth="8" />
+        {total <= 0 && (
+          <circle cx={cx} cy={cy} r={(radius + innerRadius) / 2} fill="none"
+            stroke="var(--line-strong)" strokeWidth={radius - innerRadius} />
+        )}
+        <circle cx={cx} cy={cy} r={radius} fill="none" stroke="var(--line)" strokeWidth="8" />
+        <circle cx={cx} cy={cy} r={innerRadius} fill="none" stroke="var(--panel)" strokeWidth="8" />
       </svg>
       <ul style={{ listStyle: 'none', padding: 0, margin: 8  } }
         className="chart-legend">{legend}</ul>
@@ -186,26 +191,4 @@ export function ProgressBar({ label, value, max, tone = 'info' }) {
   )
 }
 
-/* Responsive wrapper: stacks charts on narrow screens. */
-export function ChartCard({ title, subtitle, children, actions }) {
-  return (
-    <Card title={title} subtitle={subtitle} actions={actions}>
-      {children}
-    </Card>
-  )
-}
 
-/* ── reusable Card here (to avoid import cycle) ── */
-export function Card({ title, subtitle, actions, children }) {
-  return (
-    <section className="card" style={{ padding: 12 }}>
-      {(title || actions) && (
-        <div className="row" style={{ marginBottom: 8 }}>
-          {title && <h2 className="card-title" style={{ margin: 0, fontSize: 10 }}>{title}</h2>}
-          {actions && <div className="row row-end">{actions}</div>}
-        </div>
-      )}
-      {children}
-    </section>
-  )
-}

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { PageHeader, Tabs, Drawer } from './ui'
+import { Dialog, Input, PageHeader, Tabs, Drawer } from './ui'
 
 export default function CodeReview({ projects }) {
   const [prs, setPrs] = useState([])
