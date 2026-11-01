@@ -31,20 +31,16 @@ export default function Dashboard({ projects, onNavigate }) {
       .then((r) => {
         const byProject = new Map()
         for (const row of r.data || []) {
-          if (!byProject.has(row.project)) {
-            byProject.set(row.project, {
-              project: row.project, versions: 0, components: 0, findings: 0, kev: 0,
-              by_severity: { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, UNKNOWN: 0 },
-            })
+          // Accounting rule: one version per project — the latest. Summing every
+          // historical version would double-count components and findings.
+          if (!row.is_latest) continue
+          const entry = {
+            project: row.project, versions: 1, components: row.components.total,
+            findings: row.findings.total, kev: row.findings.kev,
+            group: row.group,
+            by_severity: { ...row.findings.by_severity },
           }
-          const entry = byProject.get(row.project)
-          entry.versions += 1
-          entry.components += row.components.total
-          entry.findings += row.findings.total
-          entry.kev += row.findings.kev
-          for (const [severity, count] of Object.entries(row.findings.by_severity)) {
-            entry.by_severity[severity] = (entry.by_severity[severity] || 0) + count
-          }
+          byProject.set(row.project, entry)
         }
         setPortfolio([...byProject.values()].sort((a, b) => a.project.localeCompare(b.project)))
       })
@@ -157,14 +153,14 @@ export default function Dashboard({ projects, onNavigate }) {
       </Card>
 
       {portfolio.length > 0 && (
-        <Card title="Portfolio by project"
+        <Card title="Portfolio by group and project"
           actions={onNavigate && (
             <button className="mini" onClick={() => onNavigate('projects')}>open projects</button>
           )}>
           <table>
             <thead>
               <tr>
-                <th>project</th><th>versions</th><th>components</th><th>findings</th>
+                <th>group</th><th>project</th><th>components</th><th>findings</th>
                 <th>critical</th><th>high</th><th>medium</th><th>kev</th>
               </tr>
             </thead>
@@ -172,8 +168,8 @@ export default function Dashboard({ projects, onNavigate }) {
               {portfolio.map((row) => (
                 <tr key={row.project} className="clickable"
                   onClick={() => { setProject(row.project); setVersion('') }}>
+                  <td className="muted">{row.group}</td>
                   <td className="title">{row.project}</td>
-                  <td className="num">{row.versions}</td>
                   <td className="num">{row.components}</td>
                   <td className="num">{row.findings}</td>
                   <td className="num">
