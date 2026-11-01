@@ -139,22 +139,44 @@ Dos formas de identificarse:
 - **Login humano**: `owner@bitsentry.xyz` con la contraseña de `.env`
   (`BITSENTRY_OWNER_PASSWORD`). `analyst@` y `viewer@` existen para mostrar RBAC.
 
-Nota: el contenedor `barad-dur-console-1` (puerto 8092) sirve un bundle viejo
-desde otro checkout; la UI nueva se ve en `localhost:5173`.
+El contenedor `barad-dur-console-1` monta `console_html/` de este checkout; si
+se ve una UI vieja en `:8092`, el bundle no se copió después del build.
 
 ---
 
-## 5. Límites conocidos
+## 5. Qué datos existen hoy, por fuente
+
+| Fuente | Qué aporta | Volumen real |
+|---|---|---|
+| syft (SBOM CycloneDX) | inventario de componentes por proyecto y versión | 3.378 componentes en 7 versiones |
+| OSV | vulnerabilidades sobre esos componentes (CVE, KEV, CVSS) | 1.267 findings: 27 CRITICAL, 253 HIGH, 231 MEDIUM, 51 LOW, 711 sin vector |
+| opengrep 1.33.1 (`--config auto`) | SAST: debilidades de código con archivo y línea | 67 findings `code-weakness` en los 7 proyectos |
+| DNS + TLS (EASM) | direcciones reales y certificado con vencimiento | `bitsentry.xyz` → 188.114.97.5 / .96.5, cert Google Trust Services, vence 20-dic-2026 (49 días), TLSv1.3 |
+
+SAST se ejecuta con `scripts/sast_bitsentry.py`: escanea cada repositorio con
+opengrep, guarda el SARIF en `~/.hermes/cache/scratch/sast/` y lo ingiere vía
+`POST /api/v1/sarif?project=&version=` (idempotente). Los resultados por
+proyecto: aurea-backend 27, aurea-fx-service 15, aurea-frontend 8,
+bitsentry-xyz 5, saria-backend 3, aurea-document-service 1, saria-ios 1.
+
+Nota sobre el conteo: un *finding* de código es una debilidad por regla+archivo
+y cada línea donde aparece es una *occurrence*. Por eso 55 resultados de
+opengrep en aurea-backend son 27 findings: las repeticiones están registradas
+como sightings, no descartadas.
+
+## 6. Límites conocidos
 
 - **Pipelines = 0**: no hay CI conectada todavía; la guía lo marca como paso
   pendiente (5 de 6 hechos).
-- **938 findings en UNKNOWN**: OSV devolvió avisos sin vector CVSS mapeable.
+- **711 findings en UNKNOWN**: OSV devolvió avisos sin vector CVSS mapeable.
   Es honesto mostrarlos sin severidad antes que asignarla por suposición.
 - **iOS sin inventario**: falta `Package.resolved` o un catálogo Swift en syft.
 - **Frescura del DB de Trivy**: solo por API (`/easm/trivy-db/updates/freshness`),
   sin pantalla; el POST responde 503 en este despliegue.
-- **EASM activo** (TLS/HTTP/puertos) sigue parcial: hay snapshots y detección de
-  cambios, no colectores activos programados.
+- **EASM activo**: DNS y TLS funcionan on-demand (`collect` desde la tabla o por
+  API) con grants por principal; no hay recolección programada ni puertos/HTTP.
+- **SAST no corre en CI**: opengrep se ejecuta a mano con el script; conectar los
+  pipelines es el paso 6 de la guía que sigue pendiente.
 - **Ruido de inventario**: syft también cataloga archivos, así que en
   Components aparecen filas sin PURL cuyo "nombre" es una ruta
   (`…/METADATA`). Son reales pero no son paquetes; el arreglo limpio es
