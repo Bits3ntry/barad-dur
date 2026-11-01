@@ -158,6 +158,15 @@ def sighting_key(kind, rule_id, path, line, tool, source, version_id) -> str:
 def record_occurrence(session, org_id, finding, project_version_id, tool,
                       source, *, kind, rule_id, path, line, detail, now) -> None:
     key = sighting_key(kind, rule_id, path, line, tool, source, project_version_id)
+    # The query below cannot see rows added earlier in this transaction when the
+    # session runs with autoflush=False, which is how ingest is wired: a SARIF
+    # run with several results on the same rule+path then hit
+    # uq_occurrence_sighting. Track what this transaction has queued.
+    pending = session.info.setdefault("occurrence_sightings", set())
+    marker = (finding.id, key)
+    if marker in pending:
+        return
+    pending.add(marker)
     existing = (session.query(models.Occurrence)
                 .filter_by(finding_id=finding.id, sighting_key=key).one_or_none())
     if existing is not None:
