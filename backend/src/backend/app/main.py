@@ -8,7 +8,7 @@ from backend.app.db import get_session, run_migrations
 from backend.app import models
 from backend.app.routers import authorization as authorization_router
 
-from backend.app.routers import accounts, ci, code_baselines, code_review, dashboard, easm, easm_trivy, findings, gates as gates_router, identity, intelligence, inventory, jira, lifecycle, licenses as licenses_router, notifications, orchestration, organization, pentest, regression, relationships, schedules, sarif, scope, sbom, spdx
+from backend.app.routers import accounts, ci, code_baselines, code_review, ctem, dashboard, easm, easm_trivy, findings, gates as gates_router, identity, intelligence, inventory, jira, lifecycle, licenses as licenses_router, notifications, orchestration, organization, pentest, regression, relationships, schedules, sarif, scope, sbom, spdx
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -31,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(licenses_router.router)
     app.include_router(gates_router.router)
     app.include_router(sarif.router)
+    app.include_router(ctem.router)
     app.include_router(dashboard.router)
     app.include_router(spdx.router)
     app.include_router(pentest.router)
