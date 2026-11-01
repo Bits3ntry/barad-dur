@@ -278,7 +278,9 @@ a:hover { text-decoration: underline; }
 .content { padding: var(--gap-5); display: grid; gap: var(--gap-4); max-width: 1440px; }
 
 .page-head { display: flex; align-items: flex-end; justify-content: space-between;
-  gap: var(--gap-4); }
+  gap: var(--gap-4); flex-wrap: wrap; }
+.page-head > * { min-width: 0; }
+.page-head .row { flex-wrap: wrap; justify-content: flex-end; }
 .page-title { margin: 0; font-size: 27px; font-weight: 680; letter-spacing: -0.8px; }
 .page-sub { margin: 4px 0 0; color: var(--text-dim); font-size: 13.5px; }
 
@@ -330,9 +332,10 @@ textarea {
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
-  padding: 8px 11px;
-  min-height: 36px;
+  padding: 0 11px;
+  height: 36px;
   min-width: 0;
+  max-width: 100%;
   transition: border-color 120ms, box-shadow 120ms, background 120ms;
 }
 
@@ -347,7 +350,8 @@ select {
   background-size: 12px 8px;
 }
 
-textarea { min-height: 92px; resize: vertical; line-height: 1.5; }
+select { height: 37px; }
+textarea { height: auto; min-height: 92px; padding: 9px 11px; resize: vertical; line-height: 1.5; }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):hover,
 select:hover,
@@ -435,7 +439,7 @@ input[type="file"]::file-selector-button {
 
 /* toolbar */
 .toolbar { display: flex; gap: var(--gap-2); align-items: center; flex-wrap: wrap; }
-.toolbar select, .toolbar input:not([type="checkbox"]) { width: auto; min-width: 150px; }
+.toolbar select, .toolbar input:not([type="checkbox"]) { width: auto; min-width: 130px; max-width: 100%; }
 .toolbar .spacer { flex: 1 1 16px; }
 
 /* tables */
@@ -445,7 +449,8 @@ input[type="file"]::file-selector-button {
 }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 12px; border-top: 1px solid var(--line);
-  vertical-align: middle; }
+  vertical-align: middle; overflow-wrap: anywhere; }
+td.mono, .mono { overflow-wrap: anywhere; }
 td { font-size: 14px; }
 thead th { border-top: none; color: var(--text-dim); font-size: 11.5px;
   text-transform: uppercase; letter-spacing: 1px; white-space: nowrap;
