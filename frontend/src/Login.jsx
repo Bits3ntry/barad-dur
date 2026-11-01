@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { api } from './api'
+import { Dialog, Input, Loading, Banner } from './ui'
 
 /* The entrance. Nothing else renders without credentials: an app that shows a
    broken dashboard to a visitor is worse than an honest sign-in screen. */
@@ -13,13 +14,10 @@ export function BrandMark({ size = 30 }) {
           <stop offset="100%" stopColor="#ff7a45" />
         </linearGradient>
       </defs>
-      {/* tower silhouette */}
       <path d="M16 1.6 20.6 7h-1.7v3.1h1.9v2.4h1.6v14.9H9.6V12.5h1.6v-2.4h1.9V7h-1.7L16 1.6Z"
         fill="#20242e" stroke="#3a4152" strokeWidth="0.7" />
-      {/* crown spikes */}
       <path d="M12.1 7.2 16 3.1l3.9 4.1" fill="none" stroke="url(#bd-eye)"
         strokeWidth="1.1" strokeLinecap="round" />
-      {/* the eye */}
       <ellipse cx="16" cy="15.1" rx="3.5" ry="2.2" fill="#0b0d12" stroke="#f5c26b"
         strokeWidth="0.9" />
       <circle cx="16" cy="15.1" r="1.15" fill="url(#bd-eye)" />
@@ -29,10 +27,11 @@ export function BrandMark({ size = 30 }) {
 
 export default function Login({ onAuthenticated }) {
   const [mode, setMode] = useState('signin')
-  const [form, setForm] = useState({ email: '', password: '', org_slug: '',
-                                     url: '', key: '' })
+  const [form, setForm] = useState({ email: '', password: '', org_slug: '', url: '', key: '' })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetEmail, setResetEmail] = useState('')
 
   const set = (field) => (event) => setForm((f) => ({ ...f, [field]: event.target.value }))
 
@@ -45,9 +44,6 @@ export default function Login({ onAuthenticated }) {
     try {
       if (mode === 'key') {
         if (form.key.trim().length < 8) throw new Error('That API key looks too short.')
-        // Prove the key before persisting it: a wrong key must fail here and
-        // leave nothing behind, otherwise the next reload lands in a shell
-        // that cannot load anything.
         api.save({ url, key: form.key.trim(), token: '' })
         try {
           await api.get('/api/v1/auth/me')
@@ -75,6 +71,24 @@ export default function Login({ onAuthenticated }) {
     }
   }
 
+  async function requestReset(event) {
+    event.preventDefault()
+    setError('')
+    if (!resetEmail.trim()) { setError('Enter the email address on your account.'); return }
+    try {
+      const response = await api.post('/api/v1/auth/password-reset', { email: resetEmail.trim() })
+      setError(response.data?.ok
+        ? 'Reset link sent. If the address is on file, check your mail (or your admin for the manual link code).'
+        : response.data?.message || 'No account found for that address — nothing to do.')
+    } catch (e) {
+      setError(String(e.message || e))
+    }
+  }
+
+  const oidcConfigured = typeof window !== 'undefined'
+    && (localStorage.getItem('barad.oidc') === 'true'
+        || (typeof process !== 'undefined' && process.env?.OIDC_ISSUER))
+
   return (
     <div className="gate">
       <section className="gate-brand">
@@ -93,17 +107,13 @@ export default function Login({ onAuthenticated }) {
           <li>Pull request review with gate verdicts and inline evidence.</li>
           <li>Authorized scanning only: every active job passes the same grant.</li>
         </ul>
-        <p className="gate-foot">
-          Self-hosted. Nothing leaves this deployment.
-        </p>
+        <p className="gate-foot">Self-hosted. Nothing leaves this deployment.</p>
       </section>
 
       <section className="gate-panel">
         <div className="auth-card">
           <div>
-            <h2 className="auth-h1">
-              {mode === 'signin' ? 'Sign in' : 'Connect with an API key'}
-            </h2>
+            <h2 className="auth-h1">{mode === 'signin' ? 'Sign in' : 'Connect with an API key'}</h2>
             <p className="auth-sub">
               {mode === 'signin'
                 ? 'Your session carries your role.'
@@ -163,8 +173,36 @@ export default function Login({ onAuthenticated }) {
             <span className="mono"> BOOTSTRAP_TOKEN </span> through
             <span className="mono"> POST /api/v1/auth/bootstrap</span>.
           </p>
+
+          <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="mini" onClick={() => setResetOpen(true)}>Forgot password?</button>
+            {oidcConfigured && (
+              <button className="mini" onClick={() => { setMode('oidc'); setError('') }}>
+                Sign in with OIDC
+              </button>
+            )}
+          </div>
         </div>
       </section>
+
+      <Dialog open={resetOpen} title="Reset your password"
+        onClose={() => setResetOpen(false)}
+        confirmLabel="Request reset">
+        <form onSubmit={requestReset}>
+          <Input label="Email address on file" value={resetEmail}
+            onChange={set('resetEmail')} placeholder="you@company.com" />
+          <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            The reset request goes through the platform's SMTP channel when it is
+            configured. If SMTP is not provisioned, the administrator can issue
+            a manual reset token and you will be contacted out-of-band.
+          </p>
+          <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            {oidcConfigured
+              ? 'Password reset is available when OIDC is configured.'
+              : 'Password reset requires SMTP. Use the admin recovery process.'}
+          </p>
+        </form>
+      </Dialog>
     </div>
   )
 }

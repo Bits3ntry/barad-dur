@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Stat, Table } from './ui'
+import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Stat, Table,
+         SeverityBadge, StatusBadge } from './ui'
+import { DonutChart, BarChart, LineChart } from './Charts'
 
 export default function Dashboard({ projects, onNavigate }) {
   const [project, setProject] = useState('')
@@ -112,6 +114,56 @@ export default function Dashboard({ projects, onNavigate }) {
             tone={f.resolved_last_7d ? 'good' : ''} />
         </div>
       </Card>
+
+      {/* Charts — real data from /api/v1/dashboard/summary */}
+      <div className="grid grid-2">
+        <Card title="Findings distribution">
+          {openFindings && (
+            <DonutChart
+              data={[
+                { label: 'critical', value: openFindings.CRITICAL ?? 0 },
+                { label: 'high', value: openFindings.HIGH ?? 0 },
+                { label: 'medium', value: openFindings.MEDIUM ?? 0 },
+                { label: 'low', value: openFindings.LOW ?? 0 },
+                { label: 'unknown', value: openFindings.UNKNOWN ?? 0 },
+              ]}
+              height={200} />
+          )}
+        </Card>
+        <Card title="New vs resolved (7d)">
+          <BarChart
+            data={[
+              { label: 'new', value: f.new_last_7d ?? 0 },
+              { label: 'resolved', value: f.resolved_last_7d ?? 0 },
+            ]}
+            height={200} />
+        </Card>
+      </div>
+
+      <Card title="Scanner execution health">
+        {orchestration && (
+          <BarChart
+            data={[
+              { label: 'queued', value: orchestration.jobs.queued },
+              { label: 'leased', value: orchestration.jobs.leased },
+              { label: 'running', value: orchestration.jobs.running },
+              { label: 'succeeded', value: orchestration.jobs.succeeded },
+              { label: 'failed', value: orchestration.jobs.failed },
+              { label: 'cancelled', value: orchestration.jobs.cancelled },
+            ]}
+            height={180}
+            colors={['#8b949e', '#5a9eec', '#ff7b00', '#6bcb77', '#ff5a5a', '#7b5ea7']} />
+        )}
+      </Card>
+
+      {orchestration && (
+        <Card title="Quality gate verdict history">
+          <p className="muted">
+            Historical gate verdicts require the backend to store per-run history.
+            See /api/v1/gates for the current verdict.
+          </p>
+        </Card>
+      )}
 
       <div className="grid grid-2">
         <Card title="Assets and surface">

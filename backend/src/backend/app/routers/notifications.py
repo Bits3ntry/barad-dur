@@ -270,3 +270,96 @@ def list_deliveries(limit: int = Query(default=50, ge=1, le=200),
                       "error": r.error,
                       "created_at": r.created_at.isoformat()} for r in rows],
             "total": len(rows)}
+
+
+
+class PreferenceIn(BaseModel):
+    email_enabled: bool | None = None
+    push_enabled: bool | None = None
+    sla_breach: bool | None = None
+    assignment: bool | None = None
+    retest_request: bool | None = None
+    jira_sync_error: bool | None = None
+    actor: str = Field(min_length=2, max_length=255)
+
+
+@router.get("/preferences")
+def get_preferences(org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    """Per-user notification preferences."""
+    prefs = session.query(models.NotificationPreference).filter_by(
+        org_id=org.id, user_id=org.id).first()
+    if prefs is None:
+        return {"data": {"email_enabled": True, "push_enabled": True,
+                         "sla_breach": True, "assignment": True,
+                         "retest_request": True, "jira_sync_error": True}}
+    return {"data": {"email_enabled": prefs.email_enabled,
+                     "push_enabled": prefs.push_enabled,
+                     "sla_breach": prefs.sla_breach,
+                     "assignment": prefs.assignment,
+                     "retest_request": prefs.retest_request,
+                     "jira_sync_error": prefs.jira_sync_error}}
+
+
+@router.patch("/preferences")
+def update_preferences(payload: PreferenceIn = None,
+                       org: models.Organization = Depends(auth.require_org),
+                       session: Session = Depends(get_session)):
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    prefs = session.query(models.NotificationPreference).filter_by(
+        org_id=org.id, user_id=org.id).first()
+    if prefs is None:
+        prefs = models.NotificationPreference(
+            org_id=org.id, user_id=org.id)
+        session.add(prefs)
+    if payload.email_enabled is not None:
+        prefs.email_enabled = payload.email_enabled
+    if payload.push_enabled is not None:
+        prefs.push_enabled = payload.push_enabled
+    if payload.sla_breach is not None:
+        prefs.sla_breach = payload.sla_breach
+    if payload.assignment is not None:
+        prefs.assignment = payload.assignment
+    if payload.retest_request is not None:
+        prefs.retest_request = payload.retest_request
+    if payload.jira_sync_error is not None:
+        prefs.jira_sync_error = payload.jira_sync_error
+    session.commit()
+    return {"data": {"email_enabled": prefs.email_enabled,
+                     "push_enabled": prefs.push_enabled,
+                     "sla_breach": prefs.sla_breach,
+                     "assignment": prefs.assignment,
+                     "retest_request": prefs.retest_request,
+                     "jira_sync_error": prefs.jira_sync_error}}
+
+
+class NotificationIn(BaseModel):
+    actor: str = Field(min_length=2, max_length=255)
+
+
+@router.get("/notifications", response_model=list[dict])
+def list_notifications(org: models.Organization = Depends(auth.require_org),
+                       payload: NotificationIn = None,
+                       session: Session = Depends(get_session)):
+    """List notifications for the organization's users."""
+    query = session.query(models.Notification).filter_by(org_id=org.id)
+    rows = query.order_by(models.Notification.created_at.desc()).limit(100).all()
+    return {"data": [{"id": r.id, "event": r.event, "read": r.read,
+                      "count": r.count, "created_at": r.created_at.isoformat(),
+                      "channel": r.channel} for r in rows]}
+
+
+@router.patch("/notifications/{notification_id}")
+def mark_notification_read(notification_id: str,
+                           payload: NotificationIn = None,
+                           org: models.Organization = Depends(auth.require_org),
+                           session: Session = Depends(get_session)):
+    row = session.get(models.Notification, notification_id)
+    if row is None or row.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "notification not found")
+    if payload is None:
+        payload = NotificationIn()
+    row.read = True
+    session.commit()
+    return {"data": {"read": row.read}}

@@ -6,6 +6,8 @@ export default function Regression() {
   const [tests, setTests] = useState([])
   const [runs, setRuns] = useState({})
   const [error, setError] = useState('')
+  const [reintroduced, setReintroduced] = useState(false)
+  const [reintroducedMsg, setReintroducedMsg] = useState('')
   const [form, setForm] = useState({
     name: '', url: '', method: 'GET', suite: 'default',
     expectStatus: 403, bodyMustNotContain: '',
@@ -40,7 +42,13 @@ export default function Regression() {
       const result = await api.post(`/api/v1/regression/tests/${row.id}/run`,
         { actor: 'console', principal: 'console', environment: 'lab' })
       await history(row)
-      if (result.reintroduced) window.alert('REGRESSION: this check passed before and now fails.')
+      if (result.reintroduced) {
+        setReintroduced(true)
+        setReintroducedMsg('REGRESSION: this check passed before and now fails.')
+      } else {
+        setReintroduced(false)
+        setReintroducedMsg('')
+      }
     } catch (e) { setError(String(e.message || e)) }
   }
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { PageHeader } from './ui'
+import { PageHeader, Tabs, Drawer } from './ui'
 
 export default function CodeReview({ projects }) {
   const [prs, setPrs] = useState([])
@@ -12,6 +12,14 @@ export default function CodeReview({ projects }) {
   const [form, setForm] = useState({ number: '', title: '', project: '', version: '' })
   const [baselines, setBaselines] = useState([])
   const [reviewer, setReviewer] = useState('')
+  const [baselineName, setBaselineName] = useState('')
+  const [baselineOpen, setBaselineOpen] = useState(false)
+  const [reviewerName, setReviewerName] = useState('')
+  const [reviewerOpen, setReviewerOpen] = useState(false)
+  const [publishResult, setPublishResult] = useState('')
+  const [publishOpen, setPublishOpen] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState('overview')
 
   useEffect(() => { load(); loadBaselines() }, [])
 
@@ -29,27 +37,56 @@ export default function CodeReview({ projects }) {
   }
 
   async function snapshotBaseline(pr) {
-    const name = window.prompt('baseline name', `baseline-${pr.number}`)
-    if (!name) return
+    setBaselineName(`baseline-${pr.number}`)
+    setBaselineOpen(true)
+  }
+
+  async function confirmSnapshotBaseline() {
+    const name = baselineName.trim()
+    if (!name) { setError('Baseline name is required.'); return }
     try {
       await api.post('/api/v1/code/baselines', {
         name, repository_id: pr.repository_id, from_pr_id: pr.id, actor: 'console',
       })
+      setBaselineName('')
+      setBaselineOpen(false)
       loadBaselines()
     } catch (e) { setError(String(e.message || e)) }
   }
 
   async function decideBaseline(baseline, action) {
-    const who = reviewer || window.prompt('reviewer identity', '') || ''
-    if (!who) return
+    setReviewerName(reviewer || '')
+    setReviewerOpen(true)
+  }
+
+  async function confirmDecideBaseline(action) {
+    const who = reviewerName.trim()
+    if (!who) { setError('Reviewer identity is required.'); return }
     try {
       await api.post(`/api/v1/code/baselines/${baseline.id}/${action}`, { actor: who })
+      setReviewerName('')
+      setReviewerOpen(false)
       loadBaselines()
     } catch (e) { setError(String(e.message || e)) }
   }
 
+  async function publish(pr) {
+    setPublishResult('')
+    setPublishOpen(true)
+  }
+
+  async function confirmPublish() {
+    const pr_id = pr.id
+    try {
+      const r = await api.post(`/api/v1/code/pull-requests/${pr_id}/publish`,
+        { actor: 'console' })
+      setPublishResult(`published ${r.data.state} to ${r.data.repository}`)
+      setPublishOpen(false)
+    } catch (e) { setError(String(e.message || e)) }
+  }
+
   async function open(pr) {
-    if (selected === pr.id) { setSelected(null); setDetail(null); return }
+    if (selected === pr.id) { setSelected(null); setDetail(null); setDrawerOpen(false); return }
     setSelected(pr.id)
     try {
       const r = await api.get(`/api/v1/code/pull-requests/${pr.id}/findings`)
@@ -92,10 +129,17 @@ export default function CodeReview({ projects }) {
   }
 
   async function publish(pr) {
+    setPublishResult('')
+    setPublishOpen(true)
+  }
+
+  async function confirmPublish() {
+    const pr_id = pr.id
     try {
-      const r = await api.post(`/api/v1/code/pull-requests/${pr.id}/publish`,
+      const r = await api.post(`/api/v1/code/pull-requests/${pr_id}/publish`,
         { actor: 'console' })
-      window.alert(`published ${r.data.state} to ${r.data.repository}`)
+      setPublishResult(`published ${r.data.state} to ${r.data.repository}`)
+      setPublishOpen(false)
     } catch (e) { setError(String(e.message || e)) }
   }
 
@@ -166,68 +210,115 @@ export default function CodeReview({ projects }) {
               </tr>
               {selected === pr.id && detail && (
                 <tr className="detail-row"><td colSpan={6}>
-                  <div className="detail">
-                    {detail.files.length === 0 && <p className="muted">No findings linked to this PR yet.</p>}
-                    {detail.files.map((file) => (
-                      <div key={file.path}>
-                        <h3 className="section">{file.path}{' '}
-                          <button className="mini" onClick={() => showDiff(file.path)}>
-                            {diffs[file.path] ? 'hide diff' : 'show diff'}
-                          </button>
-                        </h3>
-                        {diffs[file.path] && (
-                          diffs[file.path].status === 'diff' ? (
-                            <pre className="code">
-                              {diffs[file.path].rows.map((row, index) => (
-                                <div key={index}
-                                  className={row.type === 'added' ? 'code-add'
-                                    : row.type === 'removed' ? 'code-del' : ''}>
-                                  <span className="code-n">
-                                    {row.type === 'added' ? '+' : row.type === 'removed' ? '-' : ' '}
-                                  </span>{row.text}
+                  <Drawer open={drawerOpen} title={`PR #${selected}`} onClose={() => setDrawerOpen(false)}>
+                    <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
+                    <div className="detail">
+                      {activeTab === 'overview' && (
+                        <>
+                          {detail.files.length === 0 && <p className="muted">No findings linked to this PR yet.</p>}
+                          {detail.files.map((file) => (
+                            <div key={file.path}>
+                              <h3 className="section">{file.path}</h3>
+                              {file.findings.map((finding) => (
+                                <div key={finding.finding_id} className="occ-row">
+                                  <span className={`sev sev-${(finding.severity || 'low').toLowerCase()}`}>
+                                    {finding.severity}
+                                  </span>{' '}
+                                  <strong>{finding.rule_id}</strong> line {finding.line} — {finding.title}{' '}
+                                  <span className={`pill ${finding.classification === 'new' ? 'warn' : ''}`}>
+                                    {finding.classification}
+                                  </span>{' '}
+                                  <button className="mini" onClick={() => showContext(finding)}>
+                                    {context[finding.finding_id] ? 'hide code' : 'show code'}
+                                  </button>
+                                  {context[finding.finding_id] && (
+                                    <pre className="code">
+                                      {context[finding.finding_id].lines.map((line) => (
+                                        <div key={line.number}
+                                          className={line.number === finding.line ? 'code-hit' : ''}>
+                                          <span className="code-n">{line.number}</span>{line.text}
+                                        </div>
+                                      ))}
+                                    </pre>
+                                  )}
                                 </div>
                               ))}
-                            </pre>
-                          ) : (
-                            <p className="muted">
-                              diff unavailable: {diffs[file.path].status} —
-                              {diffs[file.path].detail}
-                            </p>
-                          )
-                        )}
-                        {file.findings.map((finding) => (
-                          <div key={finding.finding_id} className="occ-row">
-                            <span className={`sev sev-${(finding.severity || 'low').toLowerCase()}`}>
-                              {finding.severity}
-                            </span>{' '}
-                            <strong>{finding.rule_id}</strong> line {finding.line} — {finding.title}{' '}
-                            <span className={`pill ${finding.classification === 'new' ? 'warn' : ''}`}>
-                              {finding.classification}
-                            </span>{' '}
-                            <button className="mini" onClick={() => showContext(finding)}>
-                              {context[finding.finding_id] ? 'hide code' : 'show code'}
-                            </button>
-                            {context[finding.finding_id] && (
-                              <pre className="code">
-                                {context[finding.finding_id].lines.map((line) => (
-                                  <div key={line.number}
-                                    className={line.number === finding.line ? 'code-hit' : ''}>
-                                    <span className="code-n">{line.number}</span>{line.text}
-                                  </div>
-                                ))}
-                              </pre>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ))}
-                    {detail.pull_request.comment && (
-                      <details>
-                        <summary>PR comment payload</summary>
-                        <pre className="code">{detail.pull_request.comment}</pre>
-                      </details>
-                    )}
-                  </div>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      {activeTab === 'diff' && (
+                        <div className="detail">
+                          {detail.files.map((file) => (
+                            <div key={file.path}>
+                              <h3 className="section">{file.path}</h3>
+                              {diffs[file.path] ? (
+                                diffs[file.path].status === 'diff' ? (
+                                  <pre className="code">
+                                    {diffs[file.path].rows.map((row, index) => (
+                                      <div key={index}
+                                        className={row.type === 'added' ? 'code-add'
+                                          : row.type === 'removed' ? 'code-del' : ''}>
+                                        <span className="code-n">
+                                          {row.type === 'added' ? '+' : row.type === 'removed' ? '-' : ' '}
+                                        </span>{row.text}
+                                      </div>
+                                    ))}
+                                  </pre>
+                                ) : (
+                                  <p className="muted">
+                                    diff unavailable: {diffs[file.path].status} —
+                                    {diffs[file.path].detail}
+                                  </p>
+                                )
+                              ) : (
+                                <button className="mini" onClick={() => showDiff(file.path)}>
+                                  show diff
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {activeTab === 'context' && (
+                        <div className="detail">
+                          {detail.files.map((file) => (
+                            <div key={file.path}>
+                              <h3 className="section">{file.path}</h3>
+                              {file.findings.map((finding) => (
+                                <div key={finding.finding_id} className="occ-row">
+                                  <span className={`sev sev-${(finding.severity || 'low').toLowerCase()}`}>
+                                    {finding.severity}
+                                  </span>{' '}
+                                  <strong>{finding.rule_id}</strong> line {finding.line} — {finding.title}{' '}
+                                  <button className="mini" onClick={() => showContext(finding)}>
+                                    {context[finding.finding_id] ? 'hide code' : 'show code'}
+                                  </button>
+                                  {context[finding.finding_id] && (
+                                    <pre className="code">
+                                      {context[finding.finding_id].lines.map((line) => (
+                                        <div key={line.number}
+                                          className={line.number === finding.line ? 'code-hit' : ''}>
+                                          <span className="code-n">{line.number}</span>{line.text}
+                                        </div>
+                                      ))}
+                                    </pre>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {activeTab === 'comment' && (
+                        <div className="detail">
+                          {detail.pull_request.comment && (
+                            <pre className="code">{detail.pull_request.comment}</pre>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </Drawer>
                 </td></tr>
               )}
             </React.Fragment>
@@ -254,6 +345,23 @@ export default function CodeReview({ projects }) {
         </select>
         <button onClick={createPr}>register</button>
       </div>
+      <Dialog open={baselineOpen} title="Name this baseline"
+        onClose={() => setBaselineOpen(false)}
+        confirmLabel="Snapshot" onConfirm={confirmSnapshotBaseline}>
+        <Input label="Baseline name" value={baselineName}
+          onChange={(v) => setBaselineName(v)} placeholder={`baseline-${pr.number}`} />
+      </Dialog>
+      <Dialog open={reviewerOpen} title="Enter reviewer identity"
+        onClose={() => setReviewerOpen(false)}
+        confirmLabel="Confirm" onConfirm={() => confirmDecideBaseline('')}>
+        <Input label="Reviewer" value={reviewerName}
+          onChange={(v) => setReviewerName(v)} placeholder="who is reviewing" />
+      </Dialog>
+      <Dialog open={publishOpen} title="Publish result"
+        onClose={() => setPublishOpen(false)}
+        confirmLabel="Dismiss">
+        {publishResult ? <p className="muted">{publishResult}</p> : <p className="muted">Publish result</p>}
+      </Dialog>
     </div>
   )
 }

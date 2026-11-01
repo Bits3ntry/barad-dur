@@ -1246,7 +1246,39 @@ class NotificationChannel(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-class NotificationDelivery(Base):
+
+
+class Notification(Base, TimestampMixin):
+    """An in-app notification event for the user."""
+    __tablename__ = "notifications"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                       index=True)
+    channel: Mapped[str | None] = mapped_column(String(128))
+    event: Mapped[str] = mapped_column(String(128))
+    count: Mapped[int] = mapped_column(Integer, default=1)
+    read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class NotificationPreference(Base, TimestampMixin):
+    """Per-user notification preferences."""
+    __tablename__ = "notification_preferences"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                       index=True, unique=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"),
+                                        index=True)
+    email_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    sla_breach: Mapped[bool] = mapped_column(Boolean, default=True)
+    assignment: Mapped[bool] = mapped_column(Boolean, default=True)
+    retest_request: Mapped[bool] = mapped_column(Boolean, default=True)
+    jira_sync_error: Mapped[bool] = mapped_column(Boolean, default=True)
+
+class NotificationDelivery(Base, TimestampMixin):
     __tablename__ = "notification_deliveries"
     __table_args__ = (UniqueConstraint("org_id", "dedupe_key", name="uq_delivery_dedupe"),)
 

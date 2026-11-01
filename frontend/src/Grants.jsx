@@ -26,9 +26,11 @@ export default function Grants() {
     principal: '', capability: 'passive_discovery', targets: 'domain=staging.company.org\n',
     issued_by: 'console', justification: '', hours: 168, environment: '', tools: '',
   })
-  const [sim, setSim] = useState({ capability: 'intrusive_testing', type: 'domain', value: '', tool: '', environment: '' })
+  const [sim, setSim] = useState({ capability: 'intrusive_testing', type: 'domain', value: '', tool: '', environment: ''  })
   const [simResult, setSimResult] = useState(null)
   const [error, setError] = useState('')
+  const [revokeOpen, setRevokeOpen] = useState(false)
+  const [revokeGrant, setRevokeGrant] = useState(null)
 
   useEffect(() => { load() }, [filters])
 
@@ -61,11 +63,17 @@ export default function Grants() {
   }
 
   async function revoke(g) {
-    const ok = window.confirm(`Revoke grant ${g.id} for ${g.principal}? This is audited and cannot be undone silently.`)
-    if (!ok) return
+    setRevokeGrant(g)
+    setRevokeOpen(true)
+  }
+
+  async function confirmRevoke() {
+    if (!revokeGrant) return
     try {
-      await api.post(`/api/v1/authorization/grants/${g.id}/revoke`,
+      await api.post(`/api/v1/authorization/grants/${revokeGrant.id}/revoke`,
         { reason: 'revoked from console', actor: 'console' })
+      setRevokeOpen(false)
+      setRevokeGrant(null)
       load()
     } catch (e) {
       setError(String(e.message || e))
@@ -205,6 +213,15 @@ export default function Grants() {
           </dl>
         </div>
       )}
+      <Dialog open={revokeOpen} title="Revoke grant"
+        onClose={() => setRevokeOpen(false)}
+        confirmLabel="Revoke" destructive onConfirm={confirmRevoke}>
+        <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          Grant <strong>{revokeGrant?.id}</strong> will be revoked immediately for
+          principal <strong>{revokeGrant?.principal}</strong>. This is audited and
+          cannot be undone.
+        </p>
+      </Dialog>
     </div>
   )
 }

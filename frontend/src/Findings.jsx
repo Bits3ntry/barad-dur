@@ -1,7 +1,16 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { ConfirmButton, EmptyState, ErrorBanner, Loading, PageHeader, Table } from './ui'
+import { EmptyState, ErrorBanner, Loading, PageHeader, Table, Drawer,
+         Tabs, StatusBadge } from './ui'
 import { VexSection } from './Vex'
+
+const tabs = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'occurrences', label: 'Occurrences' },
+  { id: 'history', label: 'History' },
+  { id: 'remediation', label: 'Remediation' },
+  { id: 'related', label: 'Related' },
+]
 
 function Occurrences({ occurrences }) {
   if (!occurrences) return null
@@ -39,6 +48,8 @@ export default function Findings({ projects }) {
     detail: null,
   })
   const [bump, setBump] = useState(0)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState('overview')
 
   useEffect(() => {
     if (!projects.length) return
@@ -69,8 +80,14 @@ export default function Findings({ projects }) {
   async function openDetail(finding) {
     if (state.detail?.id === finding.id) {
       setState((s) => ({ ...s, detail: null }))
+      setDrawerOpen(false)
+      setJiraOpen(false)
+      setJiraResult('')
       return
     }
+    setDrawerOpen(true)
+    setJiraOpen(false)
+    setJiraResult('')
     try {
       const { data } = await api.get(`/api/v1/findings/${finding.id}`)
       const enriched = { ...data }
@@ -103,26 +120,50 @@ export default function Findings({ projects }) {
     setBump((n) => n + 1)
   }
 
+  const [jiraKey, setJiraKey] = useState('')
+  const [jiraOpen, setJiraOpen] = useState(false)
+  const [jiraResult, setJiraResult] = useState('')
+
   async function linkJira(row) {
-    const projectKey = window.prompt('Jira project key (e.g. SEC):')
-    if (!projectKey) return
+    setJiraKey('')
+    setJiraResult('')
+    setJiraOpen(true)
+  }
+
+  async function confirmLinkJira() {
+    const projectKey = jiraKey.trim()
+    if (!projectKey) { setJiraResult('Project key is required.'); return }
     try {
       const result = await api.post('/api/v1/jira/links',
-        { finding_id: row.id, project_key: projectKey, actor: 'console' })
-      const key = result.data?.issue_key || 'queued (Jira not configured)'
-      window.alert(`Jira link: ${key}`)
+        { finding_id: state.detail?.id, project_key: projectKey, actor: 'console' })
+      setJiraResult(result.data?.issue_key || 'queued (Jira not configured)')
+      setJiraKey('')
+      setJiraOpen(false)
     } catch (e) {
-      window.alert(String(e.message || e))
+      setJiraResult(String(e.message || e))
     }
   }
 
+  const [disposeReason, setDisposeReason] = useState('')
+  const [disposeOpen, setDisposeOpen] = useState(false)
+  const [disposeStatus, setDisposeStatus] = useState('')
+
   async function dispose(status) {
-    const { id } = state.detail
+    setDisposeStatus(status)
+    setDisposeReason('')
+    setDisposeOpen(true)
+  }
+
+  async function confirmDispose() {
+    const status = disposeStatus
+    const reason = disposeReason.trim()
     try {
-      const reason = window.prompt(`Reason for ${status}:`) || ''
-      await api.patch(`/api/v1/findings/${id}/status`, { status, reason, actor: 'console' })
+      await api.patch(`/api/v1/findings/${state.detail?.id}/status`,
+        { status, reason: reason || 'console action', actor: 'console' })
       setState((s) => ({ ...s, detail: null }))
       setBump((n) => n + 1)
+      setDisposeOpen(false)
+      setDisposeReason('')
     } catch (error) {
       setState((s) => ({ ...s, error: String(error.message || error) }))
     }
@@ -183,39 +224,62 @@ export default function Findings({ projects }) {
               </tr>
               {state.detail?.id === row.id && (
                 <tr className="detail-row"><td colSpan={8}>
-                  <div className="detail">
-                    <dl>
-                      <dt>source</dt><dd>{state.detail.source_id || row.source} {state.detail.cve_id ? `(alias ${state.detail.cve_id})` : ''}</dd>
-                      <dt>tool</dt><dd>{state.detail.tool || '—'}</dd>
-                      <dt>location</dt><dd>{state.detail.path || '—'}{state.detail.line ? `:${state.detail.line}` : ''}</dd>
-                      <dt>component</dt><dd>{state.detail.component_purl || '—'}</dd>
-                      <dt>detail</dt><dd>{state.detail.detail || '—'}</dd>
-                      <dt>reason</dt><dd>{state.detail.status_reason || '—'}</dd>
-                      <dt>priority</dt><dd>{state.detail.priority || 'P3'} — {state.detail.priority_reason || 'severity fallback'}</dd>
-                      <dt>sla</dt><dd>{slaCell(state.detail.sla_deadline)}</dd>
-                      <dt>intel</dt><dd>
-                        {state.detail.kev
-                          ? <span className="sev sev-critical">CISA KEV — exploited in the wild (since {state.detail.kev.date_added})</span>
-                          : <span className="muted">not in KEV</span>}
-                        {state.detail.epss && <span className="pill">EPSS {state.detail.epss.epss}</span>}
-                      </dd>
-                      <dt>url</dt><dd>{state.detail.source_url && <a href={state.detail.source_url} target="_blank" rel="noreferrer">{state.detail.source_url}</a>}</dd>
-                    </dl>
-                    <Occurrences occurrences={state.detail.occurrences} />
-                    <VexSection findingId={row.id} />
-                    <div className="bar">
-                      <input placeholder="remediation task title (creates + links)"
-                        value={state.taskTitle || ''}
-                        onChange={(e) => setState((s) => ({ ...s, taskTitle: e.target.value }))} />
-                      <button onClick={() => createTask(row)}>create task</button>
-                    </div>
-                    <div className="actions">
-                      <button onClick={() => dispose('acknowledged')}>acknowledge</button>
-                      <button onClick={() => dispose('resolved')}>mark resolved</button>
-                      {state.detail.status !== 'open' && <button onClick={() => dispose('open')}>reopen</button>}
-                      <button onClick={() => linkJira(row)}>link to jira</button>
-                    </div>
-                  </div>
+                  <Drawer open={drawerOpen} title={row.title} onClose={() => setDrawerOpen(false)}>
+                    {state.detail && (
+                      <>
+                        <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
+                        <div className="detail">
+                          {activeTab === 'overview' && (
+                            <>
+                              <dl>
+                                <dt>source</dt><dd>{state.detail.source_id || row.source} {state.detail.cve_id ? `(alias ${state.detail.cve_id})` : ''}</dd>
+                                <dt>tool</dt><dd>{state.detail.tool || '—'}</dd>
+                                <dt>location</dt><dd>{state.detail.path || '—'}{state.detail.line ? `:${state.detail.line}` : ''}</dd>
+                                <dt>component</dt><dd>{state.detail.component_purl || '—'}</dd>
+                                <dt>detail</dt><dd>{state.detail.detail || '—'}</dd>
+                                <dt>reason</dt><dd>{state.detail.status_reason || '—'}</dd>
+                                <dt>priority</dt><dd>{state.detail.priority || 'P3'} — {state.detail.priority_reason || 'severity fallback'}</dd>
+                                <dt>sla</dt><dd>{slaCell(state.detail.sla_deadline)}</dd>
+                                <dt>url</dt><dd>{state.detail.source_url && <a href={state.detail.source_url} target="_blank" rel="noreferrer">{state.detail.source_url}</a>}</dd>
+                              </dl>
+                              {state.detail.kev
+                                ? <span className="sev sev-critical">CISA KEV — exploited in the wild (since {state.detail.kev.date_added})</span>
+                                : <span className="muted">not in KEV</span>}
+                              {state.detail.epss && <span className="pill">EPSS {state.detail.epss.epss}</span>}
+                              <VexSection findingId={row.id} />
+                              <div className="bar">
+                                <input placeholder="remediation task title (creates + links)"
+                                  value={state.taskTitle || ''}
+                                  onChange={(e) => setState((s) => ({ ...s, taskTitle: e.target.value }))} />
+                                <button onClick={() => createTask(row)}>create task</button>
+                              </div>
+                            </>
+                          )}
+                          {activeTab === 'occurrences' && <Occurrences occurrences={state.detail.occurrences} />}
+                          {activeTab === 'history' && <div className="occ-row"><span className="muted">history (status transitions)</span></div>}
+                          {activeTab === 'remediation' && (
+                            <div className="bar">
+                              {state.detail.status !== 'open' && <button className="mini" onClick={() => dispose('open')}>reopen</button>}
+                              <button className="mini btn-danger" onClick={() => dispose('resolved')}>mark resolved</button>
+                              <button className="mini btn-danger" onClick={() => dispose('acknowledged')}>acknowledge</button>
+                            </div>
+                          )}
+                          {activeTab === 'related' && (
+                            <div className="detail">
+                              <p className="muted">Jira link: <button className="mini" onClick={() => setJiraOpen(true)}>link</button></p>
+                              {jiraResult && <p className={`muted ${jiraResult.startsWith('queued') ? 'ok' : 'error'}`}>{jiraResult}</p>}
+                            </div>
+                          )}
+                          <Dialog open={jiraOpen} title="Link finding to Jira"
+                            onClose={() => setJiraOpen(false)}
+                            confirmLabel="Link" onConfirm={confirmLinkJira}>
+                            <Input label="Jira project key (e.g. SEC)" value={jiraKey}
+                              onChange={(v) => setJiraKey(v)} placeholder="SEC" />
+                          </Dialog>
+                        </div>
+                      </>
+                    )}
+                  </Drawer>
                 </td></tr>
               )}
             </React.Fragment>

@@ -10,6 +10,7 @@ export default function Assets() {
   const [busy, setBusy] = useState(false)
   const [history, setHistory] = useState(null)
   const [snapshotDraft, setSnapshotDraft] = useState('{"ip": "", "tech": []}')
+  const [collectResult, setCollectResult] = useState('')
 
   useEffect(() => { load() }, [])
 
@@ -33,8 +34,8 @@ export default function Assets() {
       const result = await api.post(`/api/v1/assets/${asset.id}/collect`,
         { actor: 'console', tls: false })
       setError('')
-      window.alert(`observed ${result.data.observation.dns.ipv4.length} ipv4 / `
-        + `${result.data.observation.dns.ipv6.length} ipv6`)
+      setCollectResult(`observed ${result.data.observation.dns.ipv4.length} ipv4 / ` +
+        `${result.data.observation.dns.ipv6.length} ipv6`)
       load()
     } catch (e) { setError(String(e.message || e)) }
   }
@@ -95,6 +96,7 @@ export default function Assets() {
         <button onClick={addManual}>add asset</button>
       </div>
       {error && <div className="banner banner-error">{error}</div>}
+      {collectResult && <p className="muted" style={{ fontSize: 12 }}>{collectResult}</p>}
       <table>
         <thead><tr><th>type</th><th>value</th><th>source</th><th>first seen</th><th>last seen</th><th></th></tr></thead>
         <tbody>

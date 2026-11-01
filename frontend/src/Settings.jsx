@@ -1,13 +1,17 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { Dialog, Input, Select, CheckBox, Loading, Banner, EmptyState, useToasts, Table } from './ui'
 
 export default function Settings({ onClose }) {
+  const { toasts, push, dismiss } = useToasts()
   const [form, setForm] = useState(api.settings())
   const [login, setLogin] = useState({ email: '', password: '', org_slug: '' })
   const [identity, setIdentity] = useState(null)
   const [keys, setKeys] = useState({ rows: [], total: 0, error: '', fresh: '' })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [revokeOpen, setRevokeOpen] = useState(false)
+  const [revokeRow, setRevokeRow] = useState(null)
 
   function loadKeys() {
     api.get('/api/v1/org/keys')
@@ -20,16 +24,30 @@ export default function Settings({ onClose }) {
       const r = await api.post('/api/v1/org/keys', { label: 'console', actor: 'console' })
       setKeys((k) => ({ ...k, fresh: r.data.key, error: '' }))
       loadKeys()
-    } catch (e) { setKeys((k) => ({ ...k, error: String(e.message || e) })) }
+      push('Service key created.', 'success')
+    } catch (e) {
+      setKeys((k) => ({ ...k, error: String(e.message || e) }))
+      push(String(e.message || e), 'error')
+    }
   }
 
   async function revokeKey(row) {
-    if (!window.confirm(`Revoke key "${row.label}"? Clients using it will get 401.`)) return
+    setRevokeRow(row)
+    setRevokeOpen(true)
+  }
+
+  async function confirmRevoke() {
+    if (!revokeRow) return
     try {
-      await api.post(`/api/v1/org/keys/${row.id}/revoke`,
+      await api.post(`/api/v1/org/keys/${revokeRow.id}/revoke`,
         { actor: 'console', reason: 'revoked from console' })
       loadKeys()
-    } catch (e) { setKeys((k) => ({ ...k, error: String(e.message || e) })) }
+      push(`Key "${revokeRow.label}" revoked.`, 'success')
+    } catch (e) {
+      push(String(e.message || e), 'error')
+    }
+    setRevokeOpen(false)
+    setRevokeRow(null)
   }
 
   useEffect(() => {
@@ -64,8 +82,10 @@ export default function Settings({ onClose }) {
                     user: { email: response.session.email,
                             display_name: response.session.display_name } })
       setLogin({ email: '', password: '', org_slug: '' })
+      push('Signed in.', 'success')
     } catch (e) {
       setError(String(e.message || e))
+      push(String(e.message || e), 'error')
     } finally {
       setBusy(false)
     }
@@ -77,13 +97,42 @@ export default function Settings({ onClose }) {
     api.save(next)
     setForm(next)
     setIdentity(null)
+    push('Signed out.', 'info')
+  }
+
+  async function changePassword(event) {
+    event.preventDefault()
+    setError('')
+    if (login.password.length < 8) { setError('Password must be at least 8 characters.'); return }
+    if (login.new_password !== login.confirm_password) { setError('New passwords do not match.'); return }
+    try {
+      await api.post(`/api/v1/auth/users/${identity.user_id}/password`,
+        { password: login.new_password, actor: 'console' })
+      push('Password changed.', 'success')
+      setLogin({ email: '', password: '', org_slug: '', new_password: '', confirm_password: '' })
+    } catch (e) {
+      setError(String(e.message || e))
+      push(String(e.message || e), 'error')
+    }
   }
 
   return (
     <div className="stack">
       <div className="row">
         <span className="muted">API key, user session or sign-in</span>
+        <span className="muted" style={{ marginLeft: 'auto', fontSize: 11 }}>
+          theme: <select value={form.theme || ''} onChange={(e) => setForm({ ...form, theme: e.target.value })} style={{ minWidth: 100 }}>
+            <option value="dark">dark</option>
+            <option value="light">light</option>
+            <option value="system">system</option>
+          </select>{' '}
+          density: <select value={form.density || ''} onChange={(e) => setForm({ ...form, density: e.target.value })} style={{ minWidth: 90 }}>
+            <option value="comfortable">comfortable</option>
+            <option value="compact">compact</option>
+          </select>
+        </span>
       </div>
+
       {identity && (
         <p className="muted">
           {identity.kind === 'api_key'
@@ -92,6 +141,20 @@ export default function Settings({ onClose }) {
           {identity.kind === 'user' && <button className="mini" onClick={signOut}>sign out</button>}
         </p>
       )}
+
+      {identity && identity.kind === 'user' && (
+        <>
+          <h3 className="section">change password</h3>
+          <form onSubmit={changePassword}>
+            <Input label="New password" type="password" value={login.new_password}
+              onChange={(v) => setLogin({ ...login, new_password: v })} placeholder="at least 8 chars" />
+            <Input label="Confirm" type="password" value={login.confirm_password}
+              onChange={(v) => setLogin({ ...login, confirm_password: v })} />
+            <button type="submit" disabled={busy}>{busy ? 'changing…' : 'Change password'}</button>
+          </form>
+        </>
+      )}
+
       <form onSubmit={save}>
         <label>
           Platform URL
@@ -113,14 +176,17 @@ export default function Settings({ onClose }) {
         </label>
         <button type="submit">save</button>
       </form>
-      <p className="hint">
-        The key stays local to this browser and rides the X-API-Key header.
-        Signing in with a user account replaces it with a session token that
-        carries the account's role.
-      </p>
+
+      <Dialog open={revokeOpen} title={`Revoke key "${revokeRow?.label || ''}"?`}
+        onClose={() => setRevokeOpen(false)} confirmLabel="Revoke" destructive onConfirm={confirmRevoke}>
+        <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          Clients using this key will stop working immediately with 401 responses.
+          The last active key cannot be revoked.
+        </p>
+      </Dialog>
 
       <h3 className="section">sign in</h3>
-      {error && <p className="error">{error}</p>}
+      {error && <Banner kind="error">{error}</Banner>}
       <form onSubmit={signIn}>
         <label>
           Email
@@ -139,30 +205,28 @@ export default function Settings({ onClose }) {
         </label>
         <button type="submit" disabled={busy}>{busy ? 'signing in…' : 'sign in'}</button>
       </form>
+
       <h3 className="section">service identities (API keys)</h3>
-      {keys.error && <p className="error">{keys.error}</p>}
+      {keys.error && <Banner kind="error">{keys.error}</Banner>}
       {keys.fresh && (
         <p className="receipt">
           new key (shown once): <code>{keys.fresh}</code>
         </p>
       )}
-      <table>
-        <thead><tr><th>label</th><th>created</th><th>status</th><th></th></tr></thead>
-        <tbody>
-          {keys.rows.map((row) => (
-            <tr key={row.id}>
-              <td>{row.label || '—'}</td>
-              <td>{row.created_at ? new Date(row.created_at).toLocaleString() : '—'}</td>
-              <td><span className={`status st-${row.revoked_at ? 'disabled' : 'active'}`}>
-                {row.revoked_at ? 'revoked' : 'active'}
-              </span></td>
-              <td>{!row.revoked_at && (
-                <button className="mini" onClick={() => revokeKey(row)}>revoke</button>
-              )}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <Table head={['label', 'created', 'status', '']}>
+        {keys.rows.map((row) => (
+          <tr key={row.id}>
+            <td>{row.label || '—'}</td>
+            <td>{row.created_at ? new Date(row.created_at).toLocaleString() : '—'}</td>
+            <td><span className={`status st-${row.revoked_at ? 'disabled' : 'active'}`}>
+              {row.revoked_at ? 'revoked' : 'active'}
+            </span></td>
+            <td>{!row.revoked_at && (
+              <button className="mini" onClick={() => revokeKey(row)}>revoke</button>
+            )}</td>
+          </tr>
+        ))}
+      </Table>
       <div className="card">
         <button onClick={createKey}>create service key</button>
         <span className="hint">admin only; the last active key cannot be revoked</span>

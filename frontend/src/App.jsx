@@ -9,6 +9,7 @@ import Members from './Members'
 import Assets from './Assets'
 import Components from './Components'
 import Findings from './Findings'
+import Notifications from './Notifications.jsx'
 import CodeReview from './CodeReview'
 import Jira from './Jira'
 import Orchestration from './Orchestration'
@@ -27,6 +28,7 @@ const NAV = [
     { key: 'dashboard', label: 'Dashboard' },
     { key: 'findings', label: 'Findings' },
     { key: 'assets', label: 'Assets' },
+    { key: 'notifications', label: 'Notifications' },
   ] },
   { group: 'Supply chain', items: [
     { key: 'components', label: 'Components' },
@@ -126,6 +128,7 @@ export default function App() {
       case 'assets': return <Assets />
       case 'components': return <Components projects={projects} />
       case 'pipelines': return <Pipelines />
+      case 'notifications': return <Notifications />
       default: return <Dashboard projects={projects} onNavigate={go} />
     }
   }
