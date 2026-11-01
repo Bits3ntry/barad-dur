@@ -1315,7 +1315,6 @@ class TrivyDbUpdate(Base, TimestampMixin):
     """Record of Trivy DB fetch/update; called by the offline updater."""
 
     __tablename__ = "trivy_db_updates"
-    __table_args__ = (UniqueConstraint("org_id", "status", name="uq_trivy_db_status"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
     org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))

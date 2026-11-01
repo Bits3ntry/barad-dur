@@ -1,4 +1,12 @@
-"""Trivy DB updater — offline sign/publish workflow (GAP-08)."""
+"""Trivy DB updater — offline fetch/verify/publish workflow (GAP-08).
+
+The platform never scans with a database fetched from the network at scan
+time: the updater downloads the DB, verifies it, publishes it into a
+read-only directory and records the artifact (size, SHA-256, header version)
+so the console can show how fresh the data is. When the `trivy` binary is not
+installed in the deployment the updater answers 503 instead of pretending to
+work.
+"""
 
 import hashlib
 import os
@@ -8,161 +16,149 @@ import tempfile
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy.orm import Session
 
 from backend.app import auth, models
 from backend.app.db import get_session
-from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/api/v1", tags=["trivy-db"])
 
-SANDBOX_DIR = "/var/lib/barad/trivy-sandbox"
-PUBLISH_DIR = "/var/lib/barad/trivy-publish"
-LOGS_DIR = "/var/lib/barad/trivy-logs"
+# The platform image runs unprivileged, so the defaults must be writable by it.
+SANDBOX_DIR = os.environ.get("TRIVY_SANDBOX_DIR", "/tmp/barad-trivy/sandbox")
+PUBLISH_DIR = os.environ.get("TRIVY_PUBLISH_DIR", "/tmp/barad-trivy/publish")
+LOGS_DIR = os.environ.get("TRIVY_LOGS_DIR", "/tmp/barad-trivy/logs")
 
-class TrivyDbUpdate(BaseModel):
+FRESH_HOURS = 24.0
+
+
+class TrivyDbUpdateOut(BaseModel):
+    """One updater run, as the console reads it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     org_id: str
     status: str
-    target_filename: str | None
-    target_size: int
-    target_sha256: str | None
-    header_version: str | None
-    error: str | None
-    created_at: str
-    last_scheduled_at: str | None
-    last_successful_at: str | None
+    target_filename: str | None = None
+    target_size: int = 0
+    target_sha256: str | None = None
+    header_version: str | None = None
+    error: str | None = None
+    created_at: datetime
+    last_scheduled_at: datetime | None = None
+    last_successful_at: datetime | None = None
 
 
-@router.post("/easm/trivy-db/updates", status_code=status.HTTP_202_ACCEPTED)
-def start_trivy_db_update(
-        org: models.Organization = Depends(auth.require_org),
-        session: Session = Depends(get_session)):
-    """Initiate a Trivy DB fetch/update with offline signing."""
-    update_id = models.uuid_hex()
-    row = models.TrivyDbUpdate(
-        id=update_id, org_id=org.id, status="pending")
-    session.add(row)
-    session.commit()
+def _trivy_bin() -> str | None:
+    return shutil.which("trivy")
 
-    try:
-        _run_update(update_id)
-        session.refresh(row)
-        session.commit()
-    except Exception as e:
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _run_update(session: Session, row: models.TrivyDbUpdate) -> None:
+    """Fetch, verify and publish the DB, recording the outcome on ``row``."""
+    trivy = _trivy_bin()
+    if trivy is None:
         row.status = "failed"
-        row.error = str(e)
+        row.error = ("trivy_unavailable: the trivy CLI is not installed in "
+                     "this deployment")
         session.commit()
-        raise HTTPException(
-            status_code=502, detail=f"Trivy DB update failed: {e}")
-
-    return {"id": row.id, "status": row.status}
-
-
-def _run_update(update_id: str):
+        return
     workdir = tempfile.mkdtemp(prefix="trivy-update-")
     try:
-        # 1) Fetch
-        os.makedirs(SANDBOX_DIR, exist_ok=True)
-        os.makedirs(LOGS_DIR, exist_ok=True)
+        for path in (SANDBOX_DIR, PUBLISH_DIR, LOGS_DIR):
+            os.makedirs(path, exist_ok=True)
         fetch_path = os.path.join(SANDBOX_DIR, "trivy.db")
-        with open(os.path.join(LOGS_DIR, f"{update_id}.fetch.log"), "w") as lf:
-            subprocess.run(
-                ["trivy", "db", "download", "--output", fetch_path],
-                check=True, capture_output=True, text=True, timeout=600,
-                stdout=lf, stderr=lf)
 
-        # 2) Verify checksum / signature (offline)
-        with open(os.path.join(LOGS_DIR, f"{update_id}.verify.log"), "w") as lf:
-            subprocess.run(
-                ["trivy", "db", "verify", "--source", fetch_path],
-                check=True, capture_output=True, text=True, timeout=120,
-                stdout=lf, stderr=lf)
+        with open(os.path.join(LOGS_DIR, f"{row.id}.fetch.log"), "w") as log:
+            subprocess.run([trivy, "db", "download", "--output", fetch_path],
+                           check=True, capture_output=True, text=True,
+                           timeout=600, stdout=log, stderr=log)
+        with open(os.path.join(LOGS_DIR, f"{row.id}.verify.log"), "w") as log:
+            subprocess.run([trivy, "db", "verify", "--source", fetch_path],
+                           check=True, capture_output=True, text=True,
+                           timeout=120, stdout=log, stderr=log)
 
-        # 3) Publish to read-only sandbox
-        pub_path = os.path.join(PUBLISH_DIR, "trivy.db")
-        os.makedirs(PUBLISH_DIR, exist_ok=True)
-        shutil.copy2(fetch_path, pub_path)
-        os.chmod(PUBLISH_DIR, 0o555)
+        published = os.path.join(PUBLISH_DIR, "trivy.db")
+        shutil.copy2(fetch_path, published)
+        os.chmod(published, 0o444)
 
-        # 4) Record in DB
-        with open(fetch_path, "rb") as fh:
-            digest = hashlib.sha256(fh.read()).hexdigest()
-        header = subprocess.run(
-            ["trivy", "db", "header", "--source", fetch_path],
-            capture_output=True, text=True, timeout=30)
-        header_version = header.stdout.strip() or header.stderr.strip()
+        with open(fetch_path, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        header = subprocess.run([trivy, "db", "header", "--source", fetch_path],
+                                capture_output=True, text=True, timeout=30)
 
-        # Update the in-DB record
-        row = session.query(models.TrivyDbUpdate).filter_by(id=update_id).one()
         row.status = "completed"
         row.target_filename = "trivy.db"
         row.target_size = os.path.getsize(fetch_path)
         row.target_sha256 = digest
-        row.header_version = header_version
+        row.header_version = (header.stdout or header.stderr or "").strip()[:64] or None
         row.last_successful_at = models.utcnow()
-        session.commit()
+        row.error = None
+    except Exception as exc:  # recorded, never swallowed
+        row.status = "failed"
+        row.error = str(exc)[:2000]
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+        session.commit()
 
 
-@router.get("/easm/trivy-db/updates/{update_id}", response_model=list[TrivyDbUpdate])
-def trivy_db_update_status(update_id: str,
-                           org: models.Organization = Depends(auth.require_org)):
-    rows = (session.query(models.TrivyDbUpdate)
-            .filter_by(org_id=org.id, id=update_id).all())
-    return [{"id": r.id, "status": r.status,
-             "target_filename": r.target_filename,
-             "target_size": r.target_size,
-             "target_sha256": r.target_sha256,
-             "header_version": r.header_version,
-             "error": r.error,
-             "created_at": r.created_at.isoformat(),
-             "last_scheduled_at": r.last_scheduled_at.isoformat() if r.last_scheduled_at else None,
-             "last_successful_at": r.last_successful_at.isoformat() if r.last_successful_at else None}
-            for r in rows]
+@router.post("/easm/trivy-db/updates", status_code=status.HTTP_202_ACCEPTED,
+             response_model=TrivyDbUpdateOut)
+def start_trivy_db_update(org: models.Organization = Depends(auth.require_org),
+                          session: Session = Depends(get_session)):
+    """Run a Trivy DB fetch/verify/publish and record the artifact."""
+    if _trivy_bin() is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "trivy_unavailable: the trivy CLI is not installed in this "
+            "deployment, so the offline DB updater is disabled")
 
-
-@router.get("/easm/trivy-db/updates", response_model=list[TrivyDbUpdate])
-def trivy_db_updates(
-        org: models.Organization = Depends(auth.require_org),
-        session: Session = Depends(get_session)):
-    rows = (session.query(models.TrivyDbUpdate)
-            .filter_by(org_id=org.id)
-            .order_by(models.TrivyDbUpdate.created_at.desc())
-            .limit(50)
-            .all())
-    return [{"id": r.id, "status": r.status,
-             "target_filename": r.target_filename,
-             "target_size": r.target_size,
-             "target_sha256": r.target_sha256,
-             "header_version": r.header_version,
-             "error": r.error,
-             "created_at": r.created_at.isoformat(),
-             "last_scheduled_at": r.last_scheduled_at.isoformat() if r.last_scheduled_at else None,
-             "last_successful_at": r.last_successful_at.isoformat() if r.last_successful_at else None}
-            for r in rows]
+    row = models.TrivyDbUpdate(org_id=org.id, status="running",
+                               last_scheduled_at=models.utcnow())
+    session.add(row)
+    session.commit()
+    _run_update(session, row)
+    return row
 
 
 @router.get("/easm/trivy-db/updates/freshness")
-def trivy_db_freshness(
-        org: models.Organization = Depends(auth.require_org),
-        session: Session = Depends(get_session)):
-    """Freshness indicator: age of the last successful DB update."""
+def trivy_db_freshness(org: models.Organization = Depends(auth.require_org),
+                       session: Session = Depends(get_session)):
+    """Age of the newest successfully published DB."""
     latest = (session.query(models.TrivyDbUpdate)
               .filter_by(org_id=org.id, status="completed")
               .order_by(models.TrivyDbUpdate.last_successful_at.desc())
               .first())
-    now = models.utcnow()
-    if latest and latest.last_successful_at:
-        age = (now - _aware(latest.last_successful_at)).total_seconds() / 3600
-        return {"last_successful_at": latest.last_successful_at.isoformat(),
-                "age_hours": round(age, 2),
-                "fresh": age < 24}
-    return {"last_successful_at": None, "age_hours": None, "fresh": False}
+    if latest is None or latest.last_successful_at is None:
+        return {"last_successful_at": None, "age_hours": None, "fresh": False,
+                "stale_after_hours": FRESH_HOURS}
+    age_hours = (models.utcnow() - _aware(latest.last_successful_at)).total_seconds() / 3600
+    return {"last_successful_at": latest.last_successful_at.isoformat(),
+            "age_hours": round(age_hours, 2),
+            "fresh": age_hours < FRESH_HOURS,
+            "stale_after_hours": FRESH_HOURS}
 
 
-def _aware(value):
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
+@router.get("/easm/trivy-db/updates/{update_id}", response_model=TrivyDbUpdateOut)
+def trivy_db_update_status(update_id: str,
+                           org: models.Organization = Depends(auth.require_org),
+                           session: Session = Depends(get_session)):
+    row = (session.query(models.TrivyDbUpdate)
+           .filter_by(org_id=org.id, id=update_id).one_or_none())
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "update not found")
+    return row
+
+
+@router.get("/easm/trivy-db/updates", response_model=list[TrivyDbUpdateOut])
+def trivy_db_updates(org: models.Organization = Depends(auth.require_org),
+                     session: Session = Depends(get_session)):
+    return (session.query(models.TrivyDbUpdate)
+            .filter_by(org_id=org.id)
+            .order_by(models.TrivyDbUpdate.created_at.desc())
+            .limit(50)
+            .all())

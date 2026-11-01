@@ -9,6 +9,7 @@ export default function Dashboard({ projects, onNavigate }) {
   const [version, setVersion] = useState('')
   const [summary, setSummary] = useState(null)
   const [posture, setPosture] = useState([])
+  const [series, setSeries] = useState({ findings: [], occurrences: [] })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
@@ -27,6 +28,12 @@ export default function Dashboard({ projects, onNavigate }) {
     api.get('/api/v1/dashboard/projects')
       .then((r) => setPosture(r.data || []))
       .catch(() => setPosture([]))
+    api.get('/api/v1/dashboard/findings/severity/time-series?window=30')
+      .then((r) => setSeries((prev) => ({ ...prev, findings: r.data || [] })))
+      .catch(() => setSeries((prev) => ({ ...prev, findings: [] })))
+    api.get('/api/v1/dashboard/findings/occurrences/time-series?window=30')
+      .then((r) => setSeries((prev) => ({ ...prev, occurrences: r.data || [] })))
+      .catch(() => setSeries((prev) => ({ ...prev, occurrences: [] })))
   }
 
   const selected = projects.find((p) => p.name === project)
@@ -137,6 +144,30 @@ export default function Dashboard({ projects, onNavigate }) {
               { label: 'resolved', value: f.resolved_last_7d ?? 0 },
             ]}
             height={200} />
+        </Card>
+      </div>
+
+      <div className="grid grid-2">
+        <Card title="New findings (last 30 days)">
+          {series.findings.length ? (
+            <LineChart
+              data={series.findings.map((row) => ({
+                label: row.date.slice(5),
+                value: (row.CRITICAL || 0) + (row.HIGH || 0) + (row.MEDIUM || 0)
+                  + (row.LOW || 0) + (row.UNKNOWN || 0),
+              }))}
+              height={190} />
+          ) : <EmptyState title="No findings in this window"
+            hint="Import an SBOM or run a scan to populate the trend." />}
+        </Card>
+        <Card title="Scan occurrences (last 30 days)">
+          {series.occurrences.length ? (
+            <LineChart
+              data={series.occurrences.map((row) => ({
+                label: row.date.slice(5), value: row.count,
+              }))}
+              height={190} color="#5a9eec" />
+          ) : <EmptyState title="No occurrences in this window" />}
         </Card>
       </div>
 

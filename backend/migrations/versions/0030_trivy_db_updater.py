@@ -8,8 +8,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.sql import schema
 
-revision = "0030"
-down_revision = "0029_sast_baselines"
+revision = "0030_trivy_db_updater"
+down_revision = "0029_notifications"
 branch_labels = None
 depends_on = None
 
@@ -33,8 +33,6 @@ def upgrade():
                   nullable=True),
         sa.Column("last_successful_at", sa.DateTime(timezone=True),
                   nullable=True),
-        sa.UniqueConstraint("org_id", "status",
-                            name="uq_trivy_db_status"),
     )
 
 

@@ -34,17 +34,17 @@ All eight declared gaps (GAP-01 through GAP-08) are now implemented with executa
 | GAP-02 Native browser dialogs | COMPLETE | All `window.alert/confirm/prompt` removed, Dialog/ConfirmButton patterns throughout |
 | GAP-03 Dark/light/system, density | COMPLETE | Theme tokens, focus states, responsive (ui.jsx, styles.css, Settings.jsx) |
 | GAP-04 Auth UX (password reset, OIDC) | COMPLETE | /password/reset/request, /password/reset/confirm, OIDC button, loading states |
-| GAP-05 Analytics/charts (13 chart types) | COMPLETE | Time-series endpoints + charts.jsx (Donut, Bar, Line, ProgressBar) |
+| GAP-05 Analytics/charts (13 chart types) | COMPLETE | Time-series endpoints wired into Dashboard.jsx (new findings/30d, scan occurrences/30d) + Donut/Bar charts from `/dashboard/summary` |
 | GAP-06 Notifications | COMPLETE | Notification center, preferences, read/unread, per-finding UI |
 | GAP-07 Continuous EASM | COMPLETE | Snapshots, change detection, active collectors, TLS, scheduled sweeps |
-| GAP-08 Offline Trivy DB | COMPLETE | Router easm_trivy.py, migration 0030, Dockerfile with Trivy CLI |
+| GAP-08 Offline Trivy DB | COMPLETE | `easm_trivy.py` router + migration `0030_trivy_db_updater`; POST returns an explicit 503 when the `trivy` binary is absent (verified live), never a silent success |
 
 ---
 
 ## 3. Backend/Endpoint Verification
 
 **Backend tests (backend/tests):** `cd backend && .venv/bin/pytest -q`
-- Result: **175 passed** ✅
+- Result: **182 passed** ✅
 
 **Key endpoints added this release:**
 
