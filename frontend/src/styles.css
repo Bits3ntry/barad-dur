@@ -688,65 +688,113 @@ table:not(.table-wrap > table) {
   dl { grid-template-columns: 1fr; }
 }
 
-/* Exposure flow — one left-to-right read of where exposure accumulates. */
-.flow {
-  display: flex;
-  align-items: stretch;
-  gap: var(--gap-2);
-  flex-wrap: wrap;
+/* Exposure flow — sources feed a priority donut that branches into outcomes. */
+.flow-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
 }
 
-.flow-stage {
-  flex: 1 1 150px;
-  min-width: 140px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 13px 15px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--line-strong);
-  border-radius: var(--radius);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 120ms ease, transform 120ms ease;
+.flow-source-box {
+  fill: var(--bg-soft);
+  stroke: var(--line-strong);
+  stroke-dasharray: 6 5;
+  stroke-width: 1;
 }
 
-.flow-stage:hover {
-  border-color: var(--accent);
-  transform: translateY(-1px);
+.flow-caption {
+  font-size: 11px;
+  fill: var(--muted);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
-.flow-stage .flow-value {
-  font-size: 26px;
+.flow-count {
+  font-size: 18px;
   font-weight: 650;
+  fill: var(--text);
   font-variant-numeric: tabular-nums;
-  color: var(--text);
-  line-height: 1.1;
 }
 
-.flow-stage .flow-label {
-  font-size: 12px;
+.flow-center-label {
+  font-size: 10.5px;
+  fill: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--muted);
 }
 
-.flow-stage .flow-hint {
-  font-size: 12px;
-  color: var(--text-dim);
+.flow-center {
+  font-size: 28px;
+  font-weight: 650;
+  fill: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
-.flow-stage.bad { border-left-color: var(--critical); }
-.flow-stage.warn { border-left-color: var(--high); }
-.flow-stage.good { border-left-color: var(--ok); }
-
-.flow-arrow {
-  align-self: center;
-  color: var(--muted);
-  font-size: 16px;
+.flow-source-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  fill: var(--text);
 }
 
-@media (max-width: 980px) {
-  .flow-arrow { display: none; }
+.flow-source-detail {
+  font-size: 11px;
+  fill: var(--muted);
+}
+
+.flow-source-count {
+  font-size: 13px;
+  font-weight: 650;
+  fill: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.flow-link {
+  stroke: var(--text-dim);
+  stroke-width: 1.9;
+  opacity: 0.9;
+}
+
+.flow-link-in {
+  stroke-dasharray: 5 4;
+  opacity: 0.8;
+}
+
+.flow-link-bad {
+  stroke: var(--critical);
+  stroke-width: 2;
+}
+
+.flow-outcome {
+  cursor: pointer;
+}
+
+.flow-outcome:hover .flow-outcome-label {
+  fill: var(--accent);
+}
+
+.flow-outcome-label {
+  font-size: 13px;
+  fill: var(--text);
+}
+
+.flow-outcome-hint {
+  font-size: 11px;
+  fill: var(--muted);
+}
+
+.flow-outcome-count {
+  font-size: 13px;
+  font-weight: 650;
+  fill: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.flow-outcome-count.bad {
+  fill: var(--critical);
+}
+
+.flow-legend {
+  font-size: 11px;
+  fill: var(--muted);
 }

@@ -10,8 +10,7 @@ export default function Dashboard({ projects, onNavigate }) {
   const [version, setVersion] = useState('')
   const [summary, setSummary] = useState(null)
   const [portfolio, setPortfolio] = useState([])
-  const [portfolioTotals, setPortfolioTotals] = useState(null)
-  const [assets, setAssets] = useState([])
+  const [exposureFlow, setExposureFlow] = useState(null)
   const [series, setSeries] = useState({ findings: [], occurrences: [] })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -46,21 +45,11 @@ export default function Dashboard({ projects, onNavigate }) {
           byProject.set(row.project, entry)
         }
         setPortfolio([...byProject.values()].sort((a, b) => a.project.localeCompare(b.project)))
-        const totals = r.latest_totals || r.totals
-        if (totals) {
-          setPortfolioTotals({
-            ...totals,
-            groups: (r.groups || []).length,
-            vulnerable_components: (r.data || [])
-              .filter((row) => row.is_latest)
-              .reduce((sum, row) => sum + (row.findings.vulnerable_components || 0), 0),
-          })
-        }
       })
-      .catch(() => { setPortfolio([]); setPortfolioTotals(null) })
-    api.get('/api/v1/assets')
-      .then((r) => setAssets(r.data || []))
-      .catch(() => setAssets([]))
+      .catch(() => setPortfolio([]))
+    api.get(`/api/v1/dashboard/exposure-flow?window=30${params.toString() ? '&' + params : ''}`)
+      .then((r) => setExposureFlow(r.data))
+      .catch(() => setExposureFlow(null))
     api.get('/api/v1/dashboard/findings/severity/time-series?window=30')
       .then((r) => setSeries((prev) => ({ ...prev, findings: r.data || [] })))
       .catch(() => setSeries((prev) => ({ ...prev, findings: [] })))
@@ -169,9 +158,10 @@ export default function Dashboard({ projects, onNavigate }) {
       </Card>
 
       <Card title="Exposure flow"
-        actions={<span className="count">click a stage to open it</span>}>
-        <ExposureFlow assets={assets} portfolio={portfolioTotals}
-          findings={f} onNavigate={onNavigate} />
+        actions={<span className="count">
+          last 30 days · organization scope · click an outcome to open findings
+        </span>}>
+        <ExposureFlow flow={exposureFlow} onNavigate={onNavigate} />
       </Card>
 
       {portfolio.length > 0 && (
