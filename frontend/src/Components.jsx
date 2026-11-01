@@ -1,117 +1,267 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
-import { PageHeader } from './ui'
+import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Stat } from './ui'
+
+/* Inventory per project version, joined with the findings of that version.
+
+   The screen used to be pinned to whatever project came first in the nav data,
+   with no selector and no search: 1.125 rows of purl nobody could narrow down.
+   Dependency-Track's useful trick is the join — a component is interesting
+   because of what it carries — so the findings of the selected version are
+   fetched once and folded in by purl. */
+
+const SEVERITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN']
+
+function worstOf(counts) {
+  return SEVERITY_ORDER.find((severity) => counts[severity])
+}
 
 export default function Components({ projects }) {
-  const [state, setState] = useState({ total: 0, rows: [], error: '', loading: false, receipt: null })
-  const project = projects[0]
-  const version = project?.versions?.[0] || ''
-  const fileInput = useRef(null)
+  const [projectSlug, setProjectSlug] = useState('')
+  const [version, setVersion] = useState('')
+  const [search, setSearch] = useState('')
+  const [onlyVulnerable, setOnlyVulnerable] = useState(false)
+  const [rows, setRows] = useState([])
+  const [profile, setProfile] = useState(null)
+  const [carried, setCarried] = useState({})
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [receipt, setReceipt] = useState(null)
   const [impact, setImpact] = useState({ id: null, data: null, error: '' })
+  const fileInput = useRef(null)
+
+  const project = projects.find((p) => p.slug === projectSlug)
+  const versions = project?.versions || []
+
+  // First render: land on the project with the largest inventory, which is the
+  // one worth looking at, instead of whichever the API listed first.
+  useEffect(() => {
+    if (projectSlug || !projects.length) return
+    setProjectSlug(projects[0].slug)
+    setVersion(projects[0].versions?.[0] || '')
+  }, [projects, projectSlug])
+
+  useEffect(() => {
+    if (!projectSlug || !version) return
+    let cancelled = false
+    setLoading(true); setError('')
+    const query = `project=${encodeURIComponent(projectSlug)}&version=${encodeURIComponent(version)}`
+    Promise.all([
+      api.get(`/api/v1/components?${query}`),
+      api.get(`/api/v1/inventory/profile?${query}`).catch(() => null),
+      api.get(`/api/v1/findings?${query}`).catch(() => ({ data: [] })),
+    ])
+      .then(([components, versionProfile, findings]) => {
+        if (cancelled) return
+        setRows(components.data || [])
+        setProfile(versionProfile?.data || null)
+        const byPurl = {}
+        for (const finding of findings.data || []) {
+          if (!finding.component_purl) continue
+          const bucket = byPurl[finding.component_purl]
+            || (byPurl[finding.component_purl] = { total: 0 })
+          bucket.total += 1
+          const severity = finding.severity || 'UNKNOWN'
+          bucket[severity] = (bucket[severity] || 0) + 1
+        }
+        setCarried(byPurl)
+      })
+      .catch((problem) => { if (!cancelled) setError(String(problem.message || problem)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [projectSlug, version])
+
+  const visible = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    return rows
+      .map((row) => {
+        const findings = carried[row.purl] || null
+        return { ...row, findings, worst: findings ? worstOf(findings) : null }
+      })
+      .filter((row) => {
+        if (onlyVulnerable && !row.findings) return false
+        if (!needle) return true
+        return `${row.name} ${row.version || ''} ${row.purl || ''} ${row.license || ''}`
+          .toLowerCase().includes(needle)
+      })
+      .sort((left, right) => {
+        if (onlyVulnerable || (left.findings || right.findings)) {
+          const delta = (right.findings?.total || 0) - (left.findings?.total || 0)
+          if (delta) return delta
+        }
+        return left.name.localeCompare(right.name)
+      })
+  }, [rows, carried, search, onlyVulnerable])
 
   async function showImpact(row) {
     if (impact.id === row.id) { setImpact({ id: null, data: null, error: '' }); return }
     try {
       const response = await api.get(`/api/v1/components/impact?component_id=${row.id}`)
       setImpact({ id: row.id, data: response.data, error: '' })
-    } catch (e) {
-      setImpact({ id: row.id, data: null, error: String(e.message || e) })
+    } catch (problem) {
+      setImpact({ id: row.id, data: null, error: String(problem.message || problem) })
     }
   }
 
-  useEffect(() => {
-    if (!project || !version) return
-    setState((s) => ({ ...s, loading: true, error: '' }))
-    api.get(`/api/v1/components?project=${encodeURIComponent(project.slug)}&version=${encodeURIComponent(version)}`)
-      .then((data) => setState((s) => ({ ...s, rows: data.data, total: data.total, loading: false })))
-      .catch((error) => setState((s) => ({ ...s, loading: false, error: String(error.message || error) })))
-  }, [project?.id, version])
-
   async function upload(file) {
-    if (!file) return
-    setState((s) => ({ ...s, error: '', receipt: null }))
+    if (!file || !projectSlug) return
+    setError(''); setReceipt(null)
     try {
       const raw = await file.arrayBuffer()
       const params = new URLSearchParams({
-        source: 'web', project: project.slug, version,
-        filename: file.name,
-      })
-      const receipt = await api.postRaw(`/api/v1/sbom?${params.toString()}`, raw)
-      setState((s) => ({ ...s, receipt }))
-      const refreshed = await api.get(`/api/v1/components?project=${encodeURIComponent(project.slug)}&version=${encodeURIComponent(version)}`)
-      setState((s) => ({ ...s, rows: refreshed.data, total: refreshed.total }))
-    } catch (error) {
-      setState((s) => ({ ...s, error: String(error.message || error) }))
+        source: 'web', project: projectSlug, version, filename: file.name })
+      const response = await api.postRaw(`/api/v1/sbom?${params.toString()}`, raw)
+      setReceipt(response)
+      const refreshed = await api.get(
+        `/api/v1/components?project=${encodeURIComponent(projectSlug)}&version=${encodeURIComponent(version)}`)
+      setRows(refreshed.data || [])
+    } catch (problem) {
+      setError(String(problem.message || problem))
     }
     if (fileInput.current) fileInput.current.value = ''
   }
 
   return (
     <div className="stack">
-      <PageHeader title="Components" />
-      <div className="toolbar">
-        <span className="count">{state.loading ? 'loading…' : `${state.total} components @ ${project?.name || '—'} ${version}`}</span>
-        <label className="button">
-          <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={(e) => upload(e.target.files[0])} />
-          upload SBOM (cyclonedx json)
-        </label>
-        <span className="hint">ingests via the platform API (source=web)</span>
-      </div>
-      {state.error && <div className="banner banner-error">{state.error}</div>}
-      {state.receipt && (
-        <p className="receipt">
-          import {state.receipt.status} — {state.receipt.receipt.counts.components_created} created,
-          {' '}{state.receipt.receipt.counts.components_updated} updated,
-          {' '}{state.receipt.receipt.counts.links_created} links (receipt {state.receipt.import_id})
-        </p>
+      <PageHeader
+        title="Components"
+        subtitle={project ? `${project.name}${version ? ` · ${version}` : ''}` : 'Pick a project version'}
+        actions={(
+          <>
+            <select value={projectSlug} aria-label="project"
+              onChange={(event) => {
+                const next = projects.find((p) => p.slug === event.target.value)
+                setProjectSlug(event.target.value)
+                setVersion(next?.versions?.[0] || '')
+                setImpact({ id: null, data: null, error: '' })
+              }}>
+              {projects.map((entry) => (
+                <option key={entry.slug} value={entry.slug}>{entry.name}</option>
+              ))}
+            </select>
+            <select value={version} aria-label="version" disabled={!versions.length}
+              onChange={(event) => setVersion(event.target.value)}>
+              {versions.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
+            </select>
+            <label className="button">
+              <input ref={fileInput} type="file" accept=".json,application/json" hidden
+                onChange={(event) => upload(event.target.files[0])} />
+              upload SBOM
+            </label>
+          </>
+        )}
+      />
+
+      {profile && (
+        <Card>
+          <div className="metrics">
+            <Stat label="components" value={profile.components.total} />
+            <Stat label="vulnerable" value={profile.findings.vulnerable_components}
+              tone={profile.findings.vulnerable_components ? 'warn' : ''} />
+            <Stat label="findings" value={profile.findings.total} />
+            <Stat label="critical" value={profile.findings.by_severity.CRITICAL}
+              tone={profile.findings.by_severity.CRITICAL ? 'bad' : ''} />
+            <Stat label="licenses" value={profile.licenses.distinct} />
+          </div>
+        </Card>
       )}
-      <table>
-        <thead><tr><th>purl</th><th>name</th><th>version</th><th>license</th><th>manifest</th><th>direct</th><th></th></tr></thead>
-        <tbody>
-          {state.rows.map((row) => (
-            <React.Fragment key={row.id}>
-              <tr>
-                <td className="mono">{row.purl || '—'}</td>
-                <td>{row.name}</td>
-                <td>{row.version || '—'}</td>
-                <td>{row.license || '—'}</td>
-                <td>{row.manifest_path || '—'}</td>
-                <td>{row.is_direct ? 'direct' : ''}</td>
-                <td><button className="mini" onClick={() => showImpact(row)}>
-                  {impact.id === row.id ? 'hide impact' : 'impact'}
-                </button></td>
-              </tr>
-              {impact.id === row.id && (
-                <tr className="detail-row"><td colSpan={7}>
-                  <div className="detail">
-                    {impact.error && <div className="banner banner-error">{impact.error}</div>}
-                    {impact.data && (
-                      <>
-                        <p className="muted">
-                          used by {impact.data.projects_using} project versions ·
-                          {' '}{impact.data.total_findings} findings
-                          {' '}({impact.data.open_findings} open)
-                        </p>
-                        {impact.data.usages.map((usage) => (
-                          <div key={`${usage.project}@${usage.version}`} className="occ-row">
-                            <strong>{usage.project}@{usage.version}</strong>
-                            {' '}— {usage.open_findings} open /
-                            {' '}{usage.findings} total
-                            {' '}{Object.entries(usage.by_severity)
-                              .map(([sev, count]) => `${sev}:${count}`).join(' ')}
-                            {usage.is_direct ? ' · direct' : ''}
-                          </div>
-                        ))}
-                      </>
-                    )}
-                  </div>
-                </td></tr>
-              )}
-            </React.Fragment>
-          ))}
-        </tbody>
-      </table>
-      {!state.rows.length && !state.loading && !state.error && <p className="empty">No components for this version.</p>}
+
+      <div className="toolbar">
+        <input placeholder="search name, purl or license" value={search}
+          onChange={(event) => setSearch(event.target.value)} style={{ minWidth: 260 }} />
+        <label className="row" style={{ gap: 6 }}>
+          <input type="checkbox" checked={onlyVulnerable}
+            onChange={(event) => setOnlyVulnerable(event.target.checked)} />
+          only with findings
+        </label>
+        <span className="spacer" />
+        <span className="count">
+          {loading ? 'loading…' : `${visible.length} / ${rows.length} shown`}
+        </span>
+      </div>
+
+      {error && <ErrorBanner error={error} />}
+      {receipt && (
+        <div className="banner banner-ok">
+          import {receipt.status} — {receipt.receipt.counts.components_created} created,
+          {' '}{receipt.receipt.counts.components_updated} updated,
+          {' '}{receipt.receipt.counts.links_created} links
+        </div>
+      )}
+
+      {loading && !rows.length ? <Loading rows={6} /> : null}
+
+      {!loading && !visible.length && !error && (
+        <EmptyState title="No components match"
+          hint={rows.length
+            ? 'Clear the search or the "only with findings" filter.'
+            : 'Upload an SBOM for this version to create its inventory.'} />
+      )}
+
+      {!!visible.length && (
+        <table>
+          <thead>
+            <tr>
+              <th>name</th><th>version</th><th>license</th><th>findings</th>
+              <th>manifest</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((row) => (
+              <React.Fragment key={row.id}>
+                <tr>
+                  <td className="title">
+                    {row.name}
+                    {row.purl && <div className="muted mono" style={{ fontSize: 11 }}>{row.purl}</div>}
+                  </td>
+                  <td>{row.version || '—'}</td>
+                  <td className="muted">{row.license || '—'}</td>
+                  <td>
+                    {row.findings
+                      ? <span className={`sev sev-${(row.worst || 'unknown').toLowerCase()}`}>
+                        {row.findings.total}
+                      </span>
+                      : <span className="muted">—</span>}
+                  </td>
+                  <td className="muted mono" style={{ fontSize: 11.5 }}>
+                    {row.manifest_path || '—'}
+                  </td>
+                  <td>
+                    <button className="mini" onClick={() => showImpact(row)}>
+                      {impact.id === row.id ? 'hide' : 'impact'}
+                    </button>
+                  </td>
+                </tr>
+                {impact.id === row.id && (
+                  <tr className="detail-row"><td colSpan={6}>
+                    <div className="detail">
+                      {impact.error && <ErrorBanner error={impact.error} />}
+                      {impact.data && (
+                        <>
+                          <p className="muted">
+                            used by {impact.data.projects_using} project versions ·
+                            {' '}{impact.data.total_findings} findings
+                            {' '}({impact.data.open_findings} open)
+                          </p>
+                          {impact.data.usages.map((usage) => (
+                            <div key={`${usage.project}@${usage.version}`} className="occ-row">
+                              <strong>{usage.project}@{usage.version}</strong>
+                              {' '}— {usage.open_findings} open / {usage.findings} total
+                              {' '}{Object.entries(usage.by_severity)
+                                .filter(([, count]) => count)
+                                .map(([sev, count]) => `${sev}:${count}`).join(' ')}
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </td></tr>
+                )}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }

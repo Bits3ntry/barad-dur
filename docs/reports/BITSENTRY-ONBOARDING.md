@@ -20,6 +20,10 @@ posibles. Todo lo afirmado acá se verificó contra la instancia que corre en
 | `--sidebar` sin definir | `grid-template-columns: var(--sidebar) 1fr` era inválido → sidebar apilada sobre el contenido | Corregido: `--sidebar: 254px` |
 | `--shadow`, `--focus`, `--overlay`, `--dialog-bg` sin definir | Modales transparentes, sin foco visible, sin sombra | Definidos por tema |
 | `#fff` y `rgba(8,9,13,...)` hardcodeados | Texto invisible o topbar negro en tema claro | Reemplazados por tokens |
+| Components fijo a `projects[0]`, sin selector ni búsqueda | 1.125 filas de purl que no se podían acotar, y ningún vínculo con findings | Reescrito: selector proyecto/versión, búsqueda, filtro "solo con findings", columna de findings por componente |
+| Sin vista por proyecto ni por versión | No se podía responder "¿de qué proyecto es esto y qué tiene?" | Pantalla Projects agrupada por proyecto, con detalle por versión (componentes, licencias, severidades, componentes más expuestos, findings) |
+| `Project posture` y Components duplicaban información sin correlacionarla | Dos tablas de proyecto, ninguna con inventario | Una sola tabla "Portfolio by project": versiones, componentes, findings, severidad y KEV |
+| Assets pedía pegar el JSON del snapshot | Ni IP ni certificado visibles | Columnas de direcciones y certificado (emisor, días restantes, TLS), collect por fila y sweep de crt.sh |
 | Tema oscuro por defecto con texto `#b3b8c6` | “Me cuesta leer”: contraste bajo en sesiones largas | Claro por defecto; oscuro mejorado y a un clic |
 
 ### Tokens y legibilidad (medidos en el navegador)
