@@ -90,6 +90,10 @@ def parse(document: dict) -> dict:
     if not root or not isinstance(root.get("name"), str) or not root["name"]:
         raise SbomDocumentError("metadata.component.name is required")
     components = document.get("components")
+    if components is None:
+        # A valid SBOM may declare no components at all (an iOS app with only
+        # a resolved manifest, an empty service). Treat it as an empty set.
+        components = []
     if not isinstance(components, list):
         raise SbomDocumentError("components must be a list")
 
@@ -183,6 +187,12 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
     counters = {"components_received": len(parsed["components"]),
                 "components_created": 0, "components_updated": 0,
                 "components_skipped": 0, "links_created": 0}
+    # A real SBOM repeats the same component when several manifests pull it in.
+    # The session runs with autoflush=False, so a query cannot see rows added
+    # earlier in this loop: track them here or the unique constraints
+    # (version, component) and (component, license) fail on the second sighting.
+    linked: dict[str, models.VersionComponent] = {}
+    seen_licenses: set[tuple[str, str]] = set()
     for row in parsed["components"]:
         component = session.query(models.Component).filter_by(
             org_id=org_id, identity_key=row["identity_key"]).one_or_none()
@@ -205,6 +215,10 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
         # BL-060: full license set (idempotent rows; never duplicated on
         # re-ingest thanks to uq(component, license)).
         for license_id in row.get("licenses") or []:
+            license_key = (component.id, license_id)
+            if license_key in seen_licenses:
+                continue
+            seen_licenses.add(license_key)
             exists = (session.query(models.ComponentLicense)
                       .filter_by(component_id=component.id, license_id=license_id)
                       .one_or_none())
@@ -212,14 +226,22 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
                 session.add(models.ComponentLicense(
                     org_id=org_id, component_id=component.id,
                     license_id=license_id, created_at=models.utcnow()))
-        link = session.query(models.VersionComponent).filter_by(
-            project_version_id=project_version.id, component_id=component.id).one_or_none()
+        link = linked.get(component.id)
         if link is None:
-            session.add(models.VersionComponent(
+            link = (session.query(models.VersionComponent)
+                    .filter_by(project_version_id=project_version.id,
+                               component_id=component.id).one_or_none())
+        if link is None:
+            link = models.VersionComponent(
                 project_version_id=project_version.id, component_id=component.id,
                 is_direct=row["is_direct"], parent_purl=row["parent_purl"],
-                manifest_path=row["manifest_path"]))
+                manifest_path=row["manifest_path"])
+            session.add(link)
             counters["links_created"] += 1
+        elif row["is_direct"] and not link.is_direct:
+            # The same component seen both directly and transitively is direct.
+            link.is_direct = True
+        linked[component.id] = link
 
     receipt = models.SbomImport(
         project_version_id=project_version.id, content_sha256=digest, source=source,
