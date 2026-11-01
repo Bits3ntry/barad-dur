@@ -50,6 +50,11 @@ def _migrate(_args) -> int:
 
 
 def main(argv=None) -> int:
+    from backend.app.db import load_workspace_env
+
+    # Credentials stay environment variables; the workspace .env is just a
+    # convenient source for them when the caller has not exported anything.
+    load_workspace_env()
     parser = argparse.ArgumentParser(prog="barad-platform")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
