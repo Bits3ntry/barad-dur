@@ -350,7 +350,7 @@ select {
   background-size: 12px 8px;
 }
 
-select { height: 37px; }
+select { height: 36px; }
 textarea { height: auto; min-height: 92px; padding: 9px 11px; resize: vertical; line-height: 1.5; }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):hover,
