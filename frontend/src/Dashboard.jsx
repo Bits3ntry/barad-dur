@@ -90,6 +90,19 @@ export default function Dashboard({ projects, onNavigate }) {
       {header}
       {error && <ErrorBanner error={error} onRetry={load} />}
 
+      {summary.findings.total === 0 && (summary.assets?.total ?? 0) === 0
+        && onNavigate && (
+        <div className="banner banner-info">
+          <span>
+            No data yet. The setup guide walks the six steps from an empty
+            organization to a working pipeline.
+          </span>
+          <span className="row-end">
+            <button className="mini" onClick={() => onNavigate('setup')}>open setup</button>
+          </span>
+        </div>
+      )}
+
       {summary.gate?.verdict && (
         <div className={`banner ${summary.gate.verdict === 'fail' ? 'banner-error' : 'banner-ok'}`}>
           <span>

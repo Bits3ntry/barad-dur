@@ -17,6 +17,7 @@ import Pentest from './Pentest'
 import Regression from './Regression'
 import Pipelines from './Pipelines'
 import Settings from './Settings'
+import Setup from './Setup'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
 import { Modal } from './ui'
@@ -25,6 +26,7 @@ import { Modal } from './ui'
    16 flat tabs were unreadable and overflowed on a laptop screen. */
 const NAV = [
   { group: 'Overview', items: [
+    { key: 'setup', label: 'Setup guide' },
     { key: 'dashboard', label: 'Dashboard' },
     { key: 'findings', label: 'Findings' },
     { key: 'assets', label: 'Assets' },
@@ -113,6 +115,7 @@ export default function App() {
 
   const screen = () => {
     switch (tab) {
+      case 'setup': return <Setup onNavigate={go} />
       case 'findings': return <Findings projects={projects} />
       case 'code': return <CodeReview projects={projects} />
       case 'gates': return <Gates projects={projects} />
