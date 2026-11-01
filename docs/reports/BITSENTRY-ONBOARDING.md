@@ -216,17 +216,29 @@ como sightings, no descartadas.
 
 ## 7. Exposure flow en el dashboard
 
-Una lectura de izquierda a derecha de dónde se acumula la exposición, con cada
-etapa enlazando a la pantalla que la explica:
+Sankey dibujado en SVG (no cajas): fuentes → donut por prioridad → outcomes.
+Los números salen de `GET /api/v1/dashboard/exposure-flow?window=30` y se verifican
+entre etapas (las fuentes suman lo recibido, las prioridades suman lo accionable).
 
 ```
-2 attack surface → 7 projects (3 groups) → 3378 components (140 con findings)
-  → 1312 findings (27 críticos · 253 altos) → 11 known exploited
+[vulnerability · osv    1267] ──┐
+                                ├──▶ received 1327 → new 1327 ──▶ donut
+[code-weakness · opengrep 60] ──┘        (P0 27 · P1 253 · P3 987 · no priority 60)
+                                                    │
+                                    ┌───────────────┴──────────────┐
+                                    ▼               ▼              ▼
+                              Open 1327        Past SLA 0      Resolved 0 …
 ```
 
-Los totales siguen la regla de contabilidad (una versión por proyecto), por eso
-`1312` no coincide con los `1327` del inventario completo: la diferencia son las
-versiones históricas que no se cuentan.
+Decisiones que se ven en el dibujo:
+
+- **Un renglón por herramienta**: OpenGrep llega escrito `OpenGrep`, `opengrep` y
+  `Opengrep OSS`; sin normalizar, el diagrama mentiría sobre cuántas fuentes hay.
+- **Un scope desconocido responde 404**, no "toda la organización": un filtro mal
+  escrito no debe parecer un dato.
+- **Los estados sin datos se dibujan en cero** (Past SLA, In progress, Suppressed,
+  Resolved): así se distingue "no hay" de "no se mide".
+- Cada outcome es clickeable y abre Findings.
 
 ## 8. Límites conocidos
 
