@@ -174,8 +174,25 @@ Asignación de grupo: `PATCH /api/v1/projects/{slug}` con `{"group": "Aurea"}`
 (`null` lo deja en `ungrouped`). Los siete proyectos quedaron como Aurea (4),
 Saria (2) y Bitsentry (1).
 
-Hoy hay **una versión por proyecto** (cada repo está en un único commit), así que
-el selector aparece cuando el próximo barrido cree una segunda.
+### Versiones: de dónde sale el nombre
+
+La etiqueta es la que **declara el SBOM** (`metadata.component.version`), es decir
+la que el proyecto tiene en `pyproject.toml` / `package.json` en el momento del
+escaneo. syft sobre un directorio no la emite, así que las primeras importaciones
+quedaron etiquetadas con el sha del commit. Ahora:
+
+- **Alta manual**: `Components → import SBOM…` pide archivo, proyecto (existente o
+  nuevo) y versión; la versión se autocompleta desde el SBOM cuando la trae. Crear
+  una versión nueva es solo elegir un nombre de versión distinto.
+- **Renombrar**: `PATCH /api/v1/projects/{slug}/versions/{version}` cambia la
+  etiqueta sin tocar las filas que apuntan a ella (409 si ya existe).
+- **Escanear**: importar crea inventario, no findings. Cada versión de la lista
+  tiene `scan OSV` (`POST /api/v1/analyze?project=&version=`); una versión con
+  componentes y sin findings se muestra como *not scanned*, no como limpia.
+
+Ejemplo real ya en la instancia: `aurea-fx-service` tiene **ba335e4** y **0.1.0**
+(su `pyproject`); la segunda se importó desde la UI y se escaneó, quedando con
+4 CRITICAL, 14 HIGH, 20 MEDIUM, 2 LOW y 39 sin vector.
 
 ## 6. Qué datos existen hoy, por fuente
 
@@ -197,7 +214,21 @@ y cada línea donde aparece es una *occurrence*. Por eso 55 resultados de
 opengrep en aurea-backend son 27 findings: las repeticiones están registradas
 como sightings, no descartadas.
 
-## 7. Límites conocidos
+## 7. Exposure flow en el dashboard
+
+Una lectura de izquierda a derecha de dónde se acumula la exposición, con cada
+etapa enlazando a la pantalla que la explica:
+
+```
+2 attack surface → 7 projects (3 groups) → 3378 components (140 con findings)
+  → 1312 findings (27 críticos · 253 altos) → 11 known exploited
+```
+
+Los totales siguen la regla de contabilidad (una versión por proyecto), por eso
+`1312` no coincide con los `1327` del inventario completo: la diferencia son las
+versiones históricas que no se cuentan.
+
+## 8. Límites conocidos
 
 - **Pipelines = 0**: no hay CI conectada todavía; la guía lo marca como paso
   pendiente (5 de 6 hechos).
