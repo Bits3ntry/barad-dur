@@ -155,3 +155,9 @@ desde otro checkout; la UI nueva se ve en `localhost:5173`.
   sin pantalla; el POST responde 503 en este despliegue.
 - **EASM activo** (TLS/HTTP/puertos) sigue parcial: hay snapshots y detección de
   cambios, no colectores activos programados.
+- **Ruido de inventario**: syft también cataloga archivos, así que en
+  Components aparecen filas sin PURL cuyo "nombre" es una ruta
+  (`…/METADATA`). Son reales pero no son paquetes; el arreglo limpio es
+  filtrarlas en el catálogo (nombre que empieza con `/` y sin PURL) o plegarlas
+  detrás de un toggle en la pantalla. No se hizo para no borrar filas ya
+  ingeridas sin una decisión tuya.
