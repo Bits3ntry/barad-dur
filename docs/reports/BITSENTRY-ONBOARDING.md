@@ -148,7 +148,36 @@ se ve una UI vieja en `:8092`, el bundle no se copió después del build.
 
 ---
 
-## 5. Qué datos existen hoy, por fuente
+## 5. Jerarquía: grupo > proyecto > versión
+
+La unidad de reporte no es el repositorio. `projects.group_name` agrega un nivel
+libre por encima (sin tabla nueva ni migración de datos) y el portfolio se lee en
+tres niveles:
+
+```
+Aurea · 4 projects        2576 componentes · 889 findings · 13 críticos · 8 KEV
+  aurea-backend            1923bba   1125    C3 H36 M67 L11 U79    196    2 KEV
+  aurea-document-service   3964ceb    152    C2 H10 M15 L6 U31      64    2 KEV
+  aurea-frontend           2069004    881    C4 H91 M90 L23 U327   535    2 KEV
+  aurea-fx-service         ba335e4    418    C4 H14 M35 L2 U39      94    2 KEV
+Bitsentry · 1 project      394 componentes · 252 findings · 4 críticos
+Saria · 2 projects         408 componentes · 186 findings · 10 críticos
+```
+
+**Regla de contabilidad:** se cuenta la versión seleccionada para ese proyecto y,
+si no hay selección, la última. Nunca la suma de todas las versiones históricas:
+eso duplicaría componentes y findings. El API la aplica en `latest_totals` y por
+grupo (`groups[].versions` cuenta una versión por proyecto); la consola permite
+elegir versión por proyecto y recalcula los totales del grupo en el acto.
+
+Asignación de grupo: `PATCH /api/v1/projects/{slug}` con `{"group": "Aurea"}`
+(`null` lo deja en `ungrouped`). Los siete proyectos quedaron como Aurea (4),
+Saria (2) y Bitsentry (1).
+
+Hoy hay **una versión por proyecto** (cada repo está en un único commit), así que
+el selector aparece cuando el próximo barrido cree una segunda.
+
+## 6. Qué datos existen hoy, por fuente
 
 | Fuente | Qué aporta | Volumen real |
 |---|---|---|
@@ -168,7 +197,7 @@ y cada línea donde aparece es una *occurrence*. Por eso 55 resultados de
 opengrep en aurea-backend son 27 findings: las repeticiones están registradas
 como sightings, no descartadas.
 
-## 6. Límites conocidos
+## 7. Límites conocidos
 
 - **Pipelines = 0**: no hay CI conectada todavía; la guía lo marca como paso
   pendiente (5 de 6 hechos).
