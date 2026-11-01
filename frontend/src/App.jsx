@@ -87,12 +87,16 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
-  useEffect(() => {
-    if (needsKey) return
+  function loadProjects() {
     setProjectsError('')
-    api.get('/api/v1/projects')
+    return api.get('/api/v1/projects')
       .then((data) => setProjects(data.data || []))
       .catch((error) => setProjectsError(String(error.message || error)))
+  }
+
+  useEffect(() => {
+    if (needsKey) return
+    loadProjects()
   }, [needsKey, settingsOpen])
 
   const go = (key) => {
@@ -132,7 +136,7 @@ export default function App() {
       case 'remediation': return <Lifecycle />
       case 'members': return <Members />
       case 'assets': return <Assets />
-      case 'components': return <Components projects={projects} />
+      case 'components': return <Components projects={projects} onChanged={loadProjects} />
       case 'pipelines': return <Pipelines />
       case 'notifications': return <Notifications />
       default: return <Dashboard projects={projects} onNavigate={go} />

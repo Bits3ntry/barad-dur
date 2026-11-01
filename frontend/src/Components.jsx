@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
-import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Stat } from './ui'
+import { Card, Dialog, EmptyState, ErrorBanner, Loading, PageHeader, Stat } from './ui'
 
 /* Inventory per project version, joined with the findings of that version.
 
@@ -16,7 +16,7 @@ function worstOf(counts) {
   return SEVERITY_ORDER.find((severity) => counts[severity])
 }
 
-export default function Components({ projects }) {
+export default function Components({ projects, onChanged }) {
   const [projectSlug, setProjectSlug] = useState('')
   const [version, setVersion] = useState('')
   const [search, setSearch] = useState('')
@@ -28,6 +28,12 @@ export default function Components({ projects }) {
   const [error, setError] = useState('')
   const [receipt, setReceipt] = useState(null)
   const [impact, setImpact] = useState({ id: null, data: null, error: '' })
+  const [importOpen, setImportOpen] = useState(false)
+  const [importProject, setImportProject] = useState('')
+  const [importVersion, setImportVersion] = useState('')
+  const [importFile, setImportFile] = useState(null)
+  const [importBusy, setImportBusy] = useState(false)
+  const [importNote, setImportNote] = useState('')
   const fileInput = useRef(null)
 
   const project = projects.find((p) => p.slug === projectSlug)
@@ -103,22 +109,58 @@ export default function Components({ projects }) {
     }
   }
 
-  async function upload(file) {
-    if (!file || !projectSlug) return
-    setError(''); setReceipt(null)
+  async function pickFile(file) {
+    if (!file) return
+    setImportFile(file)
+    setImportNote('')
     try {
-      const raw = await file.arrayBuffer()
-      const params = new URLSearchParams({
-        source: 'web', project: projectSlug, version, filename: file.name })
-      const response = await api.postRaw(`/api/v1/sbom?${params.toString()}`, raw)
-      setReceipt(response)
-      const refreshed = await api.get(
-        `/api/v1/components?project=${encodeURIComponent(projectSlug)}&version=${encodeURIComponent(version)}`)
-      setRows(refreshed.data || [])
-    } catch (problem) {
-      setError(String(problem.message || problem))
+      const document = JSON.parse(await file.text())
+      const component = document?.metadata?.component || {}
+      // The version the SBOM itself declares wins: that is the project's own
+      // version (pyproject/package.json version captured at scan time).
+      if (component.version) setImportVersion(String(component.version))
+      const name = component.name
+      if (!importProject && typeof name === 'string' && !name.startsWith('/')) {
+        setImportProject(name)
+      }
+    } catch {
+      setImportNote('That file is not JSON; the upload will be rejected.')
     }
-    if (fileInput.current) fileInput.current.value = ''
+  }
+
+  function openImport() {
+    setImportProject(projectSlug)
+    setImportVersion('')
+    setImportFile(null)
+    setImportNote('')
+    setImportOpen(true)
+  }
+
+  async function submitImport() {
+    if (!importFile) { setImportNote('Pick a CycloneDX JSON file.'); return }
+    if (!importProject.trim() || !importVersion.trim()) {
+      setImportNote('Project and version are both required.'); return
+    }
+    setImportBusy(true); setImportNote('')
+    try {
+      const params = new URLSearchParams({
+        source: 'web', project: importProject.trim(),
+        version: importVersion.trim(), filename: importFile.name })
+      const response = await api.postRaw(`/api/v1/sbom?${params.toString()}`,
+        await importFile.arrayBuffer())
+      const counts = response.receipt?.counts || {}
+      setReceipt(response)
+      setImportOpen(false)
+      setProjectSlug(importProject.trim())
+      setVersion(importVersion.trim())
+      setSearch(''); setOnlyVulnerable(false)
+      // The sidebar's project list is owned by App; ask it to re-read so the
+      // freshly created version shows up in the selector.
+      if (onChanged) await onChanged()
+    } catch (problem) {
+      setImportNote(String(problem.message || problem))
+    }
+    setImportBusy(false)
   }
 
   return (
@@ -143,11 +185,7 @@ export default function Components({ projects }) {
               onChange={(event) => setVersion(event.target.value)}>
               {versions.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
             </select>
-            <label className="button">
-              <input ref={fileInput} type="file" accept=".json,application/json" hidden
-                onChange={(event) => upload(event.target.files[0])} />
-              upload SBOM
-            </label>
+            <button onClick={openImport}>import SBOM…</button>
           </>
         )}
       />
@@ -262,6 +300,32 @@ export default function Components({ projects }) {
           </tbody>
         </table>
       )}
+
+      <Dialog open={importOpen} title="Import an SBOM" confirmLabel="import"
+        onClose={() => setImportOpen(false)} onConfirm={submitImport}>
+        <div className="stack">
+          <label className="field-label" htmlFor="sbom-file">CycloneDX JSON</label>
+          <input id="sbom-file" ref={fileInput} type="file" accept=".json,application/json"
+            onChange={(event) => pickFile(event.target.files[0])} />
+          <label className="field-label" htmlFor="sbom-project">project</label>
+          <input id="sbom-project" value={importProject} list="sbom-projects"
+            placeholder="existing project, or type a new name"
+            onChange={(event) => setImportProject(event.target.value)} />
+          <datalist id="sbom-projects">
+            {projects.map((entry) => <option key={entry.slug} value={entry.slug} />)}
+          </datalist>
+          <label className="field-label" htmlFor="sbom-version">version</label>
+          <input id="sbom-version" value={importVersion}
+            placeholder="taken from the SBOM when it declares one"
+            onChange={(event) => setImportVersion(event.target.value)} />
+          <p className="muted" style={{ fontSize: 12 }}>
+            A new version is created for the project if it does not exist yet;
+            re-importing the same file into the same version is a no-op.
+            {importBusy ? ' importing…' : ''}
+          </p>
+          {importNote && <div className="banner banner-error">{importNote}</div>}
+        </div>
+      </Dialog>
     </div>
   )
 }
