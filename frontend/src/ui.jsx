@@ -271,9 +271,11 @@ export function Dialog({ open, title, onClose, onConfirm, confirmLabel = 'Confir
 
   if (!open) return null
 
+  // A dialog without a confirm action is legitimate (a form owns its submit):
+  // calling a missing onConfirm unmounted the app with "x is not a function".
   const onOK = () => {
-    onConfirm()
-    onClose()
+    if (onConfirm) onConfirm()
+    if (onClose) onClose()
   }
 
   return (
@@ -287,10 +289,12 @@ export function Dialog({ open, title, onClose, onConfirm, confirmLabel = 'Confir
         {body !== undefined ? <div className="dialog-body">{body}</div> : children}
         <div className="dialog-actions">
           <button className="mini" onClick={onClose}>Cancel</button>
-          <button className={`${destructive ? 'btn-danger' : ''}`} onClick={onOK}
-            style={{ marginLeft: 8 }}>
-            {confirmLabel}
-          </button>
+          {onConfirm && (
+            <button className={`${destructive ? 'btn-danger' : ''}`} onClick={onOK}
+              style={{ marginLeft: 8 }}>
+              {confirmLabel}
+            </button>
+          )}
         </div>
       </div>
     </div>

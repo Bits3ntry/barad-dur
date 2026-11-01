@@ -49,6 +49,26 @@ for (const name of files) {
   }
 }
 
+/* Second guard, learned the hard way: the primitives in ui.jsx call
+   `onChange(value)`, while native elements hand over an event. Passing an
+   event-shaped handler (`set('field')`, `(e) => …e.target…`) to <Input>,
+   <Select> or <CheckBox> reads `undefined.value` and unmounts the whole app. */
+const PRIMITIVES = /<(Input|Select|CheckBox|Textarea)\b/
+for (const name of files) {
+  const lines = readFileSync(join(src, name), 'utf8').split('\n')
+  lines.forEach((line, index) => {
+    if (!PRIMITIVES.test(line)) return
+    const window = lines.slice(index, index + 8).join(' ')
+    const onChange = window.match(/onChange=\{([^}]+)\}/)
+    if (!onChange) return
+    const handler = onChange[1].trim()
+    const eventShaped = handler.includes('target') || /^set\(/.test(handler) || /^\(?\s*e(v|vent)?\s*\)?\s*=>/.test(handler)
+    if (eventShaped) {
+      problems.push(`${name}:${index + 1}: <${line.match(PRIMITIVES)[1]}> onChange expects a value, got "${handler}"`)
+    }
+  })
+}
+
 if (problems.length) {
   console.error('UI import check failed:')
   for (const problem of problems) console.error('  - ' + problem)

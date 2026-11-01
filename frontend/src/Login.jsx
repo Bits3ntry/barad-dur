@@ -72,11 +72,12 @@ export default function Login({ onAuthenticated }) {
   }
 
   async function requestReset(event) {
-    event.preventDefault()
+    // called by the dialog's confirm button (no event) and by the form submit
+    if (event && event.preventDefault) event.preventDefault()
     setError('')
     if (!resetEmail.trim()) { setError('Enter the email address on your account.'); return }
     try {
-      const response = await api.post('/api/v1/auth/password-reset', { email: resetEmail.trim() })
+      const response = await api.post('/api/v1/auth/password/reset/request', { email: resetEmail.trim() })
       setError(response.data?.ok
         ? 'Reset link sent. If the address is on file, check your mail (or your admin for the manual link code).'
         : response.data?.message || 'No account found for that address — nothing to do.')
@@ -186,11 +187,12 @@ export default function Login({ onAuthenticated }) {
       </section>
 
       <Dialog open={resetOpen} title="Reset your password"
+        onConfirm={requestReset}
         onClose={() => setResetOpen(false)}
         confirmLabel="Request reset">
         <form onSubmit={requestReset}>
           <Input label="Email address on file" value={resetEmail}
-            onChange={set('resetEmail')} placeholder="you@company.com" />
+            onChange={setResetEmail} placeholder="you@company.com" />
           <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
             The reset request goes through the platform's SMTP channel when it is
             configured. If SMTP is not provisioned, the administrator can issue
