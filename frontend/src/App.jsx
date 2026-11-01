@@ -18,6 +18,7 @@ import Regression from './Regression'
 import Pipelines from './Pipelines'
 import Settings from './Settings'
 import Setup from './Setup'
+import Projects from './Projects'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
 import { Modal } from './ui'
@@ -28,8 +29,9 @@ const NAV = [
   { group: 'Overview', items: [
     { key: 'setup', label: 'Setup guide' },
     { key: 'dashboard', label: 'Dashboard' },
+    { key: 'projects', label: 'Projects' },
     { key: 'findings', label: 'Findings' },
-    { key: 'assets', label: 'Assets' },
+    { key: 'assets', label: 'Attack surface' },
     { key: 'notifications', label: 'Notifications' },
   ] },
   { group: 'Supply chain', items: [
@@ -116,6 +118,7 @@ export default function App() {
   const screen = () => {
     switch (tab) {
       case 'setup': return <Setup onNavigate={go} />
+      case 'projects': return <Projects onNavigate={go} />
       case 'findings': return <Findings projects={projects} />
       case 'code': return <CodeReview projects={projects} />
       case 'gates': return <Gates projects={projects} />
