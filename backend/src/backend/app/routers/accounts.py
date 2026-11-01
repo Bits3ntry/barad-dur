@@ -9,6 +9,7 @@ import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.app import auth, auth_local, models
@@ -72,14 +73,9 @@ class PasswordResetRouter:
             or os.environ.get("SMTP_PORT")
         )
 
-        # If SMTP is configured, attempt a "dry run" to generate a token
-        # In production, this would dispatch an email with the reset link.
-        # Here we return an admin recovery link as a fallback.
-        token = _generate_reset_token()
-        # Store token (in production, store with expiry in DB or cache)
-        # For now, return a recovery link as specified in GAP-04
-        recovery_link = f"{os.environ.get('BASE_URL', 'https://barad.local')}/recover/{token}"
-
+        # No token is minted here: there is no delivery channel, and handing a
+        # reset credential back to an unauthenticated caller would be an
+        # account-takeover path.
         if smtp_configured:
             # SMTP available - the service would send an email with the link
             # For this environment, return the admin recovery link
@@ -87,16 +83,23 @@ class PasswordResetRouter:
         else:
             recovery_method = "Administrative recovery (no SMTP configured)"
 
-        # Log the request (the email address is logged for auditing)
-        _audit_log(session, "00000000-0000-0000-0000-000000000000",
-                   email_lower, "auth.password_reset_request", "admin", "0")
+        # Audit the request only when the address resolves to a real account:
+        # writing the row against a placeholder org violated the organizations
+        # foreign key and turned every reset request into a 500. The response
+        # stays byte-identical either way, so existence is still not revealed.
+        known_user = _get_user_by_email(session, email_lower)
+        if known_user is not None:
+            _audit_log(session, known_user.org_id, email_lower,
+                       "auth.password_reset_requested", "user", known_user.id)
 
+        # The reset token is a credential: it is never returned to the caller
+        # (that would let anyone take over any account) and there is no SMTP in
+        # this deployment, so the recovery path is administrative, out of band.
         return {
             "data": {
                 "message": "If an account with this email exists, a recovery link "
                            "has been prepared.",
                 "recovery_method": recovery_method,
-                "recovery_link": recovery_link,
             }
         }
 
