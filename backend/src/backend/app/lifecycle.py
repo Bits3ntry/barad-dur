@@ -7,7 +7,7 @@ default policy per-day buckets.
 """
 import datetime
 
-from backend.app import models
+from backend.app import models, severity as severity_mod
 
 SEVERITY_FALLBACK = {
     "CRITICAL": "P0",
@@ -38,7 +38,7 @@ def classify(session, org_id: str, finding: models.Finding) -> tuple[str, str]:
             continue
         if rule.match_severities:
             wanted = {s.strip().upper() for s in rule.match_severities.split(",")}
-            mine = (finding.severity or "UNKNOWN").upper()
+            mine = severity_mod.canonical(finding.severity)
             if mine not in wanted:
                 continue
         if rule.match_intel:
@@ -54,8 +54,8 @@ def classify(session, org_id: str, finding: models.Finding) -> tuple[str, str]:
                              or rule.match_severities or rule.match_intel)
         if has_criterion:
             return rule.priority, rule.reason
-    fallback = SEVERITY_FALLBACK.get((finding.severity or "UNKNOWN").upper(), "P3")
-    return fallback, f"severity {finding.severity or 'UNKNOWN'} fallback"
+    fallback = SEVERITY_FALLBACK.get(severity_mod.canonical(finding.severity), "P3")
+    return fallback, f"severity {severity_mod.canonical(finding.severity)} fallback"
 
 
 def default_policy(session, org_id: str):

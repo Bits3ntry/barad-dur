@@ -1,11 +1,147 @@
 """Inventory and project listing endpoints."""
+from collections import Counter
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from backend.app import auth, models
+from backend.app import auth, models, severity as severity_mod
 from backend.app.db import get_session
 
 router = APIRouter(prefix="/api/v1", tags=["inventory"])
+
+SEVERITIES = severity_mod.SEVERITIES
+CLOSED_STATUSES = {"resolved", "suppressed", "false_positive"}
+
+
+def _serialize_version_profile(session: Session, org_id: str,
+                               project: models.Project,
+                               version: models.ProjectVersion) -> dict:
+    """Everything the console needs for one project version, in one round trip.
+
+    This is the Dependency-Track view: how many components, which of them carry
+    vulnerabilities, the license mix, and the severity vector — scoped to the
+    version instead of the whole organization.
+    """
+    links = (session.query(models.VersionComponent)
+             .filter_by(project_version_id=version.id).all())
+    components = {}
+    if links:
+        rows = (session.query(models.Component)
+                .filter(models.Component.id.in_({l.component_id for l in links}))
+                .all())
+        components = {row.id: row for row in rows}
+
+    findings = (session.query(models.Finding)
+                .filter_by(org_id=org_id, last_seen_version_id=version.id)
+                .filter(models.Finding.status.notin_(CLOSED_STATUSES))
+                .all())
+
+    kev_cves = {row.cve_id for row in session.query(models.KevEntry).all()}
+    advisories = {}
+    vuln_ids = {f.vulnerability_id for f in findings if f.vulnerability_id}
+    if vuln_ids:
+        for row in (session.query(models.Vulnerability)
+                    .filter(models.Vulnerability.id.in_(vuln_ids)).all()):
+            advisories[row.id] = row
+
+    by_severity = Counter()
+    by_kind = Counter()
+    per_component = Counter()
+    kev = 0
+    for finding in findings:
+        by_severity[severity_mod.canonical(finding.severity)] += 1
+        by_kind[finding.kind] += 1
+        if finding.component_id:
+            per_component[finding.component_id] += 1
+        advisory = advisories.get(finding.vulnerability_id)
+        if advisory and advisory.cve_id in kev_cves:
+            kev += 1
+
+    license_counts = Counter(
+        (component.license or "unknown").strip() or "unknown"
+        for component in components.values())
+
+    top_components = []
+    for component_id, count in per_component.most_common(10):
+        component = components.get(component_id)
+        if component is None:
+            continue
+        worst = "UNKNOWN"
+        for finding in findings:
+            if finding.component_id != component_id:
+                continue
+            severity = severity_mod.canonical(finding.severity)
+            if SEVERITIES.index(severity) < SEVERITIES.index(worst):
+                worst = severity
+        top_components.append({"name": component.name, "version": component.version,
+                               "purl": component.purl, "license": component.license,
+                               "findings": count, "worst_severity": worst})
+
+    last_import = (session.query(models.SbomImport)
+                   .filter_by(project_version_id=version.id)
+                   .order_by(models.SbomImport.created_at.desc()).first())
+
+    direct = sum(1 for link in links if link.is_direct)
+    return {
+        "project": project.slug,
+        "project_name": project.name,
+        "version": version.version,
+        "version_id": version.id,
+        "components": {"total": len(links), "direct": direct,
+                       "transitive": len(links) - direct},
+        "licenses": {"distinct": len(license_counts),
+                     "top": [{"license": name, "count": count}
+                             for name, count in license_counts.most_common(8)]},
+        "findings": {"total": len(findings),
+                     "by_severity": {sev: by_severity.get(sev, 0) for sev in SEVERITIES},
+                     "by_kind": dict(by_kind),
+                     "kev": kev,
+                     "vulnerable_components": len(per_component)},
+        "top_components": top_components,
+        "last_import": ({"id": last_import.id,
+                         "imported_at": last_import.created_at.isoformat(),
+                         "source": last_import.source}
+                        if last_import else None),
+    }
+
+
+@router.get("/inventory/portfolio")
+def portfolio(org: models.Organization = Depends(auth.require_org),
+              session: Session = Depends(get_session)):
+    """Every project version with its component/finding rollup."""
+    rows = []
+    for project in (session.query(models.Project).filter_by(org_id=org.id)
+                    .order_by(models.Project.name).all()):
+        for version in (session.query(models.ProjectVersion)
+                        .filter_by(project_id=project.id)
+                        .order_by(models.ProjectVersion.created_at.desc()).all()):
+            rows.append(_serialize_version_profile(session, org.id, project, version))
+
+    totals = {
+        "versions": len(rows),
+        "components": sum(row["components"]["total"] for row in rows),
+        "findings": sum(row["findings"]["total"] for row in rows),
+        "kev": sum(row["findings"]["kev"] for row in rows),
+        "by_severity": {sev: sum(row["findings"]["by_severity"][sev] for row in rows)
+                        for sev in SEVERITIES},
+    }
+    return {"data": rows, "totals": totals}
+
+
+@router.get("/inventory/profile")
+def version_profile(project: str = Query(...), version: str = Query(...),
+                    org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    """One project version's rollup, with the components that carry findings."""
+    project_row = (session.query(models.Project)
+                   .filter_by(org_id=org.id, slug=project).one_or_none())
+    if project_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    version_row = (session.query(models.ProjectVersion)
+                   .filter_by(project_id=project_row.id, version=version).one_or_none())
+    if version_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
+    return {"data": _serialize_version_profile(session, org.id, project_row, version_row)}
 
 
 @router.get("/projects")

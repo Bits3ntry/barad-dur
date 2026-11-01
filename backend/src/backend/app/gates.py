@@ -4,7 +4,7 @@ Verdict rules are explicit and testable; every rule reports pass/fail with
 the concrete offending rows. Policy precedence: project policy outranks org
 policy; newest active policy wins within a scope.
 """
-from backend.app import licenses, models
+from backend.app import licenses, models, severity as severity_mod
 
 SEVERITY_RANK = {"UNKNOWN": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 NON_OPEN = {"resolved", "false_positive", "accepted_risk"}
@@ -33,7 +33,7 @@ def _suppressed_ids(session, org_id: str) -> set[str]:
 
 def evaluate(session, org_id: str, project, version=None) -> dict:
     policy = policy_for(session, org_id, project.id)
-    threshold = (policy.max_severity if policy else "HIGH").upper()
+    threshold = severity_mod.canonical(policy.max_severity if policy else "HIGH")
     threshold_rank = SEVERITY_RANK.get(threshold, 3)
 
     query = (session.query(models.Finding)
@@ -50,7 +50,7 @@ def evaluate(session, org_id: str, project, version=None) -> dict:
 
     # Rule 1: severity threshold
     offenders = [f for f in open_findings
-                 if SEVERITY_RANK.get((f.severity or "UNKNOWN").upper(), 0) >= threshold_rank]
+                 if SEVERITY_RANK.get(severity_mod.canonical(f.severity), 0) >= threshold_rank]
     rules.append({
         "rule": "severity_threshold", "threshold": threshold,
         "status": "fail" if offenders else "pass",

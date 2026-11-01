@@ -2,6 +2,7 @@
 import datetime
 import json
 import urllib.request
+from email.utils import parsedate_to_datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -14,6 +15,51 @@ from backend.app.routers.identity import _audit as _audit_log
 router = APIRouter(prefix="/api/v1", tags=["easm"])
 
 CRTSH_CTLOG = "https://crt.sh/?q=%25.{domain}&output=json"
+
+
+def _parse_cert_date(value) -> str | None:
+    """TLS dates arrive in RFC-822 form ("Dec 20 14:00:30 2026 GMT")."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return parsedate_to_datetime(value).isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
+def _latest_observation(session: Session, asset: models.Asset) -> dict | None:
+    """Newest snapshot, flattened enough for a table: addresses and certificate."""
+    snapshot = (session.query(models.AssetSnapshot)
+                .filter_by(asset_id=asset.id)
+                .order_by(models.AssetSnapshot.observed_at.desc()).first())
+    if snapshot is None:
+        return None
+    try:
+        data = json.loads(snapshot.data)
+    except (TypeError, ValueError):
+        return {"observed_at": snapshot.observed_at.isoformat(), "error": "unreadable"}
+    dns = data.get("dns") or {}
+    tls = data.get("tls") or {}
+    not_after = _parse_cert_date(tls.get("not_after"))
+    days_left = None
+    if not_after:
+        days_left = (datetime.datetime.fromisoformat(not_after)
+                     - datetime.datetime.now(datetime.timezone.utc)).days
+    return {
+        "observed_at": snapshot.observed_at.isoformat(),
+        "source": snapshot.source,
+        "ipv4": dns.get("ipv4") or [],
+        "ipv6": dns.get("ipv6") or [],
+        "certificate": {
+            "subject": (tls.get("subject") or {}).get("commonName"),
+            "issuer": (tls.get("issuer") or {}).get("organizationName"),
+            "not_after": not_after,
+            "days_left": days_left,
+            "tls_version": tls.get("tls_version"),
+        } if tls else None,
+        "tech": data.get("tech") or [],
+    }
+
 
 
 def crtsh_subdomains(domain: str, timeout: float = 25.0) -> list[str]:
@@ -45,7 +91,8 @@ def list_assets(type: str | None = None,
     return {"data": [{"id": r.id, "type": r.type, "value": r.value,
                       "source": r.source, "detail": r.detail,
                       "discovered_at": r.discovered_at.isoformat(),
-                      "last_seen_at": r.last_seen_at.isoformat()} for r in rows],
+                      "last_seen_at": r.last_seen_at.isoformat(),
+                      "latest": _latest_observation(session, r)} for r in rows],
             "total": len(rows)}
 
 

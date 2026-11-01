@@ -4,13 +4,13 @@ import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from backend.app import auth, gates, licenses, models
+from backend.app import auth, gates, licenses, models, severity as severity_mod
 from backend.app.db import get_session
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
 NON_OPEN = {"resolved", "false_positive", "accepted_risk"}
-SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+SEVERITIES = list(severity_mod.SEVERITIES)
 
 
 def _aware(value):
@@ -47,9 +47,7 @@ def summary(project: str | None = Query(default=None),
     open_findings = [f for f in findings if f.status not in NON_OPEN]
     severity_counts = {sev: 0 for sev in SEVERITIES}
     for finding in open_findings:
-        severity_counts[(finding.severity or "UNKNOWN").upper()
-                        if (finding.severity or "").upper() in severity_counts
-                        else "UNKNOWN"] += 1
+        severity_counts[severity_mod.canonical(finding.severity)] += 1
 
     kev_open = 0
     for finding in open_findings:
@@ -207,8 +205,7 @@ def findings_severity_time_series(
         bucket = buckets.get(key)
         if bucket is None:
             continue
-        sev = (finding.severity or "UNKNOWN").upper()
-        bucket[sev if sev in bucket else "UNKNOWN"] += 1
+        bucket[severity_mod.canonical(finding.severity)] += 1
     return {"data": [{"date": date, **counts} for date, counts in buckets.items()]}
 
 
@@ -246,9 +243,7 @@ def findings_severity_pie_chart(
             .all())
     counts = {sev: 0 for sev in SEVERITIES}
     for f in rows:
-        sev = (f.severity or "UNKNOWN").upper()
-        if sev in counts:
-            counts[sev] += 1
+        counts[severity_mod.canonical(f.severity)] += 1
     return {"data": counts}
 
 
@@ -283,8 +278,8 @@ def projects_posture(org: models.Organization = Depends(auth.require_org),
                     .filter_by(org_id=org.id, project_id=project.id).all())
         open_rows = [f for f in findings if f.status not in NON_OPEN]
         critical = sum(1 for f in open_rows
-                       if (f.severity or "").upper() == "CRITICAL")
-        high = sum(1 for f in open_rows if (f.severity or "").upper() == "HIGH")
+                       if severity_mod.canonical(f.severity) == "CRITICAL")
+        high = sum(1 for f in open_rows if severity_mod.canonical(f.severity) == "HIGH")
         data.append({"project": project.slug, "open": len(open_rows),
                      "critical": critical, "high": high,
                      "total": len(findings)})
