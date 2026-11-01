@@ -3,12 +3,15 @@ import { api } from './api'
 import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Stat, Table,
          SeverityBadge, StatusBadge } from './ui'
 import { DonutChart, BarChart, LineChart } from './Charts'
+import ExposureFlow from './ExposureFlow'
 
 export default function Dashboard({ projects, onNavigate }) {
   const [project, setProject] = useState('')
   const [version, setVersion] = useState('')
   const [summary, setSummary] = useState(null)
   const [portfolio, setPortfolio] = useState([])
+  const [portfolioTotals, setPortfolioTotals] = useState(null)
+  const [assets, setAssets] = useState([])
   const [series, setSeries] = useState({ findings: [], occurrences: [] })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -43,8 +46,21 @@ export default function Dashboard({ projects, onNavigate }) {
           byProject.set(row.project, entry)
         }
         setPortfolio([...byProject.values()].sort((a, b) => a.project.localeCompare(b.project)))
+        const totals = r.latest_totals || r.totals
+        if (totals) {
+          setPortfolioTotals({
+            ...totals,
+            groups: (r.groups || []).length,
+            vulnerable_components: (r.data || [])
+              .filter((row) => row.is_latest)
+              .reduce((sum, row) => sum + (row.findings.vulnerable_components || 0), 0),
+          })
+        }
       })
-      .catch(() => setPortfolio([]))
+      .catch(() => { setPortfolio([]); setPortfolioTotals(null) })
+    api.get('/api/v1/assets')
+      .then((r) => setAssets(r.data || []))
+      .catch(() => setAssets([]))
     api.get('/api/v1/dashboard/findings/severity/time-series?window=30')
       .then((r) => setSeries((prev) => ({ ...prev, findings: r.data || [] })))
       .catch(() => setSeries((prev) => ({ ...prev, findings: [] })))
@@ -150,6 +166,12 @@ export default function Dashboard({ projects, onNavigate }) {
           <Stat label="resolved 7d" value={f.resolved_last_7d}
             tone={f.resolved_last_7d ? 'good' : ''} />
         </div>
+      </Card>
+
+      <Card title="Exposure flow"
+        actions={<span className="count">click a stage to open it</span>}>
+        <ExposureFlow assets={assets} portfolio={portfolioTotals}
+          findings={f} onNavigate={onNavigate} />
       </Card>
 
       {portfolio.length > 0 && (

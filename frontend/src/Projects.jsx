@@ -144,7 +144,8 @@ function VersionDetail({ row, onClose, onNavigate }) {
   )
 }
 
-function GroupCard({ group, rows, selection, onSelect, onOpen }) {
+function GroupCard({ group, rows, selection, onSelect, onOpen, collapsed, onToggle,
+                     onScan, scanning }) {
   const [expanded, setExpanded] = useState(null)
 
   // One row per project: the version picked for it, else the latest.
@@ -169,7 +170,19 @@ function GroupCard({ group, rows, selection, onSelect, onOpen }) {
 
   return (
     <Card title={`${group} · ${chosen.length} project${chosen.length === 1 ? '' : 's'}`}
-      actions={<span className="count">counted at latest or selected version</span>}>
+      actions={(
+        <div className="row">
+          <span className="count">
+            {collapsed ? `${totals.components} components · ${totals.findings} findings` : 'counted at latest or selected version'}
+          </span>
+          <button className="mini" onClick={onToggle}
+            aria-expanded={!collapsed}
+            title={collapsed ? 'expand this group' : 'collapse this group'}>
+            {collapsed ? '▸ show' : '▾ hide'}
+          </button>
+        </div>
+      )}>
+      <div style={{ display: collapsed ? 'none' : 'block' }}>
       <div className="metrics" style={{ marginBottom: 12 }}>
         <Stat label="components" value={totals.components} />
         <Stat label="findings" value={totals.findings} />
@@ -205,7 +218,13 @@ function GroupCard({ group, rows, selection, onSelect, onOpen }) {
                   ) : <span className="mono">{row.version}</span>}
                 </td>
                 <td className="num">{row.components.total}</td>
-                <td><SeverityStrip counts={row.findings.by_severity} /></td>
+                <td>
+                  {row.findings.total === 0 && row.components.total > 0
+                    ? <span className="sev sev-medium" title="inventory imported, advisories not matched yet">
+                      not scanned
+                    </span>
+                    : <SeverityStrip counts={row.findings.by_severity} />}
+                </td>
                 <td className="num">{row.findings.total}</td>
                 <td className="num">
                   {row.findings.kev
@@ -251,10 +270,16 @@ function GroupCard({ group, rows, selection, onSelect, onOpen }) {
                                 : '—'}
                             </td>
                             <td>
-                              <button className="mini"
-                                onClick={() => onSelect(project, entry.version)}>
-                                {entry.version === row.version ? 'counting this' : 'count this'}
-                              </button>
+                              <div className="row">
+                                <button className="mini"
+                                  onClick={() => onSelect(project, entry.version)}>
+                                  {entry.version === row.version ? 'counting this' : 'count this'}
+                                </button>
+                                <button className="mini" disabled={!onScan}
+                                  onClick={() => onScan(project, entry.version)}>
+                                  {scanning === `${project}@${entry.version}` ? 'scanning…' : 'scan OSV'}
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -267,6 +292,7 @@ function GroupCard({ group, rows, selection, onSelect, onOpen }) {
           ))}
         </tbody>
       </table>
+      </div>
     </Card>
   )
 }
@@ -278,6 +304,25 @@ export default function Projects({ onNavigate }) {
   const [filter, setFilter] = useState('')
   const [selection, setSelection] = useState({})
   const [open, setOpen] = useState(null)
+  // Collapsing is a reading preference, so it survives a reload.
+  const [scanning, setScanning] = useState('')
+
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('barad.projects.collapsed') || '[]'))
+    } catch { return new Set() }
+  })
+
+  function rememberCollapsed(next) {
+    setCollapsed(next)
+    localStorage.setItem('barad.projects.collapsed', JSON.stringify([...next]))
+  }
+
+  function toggleGroup(group) {
+    const next = new Set(collapsed)
+    if (next.has(group)) next.delete(group); else next.add(group)
+    rememberCollapsed(next)
+  }
 
   function load() {
     setError('')
@@ -290,6 +335,19 @@ export default function Projects({ onNavigate }) {
   }
 
   useEffect(load, [])
+
+  async function scanVersion(project, version) {
+    setScanning(`${project}@${version}`)
+    setError('')
+    try {
+      await api.post(`/api/v1/analyze?project=${encodeURIComponent(project)}`
+        + `&version=${encodeURIComponent(version)}`)
+      load()
+    } catch (problem) {
+      setError(String(problem.message || problem))
+    }
+    setScanning('')
+  }
 
   const groups = useMemo(() => {
     const needle = filter.trim().toLowerCase()
@@ -328,6 +386,12 @@ export default function Projects({ onNavigate }) {
           <>
             <input placeholder="filter group or project" value={filter}
               onChange={(event) => setFilter(event.target.value)} style={{ minWidth: 200 }} />
+            <button onClick={() => rememberCollapsed(
+              collapsed.size === groups.length
+                ? new Set()
+                : new Set(groups.map(([group]) => group)))}>
+              {collapsed.size === groups.length ? 'expand all' : 'collapse all'}
+            </button>
             <button onClick={load}>refresh</button>
           </>
         )}
@@ -343,6 +407,10 @@ export default function Projects({ onNavigate }) {
       {groups.map(([group, groupRows]) => (
         <GroupCard key={group} group={group} rows={groupRows}
           selection={selection}
+          collapsed={collapsed.has(group)}
+          onToggle={() => toggleGroup(group)}
+          scanning={scanning}
+          onScan={scanVersion}
           onSelect={(project, version) => setSelection((current) => ({
             ...current, [project]: version }))}
           onOpen={setOpen} />
