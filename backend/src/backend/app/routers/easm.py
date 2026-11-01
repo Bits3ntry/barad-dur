@@ -350,10 +350,10 @@ class ScheduleIn(BaseModel):
 def list_schedules(org: models.Organization = Depends(auth.require_org),
                    session: Session = Depends(get_session)):
     """List EASM scan schedules for the organization."""
-    schedules = (session.query(models.EasmSchedule)
+    schedules = (session.query(models.ScanSchedule)
                  .filter_by(org_id=org.id)
-                 .order_by(models.EasmSchedule.enabled.desc(),
-                          models.EasmSchedule.created_at.desc()).all())
+                 .order_by(models.ScanSchedule.enabled.desc(),
+                          models.ScanSchedule.created_at.desc()).all())
     return {"data": [{"id": s.id, "strategy": s.strategy,
                       "expression": s.expression, "enabled": s.enabled,
                       "next_run": s.next_run.isoformat() if s.next_run else None,
@@ -370,7 +370,7 @@ def create_schedule(payload: ScheduleIn = None,
     if payload.strategy not in {"cron", "interval"}:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "strategy must be 'cron' or 'interval'")
-    schedule = models.EasmSchedule(
+    schedule = models.ScanSchedule(
         org_id=org.id, strategy=payload.strategy,
         expression=payload.expression, enabled=payload.enabled,
         actor=payload.actor or "system", created_at=models.utcnow())
@@ -390,7 +390,7 @@ def update_schedule(schedule_id: str, payload: ScheduleIn = None,
     """Update an EASM scan schedule."""
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
-    schedule = session.get(models.EasmSchedule, schedule_id)
+    schedule = session.get(models.ScanSchedule, schedule_id)
     if schedule is None or schedule.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "schedule not found")
     if payload.strategy:
@@ -409,7 +409,7 @@ def delete_schedule(schedule_id: str,
                     org: models.Organization = Depends(auth.require_org),
                     session: Session = Depends(get_session)):
     """Delete an EASM scan schedule."""
-    schedule = session.get(models.EasmSchedule, schedule_id)
+    schedule = session.get(models.ScanSchedule, schedule_id)
     if schedule is None or schedule.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "schedule not found")
     session.delete(schedule)
