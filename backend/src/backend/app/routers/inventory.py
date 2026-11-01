@@ -198,6 +198,41 @@ def list_projects(org: models.Organization = Depends(auth.require_org),
     return {"data": data}
 
 
+class VersionRenameIn(BaseModel):
+    version: str = Field(min_length=1, max_length=255,
+                         description="New label for this project version")
+
+
+@router.patch("/projects/{slug}/versions/{version}")
+def rename_version(slug: str, version: str, payload: VersionRenameIn,
+                   org: models.Organization = Depends(auth.require_org),
+                   session: Session = Depends(get_session)):
+    """Relabel a version, e.g. a commit sha that the SBOM itself never declared.
+
+    Renaming is safe: the label is the only thing that changes, every component,
+    finding and occurrence keeps pointing at the same row.
+    """
+    project = (session.query(models.Project)
+               .filter_by(org_id=org.id, slug=slug).one_or_none())
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    row = (session.query(models.ProjectVersion)
+           .filter_by(project_id=project.id, version=version).one_or_none())
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
+    new_label = payload.version.strip()
+    if new_label == version:
+        return {"data": {"version": row.version}}
+    clash = (session.query(models.ProjectVersion)
+             .filter_by(project_id=project.id, version=new_label).one_or_none())
+    if clash is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "that project already has a version with this name")
+    row.version = new_label
+    session.commit()
+    return {"data": {"version": row.version, "previous": version}}
+
+
 class ProjectGroupIn(BaseModel):
     group: str | None = Field(
         default=None,
