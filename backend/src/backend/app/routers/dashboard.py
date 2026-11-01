@@ -183,6 +183,113 @@ def summary(project: str | None = Query(default=None),
     }}
 
 
+@router.get("/dashboard/findings/severity/time-series")
+def findings_severity_time_series(
+        window: int = Query(30, ge=1, le=90),
+        org: models.Organization = Depends(auth.require_org),
+        session: Session = Depends(get_session)):
+    """Severity distribution over time (for pie/donut chart)."""
+    now = models.utcnow()
+    start = now - datetime.timedelta(days=window)
+    rows = (session.query(models.Finding)
+            .filter(models.Finding.first_seen_at >= start,
+                    models.Finding.org_id == org.id)
+            .all())
+    buckets = {sev: [] for sev in SEVERITIES}
+    for f in rows:
+        if not f.first_seen_at:
+            continue
+        days = (now - _aware(f.first_seen_at)).days
+        if days < 0:
+            days = 0
+        elif days > window:
+            days = window
+        sev = (f.severity or "UNKNOWN").upper()
+        if sev not in buckets:
+            sev = "UNKNOWN"
+        buckets[sev].append({"days_since_found": days, "count": 1})
+    return {"data": buckets}
+
+
+
+@router.get("/dashboard/findings/occurrences/time-series")
+def findings_occurrences_time_series(
+        window: int = Query(30, ge=1, le=90),
+        org: models.Organization = Depends(auth.require_org),
+        session: Session = Depends(get_session)):
+    """Occurrence counts over time (for line chart)."""
+    now = models.utcnow()
+    start = now - datetime.timedelta(days=window)
+    rows = (session.query(models.Occurrence)
+            .filter(models.Occurrence.seen_at >= start,
+                    models.Occurrence.org_id == org.id)
+            .all())
+    counts = {}
+    for o in rows:
+        date = _aware(o.seen_at).replace(hour=0, minute=0, second=0, microsecond=0)
+        counts[date.isoformat()] = counts.get(date.isoformat(), 0) + 1
+    return {"data": [{"date": k, "count": v} for k, v in sorted(counts.items())]}
+
+
+
+
+
+@router.get("/dashboard/findings/severity/pie")
+def findings_severity_pie_chart(
+        org: models.Organization = Depends(auth.require_org),
+        session: Session = Depends(get_session)):
+    """Severity distribution for pie/donut chart (real data)."""
+    now = models.utcnow()
+    rows = (session.query(models.Finding)
+            .filter(models.Finding.org_id == org.id)
+            .all())
+    counts = {sev: 0 for sev in SEVERITIES}
+    for f in rows:
+        sev = (f.severity or "UNKNOWN").upper()
+        if sev in counts:
+            counts[sev] += 1
+    return {"data": counts}
+
+
+
+@router.get("/dashboard/findings/occurrences/line")
+def findings_occurrences_line_chart(
+        window: int = Query(30, ge=1, le=90),
+        org: models.Organization = Depends(auth.require_org),
+        session: Session = Depends(get_session)):
+    """Occurrence counts over time for line chart (real data)."""
+    now = models.utcnow()
+    start = now - datetime.timedelta(days=window)
+    rows = (session.query(models.Occurrence)
+            .filter(models.Occurrence.seen_at >= start,
+                    models.Occurrence.org_id == org.id)
+            .all())
+    counts = {}
+    for o in rows:
+        date = _aware(o.seen_at).replace(hour=0, minute=0, second=0, microsecond=0)
+        counts[date.isoformat()] = counts.get(date.isoformat(), 0) + 1
+    return {"data": [{"date": k, "count": v} for k, v in sorted(counts.items())]}
+
+
+@router.get("/dashboard/findings/occurrences/time-series")
+def findings_occurrences_time_series(
+        window: int = Query(30, ge=1, le=90),
+        org: models.Organization = Depends(auth.require_org),
+        session: Session = Depends(get_session)):
+    """Occurrence counts over time (for line chart)."""
+    now = models.utcnow()
+    start = now - datetime.timedelta(days=window)
+    rows = (session.query(models.Occurrence)
+            .filter(models.Occurrence.seen_at >= start,
+                    models.Occurrence.org_id == org.id)
+            .all())
+    counts = {}
+    for o in rows:
+        date = _aware(o.seen_at).replace(hour=0, minute=0, second=0, microsecond=0)
+        counts[date.isoformat()] = counts.get(date.isoformat(), 0) + 1
+    return {"data": [{"date": k, "count": v} for k, v in sorted(counts.items())]}
+
+
 @router.get("/dashboard/projects")
 def projects_posture(org: models.Organization = Depends(auth.require_org),
                      session: Session = Depends(get_session)):

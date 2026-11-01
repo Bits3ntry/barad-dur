@@ -1311,3 +1311,25 @@ class SbomBaseline(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+class TrivyDbUpdate(Base, TimestampMixin):
+    """Record of Trivy DB fetch/update; called by the offline updater."""
+
+    __tablename__ = "trivy_db_updates"
+    __table_args__ = (UniqueConstraint("org_id", "status", name="uq_trivy_db_status"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    status: Mapped[str] = mapped_column(
+        String(32), default="pending", index=True)
+    target_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    target_size: Mapped[int] = mapped_column(Integer, default=0)
+    target_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    header_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    last_successful_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+
+
