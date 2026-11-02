@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from backend.app import auth, ci, incidents, models, severity as severity_vocab, vulns
+from backend.app import auth, ci, incidents, models, projects as projects_ref, severity as severity_vocab, vulns
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
@@ -347,8 +347,7 @@ def list_findings(
         if not (project and version):
             # Project-only filter is a legitimate view: every version's
             # findings, no completeness requirement on the pair.
-            project_row = (session.query(models.Project)
-                           .filter_by(org_id=org.id, slug=project).one_or_none())
+            project_row = projects_ref.by_ref(session, org.id, project)
             if project_row is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
             query = query.filter(models.Finding.project_id == project_row.id)
@@ -400,8 +399,7 @@ def list_findings(
 
 
 def _resolve(session, org_id: str, project: str, version: str):
-    project_row = (session.query(models.Project)
-                   .filter_by(org_id=org_id, slug=project).one_or_none())
+    project_row = projects_ref.by_ref(session, org_id, project)
     if project_row is None:
         return None
     return (session.query(models.ProjectVersion)

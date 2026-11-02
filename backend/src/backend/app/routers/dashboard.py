@@ -4,7 +4,7 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from backend.app import auth, gates, licenses, models, severity as severity_mod
+from backend.app import auth, gates, licenses, models, projects as projects_ref, severity as severity_mod
 from backend.app.db import get_session
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
@@ -28,10 +28,10 @@ def summary(project: str | None = Query(default=None),
     week_ago = now - datetime.timedelta(days=7)
     week_soon = now + datetime.timedelta(days=2)
 
-    proj = None
-    if project is not None:
-        proj = (session.query(models.Project)
-                .filter_by(org_id=org.id, slug=project).one_or_none())
+    proj = projects_ref.by_ref(session, org.id, project)
+    if project is not None and proj is None:
+        # An unknown project must not answer with the whole organization.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     pv = None
     if proj is not None and version is not None:
         pv = (session.query(models.ProjectVersion)
@@ -304,13 +304,11 @@ def exposure_flow(window: int = Query(default=30, ge=1, le=365),
     now = models.utcnow()
     since = now - datetime.timedelta(days=window)
 
-    proj = None
-    if project is not None:
-        proj = (session.query(models.Project)
-                .filter_by(org_id=org.id, slug=project).one_or_none())
-        if proj is None:
-            # An unknown scope must not silently answer with the whole org.
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    proj = projects_ref.by_ref(session, org.id, project)
+    if project is not None and proj is None:
+        # An unknown scope must not silently answer with the whole org, but an
+        # omitted scope is the organization's own portfolio.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     pv = None
     if proj is not None and version is not None:
         pv = (session.query(models.ProjectVersion)
@@ -425,26 +423,33 @@ def v0_overview(org: models.Organization = Depends(auth.require_org),
         if due <= now + datetime.timedelta(days=30):
             expiring += 1
 
-    from backend.app.routers.attack_surface import changes as changes_query
+    from backend.app.routers.exposures import changes as changes_query
     recent = changes_query(days=7, category=None, asset=None, limit=1,
                            org=org, session=session)
 
     return {"data": {
         "generated_at": now.isoformat(),
-        "assets": {"value": assets, "link": "assets"},
+        "assets": {"value": assets, "link": "assets",
+                   "filters": {"include_archived": False}},
         "projects": {"value": projects, "link": "projects"},
         "findings": {"open": len(open_findings), "by_severity": by_severity,
-                     "by_priority": by_priority, "link": "findings"},
+                     "by_priority": by_priority, "link": "findings",
+                     "filters": {"status": ["open", "acknowledged"],
+                                 "include_suppressed": False}},
         "vulnerabilities": {"cves": len(cves),
                             "kev": sum(1 for row in cves
                                        if row["enrichment"]["kev"]["listed"]),
-                            "link": "vulnerabilities"},
+                            "link": "vulnerabilities",
+                            "filters": {"include_suppressed": False}},
         "recent_changes": {"last_7d": recent["total"],
-                           "link": "attack-surface"},
-        "exposures": {"open": open_exposures, "link": "exposures"},
+                           "link": "attack-surface",
+                           "filters": {"days": 7}},
+        "exposures": {"open": open_exposures, "link": "exposures",
+                      "filters": {"state": "open"}},
         "cycles": {"active": cycles_active, "in_review": cycles_review,
-                   "link": "cycles"},
-        "expiries": {"acceptances_next_30d": expiring, "link": "my-work"},
+                   "link": "cycles", "filters": {"state": "active"}},
+        "expiries": {"acceptances_next_30d": expiring, "link": "my-work",
+                     "filters": {"kind": "acceptance", "window_days": 30}},
         "coverage": {
             "assets_without_owner": needs_owner,
             "assets_without_project": (session.query(models.Asset)

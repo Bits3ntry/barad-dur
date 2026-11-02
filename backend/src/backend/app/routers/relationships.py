@@ -128,6 +128,10 @@ class DeploymentIn(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     environment: str = Field(default="production", max_length=64)
     service_id: str | None = None
+    artifact_id: str | None = None
+    application_component_id: str | None = None
+    status: str = "active"
+    deployed_at: str | None = None
     actor: str | None = None
 
 
@@ -135,8 +139,17 @@ class DeploymentIn(BaseModel):
 def list_deployments(org: models.Organization = Depends(auth.require_org),
                      session: Session = Depends(get_session)):
     rows = session.query(models.Deployment).filter_by(org_id=org.id).all()
-    return {"data": [{"id": d.id, "name": d.name, "environment": d.environment,
-                      "service_id": d.service_id} for d in rows], "total": len(rows)}
+    data = []
+    for d in rows:
+        artifact = session.get(models.Artifact, d.artifact_id) if d.artifact_id else None
+        version = (session.get(models.ProjectVersion, artifact.project_version_id)
+                   if artifact and artifact.project_version_id else None)
+        data.append({"id": d.id, "name": d.name, "environment": d.environment,
+                     "service_id": d.service_id, "status": d.status,
+                     "artifact": ({"id": artifact.id, "name": artifact.name,
+                                   "digest": artifact.digest} if artifact else None),
+                     "version": version.version if version else None})
+    return {"data": data, "total": len(data)}
 
 
 @router.post("/deployments")
@@ -149,15 +162,42 @@ def create_deployment(payload: DeploymentIn = None,
         service = session.get(models.Service, payload.service_id)
         if service is None or service.org_id != org.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "service not found")
+    if payload.artifact_id is not None:
+        artifact = session.get(models.Artifact, payload.artifact_id)
+        if artifact is None or artifact.org_id != org.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "artifact not found")
+    if payload.application_component_id is not None:
+        component = session.get(models.ApplicationComponent,
+                                payload.application_component_id)
+        if component is None or component.org_id != org.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                "application component not found")
+    if payload.status not in models.DEPLOYMENT_STATUSES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"status must be one of {sorted(models.DEPLOYMENT_STATUSES)}")
+    deployed_at = None
+    if payload.deployed_at:
+        try:
+            from datetime import datetime as _dt
+            deployed_at = _dt.fromisoformat(payload.deployed_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                "deployed_at must be ISO-8601") from None
     dep = models.Deployment(org_id=org.id, service_id=payload.service_id,
                             name=payload.name, environment=payload.environment,
+                            artifact_id=payload.artifact_id,
+                            application_component_id=payload.application_component_id,
+                            status=payload.status, deployed_at=deployed_at,
                             created_at=_now(), updated_at=_now())
     session.add(dep)
     session.flush()
     _audit_log(session, org.id, payload.actor or "system", "deployment.added",
-               "deployment", dep.id, f"{payload.name} ({payload.environment})")
+               "deployment", dep.id,
+               f"{payload.name} ({payload.environment})"
+               + (f" artifact {payload.artifact_id}" if payload.artifact_id else ""))
     session.commit()
-    return {"data": {"id": dep.id}}
+    return {"data": {"id": dep.id, "environment": dep.environment,
+                     "status": dep.status, "artifact_id": dep.artifact_id}}
 
 
 # ─────────────────────── generic typed links ───────────────────────

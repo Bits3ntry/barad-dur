@@ -125,6 +125,9 @@ def my_work(actor: str = Query(..., min_length=1, max_length=255),
                           if row.sla_deadline else None}
                          for row in assigned_findings]},
         "my_team": {"count": len(team), "supported": bool(teams_supported),
+                    "scope": "organization",
+                    "label": ("Organization queue (no teams yet)"
+                              if not teams_supported else "My team"),
                     "note": ("the organization has no teams yet: this tray lists every "
                              "open item assigned to somebody else"
                              if not teams_supported else None),

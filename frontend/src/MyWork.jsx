@@ -14,7 +14,7 @@ const TRAYS = [
   { id: 'requested_by_me', label: 'Requested by me' },
   { id: 'acceptances_expiring', label: 'Acceptances expiring' },
   { id: 'my_tasks', label: 'My tasks' },
-  { id: 'my_team', label: 'Team queue' },
+  { id: 'my_team', label: 'Organization queue' },
 ]
 
 export default function MyWork() {

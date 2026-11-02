@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app import auth, models, severity as severity_vocab
+from backend.app import auth, models, projects as projects_ref, severity as severity_vocab
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
@@ -146,12 +146,11 @@ def list_vulnerabilities(project: str | None = Query(default=None),
     """CVEs grouped over the visible findings of this organization."""
     rows = _group_rows(session, org, include_suppressed)
     if project:
-        project_row = (session.query(models.Project)
-                       .filter_by(org_id=org.id, slug=project).one_or_none())
+        project_row = projects_ref.by_ref(session, org.id, project)
         if project_row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
         rows = [row for row in rows
-                if project in {p["slug"] for p in row["projects"]}]
+                if project_row.slug in {p["slug"] for p in row["projects"]}]
     if severity:
         wanted = severity_vocab.canonical(severity)
         rows = [row for row in rows if row["severity"] == wanted]

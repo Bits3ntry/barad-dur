@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app import analysis, auth, models
+from backend.app import analysis, auth, models, projects as projects_ref
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
@@ -85,8 +85,7 @@ def list_runs(project: str | None = Query(default=None),
               session: Session = Depends(get_session)):
     query = session.query(models.AnalysisRun).filter_by(org_id=org.id)
     if project:
-        project_row = (session.query(models.Project)
-                       .filter_by(org_id=org.id, slug=project).one_or_none())
+        project_row = projects_ref.by_ref(session, org.id, project)
         if project_row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
         query = query.filter(models.AnalysisRun.project_id == project_row.id)
@@ -114,8 +113,7 @@ def record_run(payload: RunIn = None,
     if payload.source not in SOURCES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"source must be one of {sorted(SOURCES)}")
-    project_row = (session.query(models.Project)
-                   .filter_by(org_id=org.id, slug=payload.project).one_or_none())
+    project_row = projects_ref.by_ref(session, org.id, payload.project)
     if project_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     version_row = None
@@ -247,8 +245,7 @@ def import_report(payload: ImportIn = None,
         parsed = sast.parse_report(payload.format, payload.report or {})
     except ValueError as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(error)) from None
-    project_row = (session.query(models.Project)
-                   .filter_by(org_id=org.id, slug=payload.project).one_or_none())
+    project_row = projects_ref.by_ref(session, org.id, payload.project)
     if project_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     version_row = None

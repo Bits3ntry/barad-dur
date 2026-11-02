@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app import auth, models, scoping
+from backend.app import auth, models, projects as projects_ref, scoping
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
@@ -423,8 +423,7 @@ def decide_review(asset_id: str, payload: ReviewDecisionIn = None,
         asset.owner = payload.owner.strip()
         changes.append(f"owner={asset.owner}")
     if payload.project:
-        project_row = (session.query(models.Project)
-                       .filter_by(org_id=org.id, slug=payload.project).one_or_none())
+        project_row = projects_ref.by_ref(session, org.id, payload.project)
         if project_row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
         asset.project_id = project_row.id

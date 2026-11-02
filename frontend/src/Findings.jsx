@@ -189,7 +189,9 @@ export default function Findings({ projects }) {
     <div>
       <PageHeader
         title="Findings"
-        subtitle={`${state.total} ${state.total === 1 ? 'finding' : 'findings'} in scope`}
+        subtitle={state.error
+          ? 'not loaded — the server rejected the request'
+          : `${state.total} ${state.total === 1 ? 'finding' : 'findings'} in scope`}
         actions={<button onClick={() => setBump((n) => n + 1)}>refresh</button>}
       />
       <div className="toolbar" style={{ marginBottom: 12 }}>

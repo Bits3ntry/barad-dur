@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app import auth, models, severity as severity_vocab
+from backend.app import auth, models, projects as projects_ref, severity as severity_vocab
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
@@ -72,8 +72,7 @@ def _resolve_selection(session: Session, org: models.Organization,
             add("asset", asset.id, asset.value)
 
     for slug in selection.get("projects") or []:
-        project = (session.query(models.Project)
-                   .filter_by(org_id=org.id, slug=slug).one_or_none())
+        project = projects_ref.by_ref(session, org.id, slug)
         if project is None:
             gaps.append(f"project {slug} does not exist in this organization")
             continue
@@ -361,13 +360,56 @@ def link_findings(cycle_id: str, payload: LinkFindingsIn = None,
                             "activate the cycle before linking findings")
     linked, skipped = [], []
     candidates = set(payload.finding_ids)
+    memberships = (session.query(models.CycleMembership)
+                   .filter_by(cycle_id=cycle.id).all())
+    project_ids = {row.entity_id for row in memberships
+                   if row.entity_type == "project"}
+    frozen_assets = {row.entity_id for row in memberships
+                     if row.entity_type == "asset"}
+    frozen_deployments = {row.entity_id for row in memberships
+                          if row.entity_type == "deployment"}
+    # An environment/asset selection still implies the projects those resources
+    # belong to; otherwise auto-link would search an empty project set and link
+    # nothing at all.
+    for asset_id in frozen_assets:
+        asset = session.get(models.Asset, asset_id)
+        if asset is not None and asset.project_id:
+            project_ids.add(asset.project_id)
+    for deployment_id in frozen_deployments:
+        for link in (session.query(models.AssetLink)
+                     .filter_by(org_id=org.id, entity_type="deployment",
+                                entity_id=deployment_id, removed_at=None).all()):
+            asset = session.get(models.Asset, link.asset_id)
+            if asset is not None and asset.project_id:
+                project_ids.add(asset.project_id)
+    selection = cycle.selection or {}
+    # A project (or whole-org) selection is already the declared scope; assets
+    # frozen alongside it are convenience members, not a narrower filter. An
+    # asset/group/environment selection is narrower than the project and must be
+    # respected when auto-linking.
+    declared_projects = bool(selection.get("projects")) or bool(selection.get("whole_org"))
+    narrow = bool(frozen_assets or frozen_deployments) and not declared_projects
+    if not project_ids and not narrow:
+        # Nothing resolved: the cycle froze no project and no resource.
+        project_ids = set()
     if payload.auto:
-        project_ids = [row.entity_id for row in
-                       session.query(models.CycleMembership)
-                       .filter_by(cycle_id=cycle.id, entity_type="project").all()]
         for finding in (session.query(models.Finding)
                         .filter(models.Finding.org_id == org.id,
                                 models.Finding.project_id.in_(project_ids)).all()):
+            if narrow:
+                contexts = (session.query(models.FindingContext)
+                            .filter_by(finding_id=finding.id, removed_at=None).all())
+                in_scope = any(
+                    (row.entity_type == "asset" and row.entity_id in frozen_assets)
+                    or (row.entity_type == "deployment"
+                        and row.entity_id in frozen_deployments)
+                    for row in contexts)
+                if not in_scope:
+                    skipped.append({
+                        "finding_id": finding.id,
+                        "reason": ("the cycle froze specific assets or deployments and "
+                                   "this finding has no location among them")})
+                    continue
             candidates.add(finding.id)
     for finding_id in candidates:
         finding = session.get(models.Finding, finding_id)

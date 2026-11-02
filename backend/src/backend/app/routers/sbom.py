@@ -19,6 +19,7 @@ class ReceiptResponse(BaseModel):
     status: str
     import_id: str
     receipt: dict
+    artifact: dict | None = None
 
 
 @router.post("/sbom", response_model=ReceiptResponse)
@@ -28,6 +29,10 @@ def upload_sbom(
     version: str | None = Query(default=None, description="project version override"),
     source: str = Query(default="api"),
     filename: str | None = Query(default=None),
+    artifact_digest: str | None = Query(default=None, max_length=128,
+                                        description="digest of the exact build"),
+    artifact_name: str | None = Query(default=None, max_length=255),
+    artifact_provenance: str | None = Query(default=None, max_length=255),
     org: models.Organization = Depends(auth.require_org),
     session: Session = Depends(get_session),
 ):
@@ -49,10 +54,33 @@ def upload_sbom(
             project_override=project, version_override=version)
     except (ingest.SbomDocumentError, ValueError, json.JSONDecodeError) as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(error)) from None
+    receipt = session.get(models.SbomImport, result["import_id"])
+    version = session.get(models.ProjectVersion, receipt.project_version_id)
+    artifact = None
+    if artifact_digest:
+        artifact = (session.query(models.Artifact)
+                    .filter_by(org_id=org.id, digest=artifact_digest.strip()).one_or_none())
+        if artifact is None:
+            artifact = models.Artifact(
+                org_id=org.id, project_version_id=version.id,
+                name=(artifact_name or filename or f"build-{artifact_digest[:12]}"),
+                digest=artifact_digest.strip(), digest_algorithm="sha256",
+                provenance=artifact_provenance, source=source)
+            session.add(artifact)
+            session.flush()
+        if receipt.artifact_id is None:
+            receipt.artifact_id = artifact.id
+    if receipt.artifact_id:
+        artifact = session.get(models.Artifact, receipt.artifact_id)
     session.commit()
     status_code = 201 if result["status"] == "created" else 200
-    return JSONResponse(status_code=status_code, content=ReceiptResponse.model_validate(
-        result, from_attributes=True).model_dump())
+    payload = ReceiptResponse.model_validate(result, from_attributes=True).model_dump()
+    payload["artifact"] = ({"id": artifact.id, "name": artifact.name,
+                            "digest": artifact.digest,
+                            "provenance": artifact.provenance,
+                            "project_version_id": artifact.project_version_id}
+                           if artifact else None)
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 @router.get("/imports/{import_id}")

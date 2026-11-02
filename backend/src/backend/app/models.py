@@ -91,6 +91,9 @@ class SbomImport(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
     project_version_id: Mapped[str] = mapped_column(String(36), ForeignKey("project_versions.id"))
+    # The exact build this document describes, when the caller declares it.
+    artifact_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("artifacts.id"), nullable=True, index=True)
     content_sha256: Mapped[str] = mapped_column(String(64))
     source: Mapped[str] = mapped_column(String(32), default="api")
     filename: Mapped[str | None] = mapped_column(String(512), nullable=True)

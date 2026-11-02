@@ -350,9 +350,14 @@ def list_exposures(state_filter: str | None = Query(default=None, alias="state")
     rows = (query.order_by(models.ExposureEvent.state,
                            models.ExposureEvent.last_seen_at.desc()).all())
     data = [_event_data(row, session) for row in rows]
+    # Counts describe the organization's events, not the current filter; a tray
+    # that says "0 accepted" while one is accepted is a lie about the data.
+    everything = (session.query(models.ExposureEvent)
+                  .filter_by(org_id=org.id).all())
     return {"data": data, "total": len(data),
-            "counts": {state: sum(1 for row in data if row["state"] == state)
-                       for state in models.EXPOSURE_STATES}}
+            "counts": {state: sum(1 for row in everything if row.state == state)
+                       for state in models.EXPOSURE_STATES},
+            "total_events": len(everything)}
 
 
 @router.get("/exposures/summary/findings")

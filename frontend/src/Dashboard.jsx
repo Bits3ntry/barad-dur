@@ -5,6 +5,44 @@ import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Stat, Table,
 import { DonutChart, BarChart, LineChart } from './Charts'
 import ExposureFlow from './ExposureFlow'
 
+function V0Overview({ data, onNavigate }) {
+  if (!data) return null
+  const blocks = [
+    { key: 'assets', label: 'assets', value: data.assets.value, filters: 'archived excluded' },
+    { key: 'projects', label: 'projects', value: data.projects.value, filters: null },
+    { key: 'findings', label: 'open findings', value: data.findings.open,
+      filters: 'open + acknowledged' },
+    { key: 'vulnerabilities', label: 'CVEs affecting us', value: data.vulnerabilities.cves,
+      filters: `${data.vulnerabilities.kev} in KEV` },
+    { key: 'exposures', label: 'open exposures', value: data.exposures.open, filters: null },
+    { key: 'cycles', label: 'active cycles', value: data.cycles.active,
+      filters: `${data.cycles.in_review} in review` },
+    { key: 'my-work', label: 'acceptances ≤30d', value: data.expiries.acceptances_next_30d,
+      filters: null },
+    { key: 'attack-surface', label: 'changes 7d', value: data.recent_changes.last_7d,
+      filters: null },
+  ]
+  return (
+    <Card title="v0 counters" actions={
+      <span className="muted">as of {new Date(data.generated_at).toLocaleString()}</span>
+    }>
+      <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+        {blocks.map((block) => (
+          <button key={block.key} className="mini" title={block.filters || ''}
+            onClick={() => onNavigate && onNavigate(block.key)}>
+            {block.label}: <strong>{block.value}</strong>
+          </button>
+        ))}
+      </div>
+      <p className="muted" style={{ marginTop: 8 }}>
+        {data.coverage.note} · without owner: {data.coverage.assets_without_owner}
+        {' · '}without project: {data.coverage.assets_without_project}
+        {' · '}change coverage notes: {data.coverage.change_coverage_notes}
+      </p>
+    </Card>
+  )
+}
+
 export default function Dashboard({ projects, onNavigate }) {
   const [project, setProject] = useState('')
   const [version, setVersion] = useState('')
@@ -14,6 +52,7 @@ export default function Dashboard({ projects, onNavigate }) {
   const [series, setSeries] = useState({ findings: [], occurrences: [] })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [v0, setV0] = useState(null)
 
   useEffect(() => { load() }, [project, version])
 
@@ -23,6 +62,9 @@ export default function Dashboard({ projects, onNavigate }) {
     const params = new URLSearchParams()
     if (project) params.set('project', project)
     if (project && version) params.set('version', version)
+    api.get('/api/v1/dashboard/v0')
+      .then((r) => setV0(r.data))
+      .catch(() => setV0(null))
     api.get(`/api/v1/dashboard/summary${params.toString() ? '?' + params : ''}`)
       .then((r) => setSummary(r.data))
       .catch((e) => setError(String(e.message || e)))
@@ -110,6 +152,7 @@ export default function Dashboard({ projects, onNavigate }) {
   return (
     <div className="stack">
       {header}
+      <V0Overview data={v0} onNavigate={onNavigate} />
       {error && <ErrorBanner error={error} onRetry={load} />}
 
       {summary.findings.total === 0 && (summary.assets?.total ?? 0) === 0
