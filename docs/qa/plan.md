@@ -41,19 +41,11 @@ action. Any test that writes uses a throwaway database and says so in its report
 ## 4. Reproducible setup (the fast path)
 
 ```bash
-# 1. build the console once
-npm run build --prefix frontend
-
-# 2. a stack with a known dataset and an ID manifest
-python scripts/e2e_stack.py --port 8099 --seed
-#    prints: console URL, the API key, the demo user, and every created id
-
-# 3. the contract gate
-python scripts/qa_smoke.py --url http://127.0.0.1:8099 --key <key>
-#    64 checks · 0 failures expected (MFA check skips on an API key)
-
-# 4. the end-to-end assertions (no browser)
-python scripts/demo_v0.py
+npm run build --prefix frontend        # 1. console
+make qa-stack-seed                     # 2. known dataset + ID manifest
+make qa-smoke K=<printed key>          # 3. contract gate (64 checks)
+make qa-e2e                            # 4. end-to-end assertions
+make qa                                # tests + build + asserts, no browser
 ```
 
 `--seed` prints a manifest (`finding`, `cycle`, `artifact_v3`, …). Cases in
