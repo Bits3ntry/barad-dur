@@ -1267,3 +1267,17 @@ td .mono, .table-wrap td .mono { white-space: nowrap; }
 @media (max-width: 820px) {
   .topbar-search { display: none; }
 }
+
+/* The sidebar scrolls with the wheel, not with a visible bar: a rail at the
+   far left reads as a stray divider. The go-to box is centred on the content
+   column, so the three top-bar zones keep their optical balance. */
+.sidebar { scrollbar-width: none; }
+.sidebar::-webkit-scrollbar { width: 0; height: 0; }
+
+.topbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
+.topbar-left { justify-self: start; }
+.topbar-search { justify-self: center; }
+.topbar-actions { justify-self: end; }
+@media (max-width: 820px) {
+  .topbar { grid-template-columns: 1fr auto; }
+}
