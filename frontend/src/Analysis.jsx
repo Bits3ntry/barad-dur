@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import Highlight from './highlight'
 import {
   EmptyState, ErrorBanner, PageHeader, Select, SeverityBadge, Table, Tabs,
 } from './ui'
@@ -25,7 +26,7 @@ function Classification({ value }) {
   )
 }
 
-export default function Analysis({ projects }) {
+export default function Analysis({ projects, onOpenFinding, focusRun }) {
   const [project, setProject] = useState('')
   const [runs, setRuns] = useState([])
   const [run, setRun] = useState(null)
@@ -43,6 +44,39 @@ export default function Analysis({ projects }) {
   }, [projects])
 
   useEffect(() => { if (project) loadRuns() }, [project])
+
+  // Deep link from a finding: open that run, that file, and scroll to the line.
+  useEffect(() => {
+    if (!focusRun?.runId) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [{ data }, listing] = await Promise.all([
+          api.get(`/api/v1/analysis/runs/${focusRun.runId}`),
+          api.get(`/api/v1/analysis/runs/${focusRun.runId}/files`),
+        ])
+        if (cancelled) return
+        setRun(data)
+        setFiles(listing.data || [])
+        setContentAvailable(listing.content_available)
+        setTab('code')
+        const wanted = focusRun.path
+          || (listing.data || []).find((item) => item.available)?.path
+        if (wanted) {
+          await openFile(focusRun.runId, wanted)
+          if (focusRun.line) {
+            setTimeout(() => {
+              const el = document.getElementById(`L${focusRun.line}`)
+              if (el) el.scrollIntoView({ block: 'center' })
+            }, 80)
+          }
+        }
+      } catch (e) {
+        if (!cancelled) setError(String(e.message || e))
+      }
+    })()
+    return () => { cancelled = true }
+  }, [focusRun?.runId])
 
   function loadRuns() {
     api.get(`/api/v1/analysis/runs?project=${encodeURIComponent(project)}`)
@@ -125,7 +159,7 @@ export default function Analysis({ projects }) {
       {error && <ErrorBanner error={error} />}
 
       {runs.length ? (
-        <Table head={['when', 'tool', 'coverage', 'revision', 'findings', 'baseline', '']}>
+        <Table head={['when', 'tool', 'coverage', 'revision · branch', 'origin', 'findings', 'baseline', '']}>
           {runs.map((row) => (
             <tr key={row.id} className={run?.id === row.id ? 'selected' : ''}>
               <td className="muted">{new Date(row.created_at).toLocaleString()}</td>
@@ -141,7 +175,18 @@ export default function Analysis({ projects }) {
                   {row.coverage}
                 </span>
               </td>
-              <td className="mono muted">{row.revision ? row.revision.slice(0, 10) : '—'}</td>
+              <td className="mono muted">
+                {row.revision ? row.revision.slice(0, 10) : '—'}
+                <div style={{ fontSize: 11.5 }}>
+                  {row.branch || 'branch unknown'}
+                  {row.pull_request ? ` · PR ${row.pull_request}` : ''}
+                </div>
+              </td>
+              <td className="muted" style={{ fontSize: 12 }}>
+                {row.repository
+                  ? <span title={row.repository.remote_url || ''}>{row.repository.name}</span>
+                  : 'no repository'}
+              </td>
               <td>{row.findings_seen}</td>
               <td className="muted">
                 {row.base_run_id ? 'comparable base' : 'no reference'}
@@ -205,10 +250,12 @@ export default function Analysis({ projects }) {
                         const lineNumber = index + 1
                         const hit = flagged.get(lineNumber)
                         return (
-                          <div key={lineNumber}
+                          <div key={lineNumber} id={`L${lineNumber}`}
                             className={`code-line${hit ? ' code-hit' : ''}`}>
                             <span className="code-num">{lineNumber}</span>
-                            <span className="code-text">{text || ' '}</span>
+                            <span className="code-text">
+                              <Highlight code={text} path={path} />
+                            </span>
                             {hit && (
                               <span className="muted" style={{ fontSize: 11.5 }}>
                                 {hit.rule_id} · {hit.cwe || 'no CWE'} · {hit.message}
@@ -263,10 +310,11 @@ export default function Analysis({ projects }) {
                           <div className="occ-row">
                             <span className="muted">findings in this file: </span>
                             {entry.findings.map((finding) => (
-                              <span key={finding.id} className="pill">
+                              <button key={finding.id} className="pill"
+                                onClick={() => finding.finding_id && onOpenFinding?.(finding.finding_id)}>
                                 {finding.line}: {finding.rule_id}
                                 {finding.on_modified_line ? ' (on a changed line)' : ''}
-                              </span>
+                              </button>
                             ))}
                           </div>
                         )}
@@ -283,7 +331,7 @@ export default function Analysis({ projects }) {
 
           {tab === 'findings' && (
             findings.length ? (
-              <Table head={['file', 'line', 'rule', 'severity', 'cwe', 'class', 'modified line']}>
+              <Table head={['file', 'line', 'rule', 'severity', 'cwe', 'class', 'modified line', '']}>
                 {findings.map((item) => (
                   <tr key={item.id}>
                     <td className="mono">{item.path}</td>
@@ -295,6 +343,13 @@ export default function Analysis({ projects }) {
                     <td className="muted">
                       {item.on_modified_line ? 'yes' : 'no'}
                       {item.introduced_by_pr && ' · introduced by this change'}
+                    </td>
+                    <td>
+                      {item.finding_id && onOpenFinding && (
+                        <button className="mini" onClick={() => onOpenFinding(item.finding_id)}>
+                          open finding
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

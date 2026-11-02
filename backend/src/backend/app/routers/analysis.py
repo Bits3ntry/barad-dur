@@ -29,6 +29,8 @@ class RunIn(BaseModel):
     source: str = "import"
     revision: str | None = Field(default=None, max_length=128)
     branch: str | None = Field(default=None, max_length=255)
+    repository_id: str | None = Field(default=None, max_length=36)
+    pull_request: str | None = Field(default=None, max_length=64)
     base_revision: str | None = Field(default=None, max_length=128)
     evaluated: dict = Field(default_factory=dict)
     receipt: dict = Field(default_factory=dict)
@@ -54,6 +56,30 @@ def _parse_ts(value: str | None, name: str) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _repository_data(session: Session, repository_id: str | None) -> dict | None:
+    if not repository_id:
+        return None
+    row = session.get(models.Repository, repository_id)
+    if row is None:
+        return None
+    return {"id": row.id, "name": row.name, "provider": row.provider,
+            "remote_url": row.remote_url}
+
+
+def _resolve_repository(session: Session, org_id: str, ref: str | None) -> str | None:
+    """Accept a repository id or its remote URL; anything else is a 404."""
+    if not ref:
+        return None
+    row = session.get(models.Repository, ref)
+    if row is None:
+        row = (session.query(models.Repository)
+               .filter_by(org_id=org_id, remote_url=ref).one_or_none())
+    if row is None or row.org_id != org_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "repository not found in this organization")
+    return row.id
+
+
 def _data(session: Session, run: models.AnalysisRun) -> dict:
     project = session.get(models.Project, run.project_id)
     version = (session.get(models.ProjectVersion, run.project_version_id)
@@ -64,6 +90,8 @@ def _data(session: Session, run: models.AnalysisRun) -> dict:
         "tool": run.tool, "tool_version": run.tool_version,
         "coverage": run.coverage, "closure_eligible": run.coverage in analysis.CLOSABLE_COVERAGES,
         "source": run.source, "revision": run.revision, "branch": run.branch,
+        "repository": _repository_data(session, run.repository_id),
+        "pull_request": run.pull_request,
         "base_revision": run.base_revision,
         "evaluated": run.evaluated or {}, "receipt": run.receipt or {},
         "base_run_id": run.base_run_id, "report_format": run.report_format,
@@ -116,6 +144,7 @@ def record_run(payload: RunIn = None,
     project_row = projects_ref.by_ref(session, org.id, payload.project)
     if project_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    repository_id = _resolve_repository(session, org.id, payload.repository_id)
     version_row = None
     if payload.version:
         version_row = (session.query(models.ProjectVersion)
@@ -129,6 +158,7 @@ def record_run(payload: RunIn = None,
         tool=payload.tool, tool_version=payload.tool_version,
         coverage=payload.coverage, source=payload.source,
         revision=payload.revision, branch=payload.branch,
+        repository_id=repository_id, pull_request=payload.pull_request,
         base_revision=payload.base_revision,
         evaluated=payload.evaluated or {}, receipt=payload.receipt or {},
         findings_seen=payload.findings_seen, actor=payload.actor,
@@ -206,6 +236,8 @@ class ImportIn(BaseModel):
     tool_version: str | None = Field(default=None, max_length=64)
     revision: str | None = Field(default=None, max_length=128)
     branch: str | None = Field(default=None, max_length=255)
+    repository_id: str | None = Field(default=None, max_length=36)
+    pull_request: str | None = Field(default=None, max_length=64)
     base_revision: str | None = Field(default=None, max_length=128)
     base_run_id: str | None = Field(default=None, max_length=36)
     source: str = "import"
@@ -277,6 +309,7 @@ def import_report(payload: ImportIn = None,
                     .filter_by(run_id=base.id).all()):
             base_keys[(row.rule_id, row.path)] = row
 
+    repository_id = _resolve_repository(session, org.id, payload.repository_id)
     diff = sast.parse_diff(payload.diff) if payload.diff else {"files": {}}
     run = models.AnalysisRun(
         org_id=org.id, project_id=project_row.id,
@@ -284,6 +317,7 @@ def import_report(payload: ImportIn = None,
         tool=tool, tool_version=payload.tool_version or parsed["tool_version"],
         coverage=payload.coverage, source=payload.source,
         revision=payload.revision, branch=payload.branch,
+        repository_id=repository_id, pull_request=payload.pull_request,
         base_revision=payload.base_revision,
         base_run_id=base.id if base else None,
         report_format=parsed["format"], rules=parsed["rules"],
@@ -364,6 +398,9 @@ def import_report(payload: ImportIn = None,
             classification=classification, on_modified_line=on_modified,
             introduced_by_pr=bool(comparable and classification == "new" and on_modified),
             source_sink=item.get("source_sink") or {}))
+        # "Last evaluated by" is what lets a reviewer jump from the finding back
+        # to this run; it is stamped even when the finding already existed.
+        finding.last_evaluated_run_id = run.id
         counters[classification] += 1
         if on_modified:
             counters["on_modified_line"] += 1

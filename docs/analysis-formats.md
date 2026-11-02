@@ -93,3 +93,22 @@ whose tool matches and whose path was inside `evaluated.paths`.
 - No execution of OpenGrep or any scanner; imports only.
 - No automatic GitHub PR comments, no PR blocking.
 - No source→sink analysis beyond what the report already carries.
+
+
+## Run identity and navigation
+
+Every run records what it analysed, not just what it found:
+
+| Field | Where it comes from |
+|---|---|
+| `repository_id` | the repository id or its remote URL; anything outside the caller's organization is a 404 |
+| `revision` / `base_revision` | the commit the report was produced on / against |
+| `branch` | branch name when the report carries one |
+| `pull_request` | PR number or reference when the run belongs to one |
+| `coverage` | `full`, `diff`, `partial`; only `full` can close findings |
+
+The console links both ways: `#analysis::run=<id>&path=…&line=…` opens the run,
+the file and the line, and `#findings::<finding id>` opens the finding whose
+drawer shows the run that last evaluated it. A finding is stamped with
+`last_evaluated_run_id` on every import that matches it, not only when a run
+closes it.

@@ -242,3 +242,34 @@ def test_viewer_is_isolated_and_validates(seeded):
     unknown_project = test_client.post("/api/v1/analysis/import", json={
         "project": "nope", "format": "sarif", "report": SARIF}, headers=headers)
     assert unknown_project.status_code == 404
+
+
+def test_a_run_records_repository_and_pull_request(seeded):
+    test_client, headers, _other = seeded
+    repo = test_client.post("/api/v1/repositories", json={
+        "remote_url": "https://github.com/bitsentry/aurea",
+        "name": "aurea", "provider": "github"}, headers=headers).json()["data"]["id"]
+    run = _import(test_client, headers, repository_id=repo, pull_request="77")
+    assert run["repository"]["id"] == repo
+    assert run["pull_request"] == "77"
+    assert run["branch"] == "main"
+
+    # The finding knows which run last evaluated it, so the viewer and the
+    # finding can link to each other.
+    rows = test_client.get(f"/api/v1/analysis/runs/{run['id']}/findings",
+                           headers=headers).json()["data"]
+    finding_id = rows[0]["finding_id"]
+    detail = test_client.get(f"/api/v1/findings/{finding_id}",
+                             headers=headers).json()["data"]
+    assert detail["analysis_run"]["id"] == run["id"]
+    assert detail["analysis_run"]["pull_request"] == "77"
+    assert detail["analysis_run"]["revision"] == "deadbeef"
+
+
+def test_an_unknown_repository_is_rejected(seeded):
+    test_client, headers, _other = seeded
+    response = test_client.post("/api/v1/analysis/import", json={
+        "project": "aurea", "version": "v3", "format": "sarif",
+        "report": SARIF, "coverage": "full", "repository_id": "does-not-exist",
+        "actor": "tester"}, headers=headers)
+    assert response.status_code == 404

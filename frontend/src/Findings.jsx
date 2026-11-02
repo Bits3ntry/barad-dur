@@ -41,7 +41,7 @@ function slaCell(deadline) {
   return <span className={cls}>{days < 0 ? `${-days}d overdue` : `${days}d left`}</span>
 }
 
-export default function Findings({ projects }) {
+export default function Findings({ projects, focusId, onOpenAnalysis }) {
   const [state, setState] = useState({
     rows: [], total: 0, error: '', loading: false,
     project: '', version: '', includeSuppressed: false, kind: '',
@@ -56,6 +56,14 @@ export default function Findings({ projects }) {
   })
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
+
+  // Deep link from the analysis viewer (#findings::<id>): open that drawer once
+  // the row exists in the list.
+  useEffect(() => {
+    if (!focusId || !state.rows.length) return
+    const row = state.rows.find((item) => item.id === focusId)
+    if (row && state.detail?.id !== focusId) openDetail(row)
+  }, [focusId, state.rows.length])
 
   useEffect(() => {
     if (!projects.length) return
@@ -356,6 +364,23 @@ export default function Findings({ projects }) {
                               <button className="mini btn-danger" onClick={() => dispose('resolved')}>mark resolved</button>
                               <button className="mini btn-danger" onClick={() => dispose('acknowledged')}>acknowledge</button>
                             </div>
+                          )}
+                          {state.detail.analysis_run && (
+                            <p className="muted" style={{ marginTop: 8 }}>
+                              last evaluated by {state.detail.analysis_run.tool}{' '}
+                              {state.detail.analysis_run.revision
+                                ? `@ ${state.detail.analysis_run.revision.slice(0, 10)}` : ''}
+                              {state.detail.analysis_run.branch
+                                ? ` on ${state.detail.analysis_run.branch}` : ''}
+                              {state.detail.analysis_run.pull_request
+                                ? ` · PR ${state.detail.analysis_run.pull_request}` : ''}
+                              {' '}
+                              <button className="mini" onClick={() => onOpenAnalysis?.({
+                                runId: state.detail.analysis_run.id,
+                                path: state.detail.path,
+                                line: state.detail.line,
+                              })}>open in analysis</button>
+                            </p>
                           )}
                           {activeTab === 'related' && (
                             <div className="detail">

@@ -112,6 +112,10 @@ def get_finding(finding_id: str,
         if finding.component_id else None
     vulnerability = session.get(models.Vulnerability, finding.vulnerability_id) \
         if finding.vulnerability_id else None
+    # The run that last evaluated this finding is where a reviewer goes to see
+    # the code and the diff; without it the viewer is a dead end.
+    run = (session.get(models.AnalysisRun, finding.last_evaluated_run_id)
+           if finding.last_evaluated_run_id else None)
     return {"data": {
         "id": finding.id, "kind": finding.kind, "status": finding.status,
         "status_reason": finding.status_reason, "severity": finding.severity,
@@ -132,6 +136,11 @@ def get_finding(finding_id: str,
         "source_id": vulnerability.source_id if vulnerability else None,
         "cve_id": vulnerability.cve_id if vulnerability else None,
         "source_url": vulnerability.url if vulnerability else None,
+        "analysis_run": ({
+            "id": run.id, "revision": run.revision, "branch": run.branch,
+            "pull_request": run.pull_request, "tool": run.tool,
+            "coverage": run.coverage,
+        } if run else None),
     }}
 
 

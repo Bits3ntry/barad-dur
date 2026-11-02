@@ -10,9 +10,9 @@ implemented below.
 
 | Check | Result |
 |---|---|
-| `pytest -q` (backend) | **261 passed** |
-| `alembic upgrade head` on a throwaway PostgreSQL DB | 0031 → **0040** |
-| `alembic downgrade -1` / `upgrade head` for 0040 | clean, `sbom_imports.artifact_id` recreated with FK + index |
+| `pytest -q` (backend) | **263 passed** |
+| `alembic upgrade head` on a throwaway PostgreSQL DB | 0031 → **0041** |
+| `alembic downgrade -1` / `upgrade head` for 0040 and 0041 | clean; `sbom_imports.artifact_id` and `analysis_runs.repository_id/pull_request` recreated with their FKs and index |
 | `npm run build` (console) | passes |
 | `scripts/demo_v0.py` on an isolated SQLite stack | 25 assertions, all green |
 | Browser walkthrough of that stack (`--serve`) | see "Acceptance walkthrough" |
@@ -33,6 +33,7 @@ live schema.
 | 0038_web_and_lookalikes | web endpoints, lookalike domains |
 | 0039_cycles_and_work | cycles, frozen memberships, cycle findings, work items |
 | 0040_sbom_artifact | `sbom_imports.artifact_id` — a receipt can name the build it describes |
+| 0041_analysis_origin | `analysis_runs.repository_id` + `pull_request` — which remote and PR a report came from |
 
 `0032_refresh_tokens` was already in the worktree and is the parent of 0033; its
 code half remains out of these commits (see "Honest limits").
@@ -58,7 +59,8 @@ code half remains out of these commits (see "Honest limits").
 | §8 Exposures: decisions with reason and validity, stable identity, reopen policy | `routers/exposures.py`, tests |
 | §9 SBOM landing: CycloneDX + SPDX, hash/receipt, per-version usage, direct/transitive, licenses | `routers/sbom.py`, `components` screens, tests |
 | §9/§3 artifact chain: version → artifact → SBOM → deployment, "in production" read from deployments | `routers/artifacts.py`, `test_artifact_sbom_deployment_chain` |
-| §10 SAST: SARIF + OpenGrep, snapshots, diff, viewer, classification only against a comparable base | `sast.py`, `routers/analysis.py`, `Analysis.jsx`, `docs/analysis-formats.md`, tests |
+| §10 SAST: SARIF + OpenGrep, snapshots, diff, viewer with syntax colour, repository + revision + branch + PR on every run, classification only against a comparable base | `sast.py`, `routers/analysis.py`, `Analysis.jsx`, `highlight.jsx`, `docs/analysis-formats.md`, tests |
+| §10 navigation: result → finding → same run and line | `#findings::<id>` and `#analysis::run=<id>&path=…&line=…`; the finding shows the run that last evaluated it and the viewer links back |
 | §12 isolation and audit on every new surface | org checks in every route, `_audit` on mutations, isolation tests per slice |
 | §14 steps 1–13 | `backend/tests/test_v0_acceptance.py` + `scripts/demo_v0.py` (steps 1–13, including the cross-organization check) |
 
@@ -81,7 +83,7 @@ code half remains out of these commits (see "Honest limits").
 | Area | What exists | What is missing |
 |---|---|---|
 | §2/§9 Components and artifacts in the console | SBOM import, component catalog, usage, licenses, `GET /artifacts/{id}` with the full chain | No artifact screen and no deep link from a component to the artifact/deployment that uses it; the chain is API + tests only |
-| §10 viewer navigation | Rule → finding → line works inside the viewer; findings carry `analysis_run_id` | Deep links from a Finding drawer or a repository/project screen into the run are not rendered yet |
+| §10 repository/project screen links | The finding drawer links to the run and line; project/repository screens do not link into the viewer yet | A project-level "recent analyses" list |
 | §10 source→sink traces | `codeFlows` count is kept and displayed as a count | No trace rendering: scanners rarely supply enough data and inventing impact is forbidden by the spec |
 | §11 connector contract | Repositories, Jira links/outbox, notification channels, manual references | Capability-shaped connector contract + health check; "connected" is never claimed without a probe (v0 scope was manual references) |
 | §14 weekly summary | `GET /attack-surface/summary` + recipients config | Scheduled delivery: `delivery.configured=false`, no scheduler/channel in this delivery |

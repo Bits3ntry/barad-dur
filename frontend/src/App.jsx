@@ -107,14 +107,27 @@ const NAV_ITEMS = NAV.flatMap((entry) => [
 ])
 const ALL_KEYS = [...NAV_ITEMS.map((item) => item.key), ...Object.keys(LEGACY_KEYS)]
 
-function tabFromHash() {
-  const requested = (window.location.hash || '').replace('#', '')
-  if (LEGACY_KEYS[requested]) return LEGACY_KEYS[requested]
-  return ALL_KEYS.includes(requested) ? requested : 'dashboard'
+/* The hash carries an optional focus so one screen can hand a record to
+   another: #findings::<finding id> and #analysis::run=<run>&path=…&line=… */
+function parseHash() {
+  const raw = (window.location.hash || '').replace('#', '')
+  const [key, ...rest] = raw.split('::')
+  const tail = rest.join('::')
+  const tab = LEGACY_KEYS[key] || (ALL_KEYS.includes(key) ? key : 'dashboard')
+  const focus = {}
+  if (tab === 'findings' && tail) focus.findingId = tail
+  if (tab === 'analysis' && tail) {
+    const params = new URLSearchParams(tail)
+    focus.runId = params.get('run') || undefined
+    focus.path = params.get('path') || undefined
+    focus.line = params.get('line') ? Number(params.get('line')) : undefined
+  }
+  return { tab, focus }
 }
 
 export default function App() {
-  const [tab, setTab] = useState(tabFromHash)
+  const [tab, setTab] = useState(() => parseHash().tab)
+  const [focus, setFocus] = useState(() => parseHash().focus)
   const [projects, setProjects] = useState([])
   const [projectsError, setProjectsError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -151,7 +164,11 @@ export default function App() {
   }, [needsKey])
 
   useEffect(() => {
-    const onHash = () => setTab(tabFromHash())
+    const onHash = () => {
+      const next = parseHash()
+      setTab(next.tab)
+      setFocus(next.focus)
+    }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
@@ -199,6 +216,7 @@ export default function App() {
 
   const go = (key) => {
     setTab(key)
+    setFocus({})
     window.location.hash = key
   }
 
@@ -227,7 +245,15 @@ export default function App() {
       case 'priority-rules': return <Lifecycle initialTab="rules" />
       case 'business-impact': return <BusinessImpact onNavigate={go} />
       case 'projects': return <Projects onNavigate={go} />
-      case 'findings': return <Findings projects={projects} />
+      case 'findings': return (
+        <Findings projects={projects} focusId={focus.findingId}
+          onOpenAnalysis={(target) => {
+            const params = new URLSearchParams({ run: target.runId })
+            if (target.path) params.set('path', target.path)
+            if (target.line) params.set('line', String(target.line))
+            window.location.hash = `analysis::${params.toString()}`
+          }} />
+      )
       case 'code': return <CodeReview projects={projects} />
       case 'gates': return <Gates projects={projects} />
       case 'licenses': return <Licenses projects={projects} />
@@ -242,7 +268,10 @@ export default function App() {
       case 'assets': return <Assets />
       case 'scope': return <Scope />
       case 'vulnerabilities': return <Vulnerabilities onNavigate={go} />
-      case 'analysis': return <Analysis projects={projects} />
+      case 'analysis': return (
+        <Analysis projects={projects} focusRun={focus}
+          onOpenFinding={(findingId) => { window.location.hash = `findings::${findingId}` }} />
+      )
       case 'exposures': return <Exposures />
       case 'attack-surface': return <AttackSurface />
       case 'cycles': return <Cycles />
@@ -363,7 +392,6 @@ export default function App() {
             </button>
             <button className="btn-ghost mini" onClick={async () => {
               if (session.token) { try { await api.post('/api/v1/auth/logout', {}) } catch { /* session may be gone */ } }
-              api.save({ url: api.settings().url || '', key: '', token: '' })
               setSession(api.settings())
             }}>sign out</button>
           </div>

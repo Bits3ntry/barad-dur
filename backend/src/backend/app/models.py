@@ -1583,6 +1583,11 @@ class AnalysisRun(Base):
     revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     base_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Which remote this code came from, and the pull request when the report was
+    # produced for one: the pair a reviewer needs to reopen the same diff.
+    repository_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("repositories.id"), nullable=True, index=True)
+    pull_request: Mapped[str | None] = mapped_column(String(64), nullable=True)
     evaluated: Mapped[dict] = mapped_column(JSON, default=dict)
     receipt: Mapped[dict] = mapped_column(JSON, default=dict)
     findings_seen: Mapped[int] = mapped_column(Integer, default=0)
