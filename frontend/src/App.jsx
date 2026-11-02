@@ -23,6 +23,7 @@ import CtemCycle from './CtemCycle'
 import Scope from './Scope'
 import Vulnerabilities from './Vulnerabilities'
 import Analysis from './Analysis'
+import Exposures from './Exposures'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
 import { Modal } from './ui'
@@ -48,11 +49,14 @@ const NAV = [
   { group: 'Code security', collapsible: true, defaultOpen: true, items: [
     { key: 'analysis', label: 'Code analysis' },
   ] },
-  { group: 'Work', collapsible: true, defaultOpen: true, items: [
+  { group: 'General', collapsible: true, defaultOpen: true, items: [
     { key: 'findings', label: 'Findings', badge: 'critical' },
     { key: 'vulnerabilities', label: 'Vulnerabilities' },
     { key: 'projects', label: 'Projects' },
+  ] },
+  { group: 'Discovery', collapsible: true, defaultOpen: true, items: [
     { key: 'assets', label: 'Assets' },
+    { key: 'exposures', label: 'Exposures' },
     { key: 'components', label: 'Components' },
   ] },
   { group: 'Delivery', collapsible: true, items: [
@@ -195,6 +199,7 @@ export default function App() {
       case 'scope': return <Scope />
       case 'vulnerabilities': return <Vulnerabilities onNavigate={go} />
       case 'analysis': return <Analysis projects={projects} />
+      case 'exposures': return <Exposures />
       case 'components': return <Components projects={projects} onChanged={loadProjects} />
       case 'pipelines': return <Pipelines />
       case 'notifications': return <Notifications />

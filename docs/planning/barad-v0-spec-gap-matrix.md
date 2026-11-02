@@ -339,3 +339,32 @@ resolved, base tool/version mismatch 409, isolation + validation); migrations
 Still missing for §10: source→sink traces (kept only as a count), analysis
 history screen per repository/project from Components/Assets (deep links land
 with the nav restructure), PR intake from a connected provider (post-v0).
+
+### Slice F (part 1) — observations, changes, exposures (2026-11-02)
+
+Landed (migration `0037_attack_surface`): `observations` (kind, subject, port,
+value, source, **coverage**), `exposure_events` with a stable identity and an
+explicit reopen policy, `exposure_decisions` as history.
+`POST /observations` imports observations, derives changes and manages events;
+`GET /attack-surface/changes` derives the chronology on read; `GET
+/exposures`, detail with decision history, `POST /exposures/{id}/decide`;
+`GET /exposures/summary/findings` returns secrets/code-weaknesses/
+misconfigurations/vulnerabilities as filtered summaries over the same findings.
+Console: **Exposures** under a new *Discovery* group, with Overview, Changes and
+the four summaries.
+
+Honesty rules pinned by tests: changes require equal **full** coverage (a failed
+collection yields a coverage note, never `closed_port`/`host_disappeared`); the
+same condition observed again bumps `occurrences` instead of creating a second
+event; accept requires a reason and a future validity; a resolved event reopens
+on a new observation under `on_new_observation`, while an accepted one holds
+until its window expires.
+
+Verification: `pytest` 245 passed (4 new cases); migrations `upgrade → downgrade
+0037 → upgrade` on a throwaway PostgreSQL database; `npm run build` passes the
+UI import guard.
+
+**Still missing in slice F**: Web surface (paths/origins, excluded-as-unevaluated),
+Lookalikes (watch roots, candidates, review states, passive-only), Review queue
+(ownership confirmation, external/discard), the weekly summary query, and the
+lookalike/web-surface importers. Declared pending, not claimed.

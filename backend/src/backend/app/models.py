@@ -1650,3 +1650,84 @@ class AnalysisFinding(Base):
     introduced_by_pr: Mapped[bool] = mapped_column(Boolean, default=False)
     source_sink: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── v0 attack surface: observations, changes, exposures ───────────────
+#
+# An observation is "what a collector or importer saw at a moment", with the
+# coverage it had. A change is a comparison between two observations of equal
+# coverage: a failed collection never becomes "port closed" or "host gone".
+# An exposure event is the condition someone has to decide about; it has a
+# stable identity so repeated observations do not duplicate it.
+
+OBSERVATION_KINDS = {"host", "port", "dns", "certificate", "technology", "web_path"}
+OBSERVATION_COVERAGES = {"full", "partial", "failed"}
+EXPOSURE_STATES = {"open", "accepted", "resolved", "false_positive"}
+REOPEN_POLICIES = {"on_new_observation", "manual"}
+
+
+class Observation(Base):
+    __tablename__ = "observations"
+    __table_args__ = (
+        Index("ix_observations_asset_kind", "asset_id", "kind", "observed_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    asset_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("assets.id"), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    subject: Mapped[str] = mapped_column(String(1024))
+    port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    protocol: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    source: Mapped[str] = mapped_column(String(64), default="import")
+    coverage: Mapped[str] = mapped_column(String(16), default="full")
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ExposureEvent(Base, TimestampMixin):
+    """A condition that needs a decision, deduped by a stable identity."""
+
+    __tablename__ = "exposure_events"
+    __table_args__ = (UniqueConstraint("org_id", "stable_key", name="uq_exposure_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    asset_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("assets.id"), nullable=True, index=True)
+    stable_key: Mapped[str] = mapped_column(String(255))
+    kind: Mapped[str] = mapped_column(String(24), index=True)
+    title: Mapped[str] = mapped_column(String(512))
+    severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    state: Mapped[str] = mapped_column(String(24), default="open", index=True)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    accepted_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    reopen_policy: Mapped[str] = mapped_column(String(32), default="on_new_observation")
+    occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ExposureDecision(Base):
+    __tablename__ = "exposure_decisions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    event_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("exposure_events.id", ondelete="CASCADE"), index=True)
+    action: Mapped[str] = mapped_column(String(24))
+    from_state: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    to_state: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
