@@ -489,8 +489,13 @@ class CiRunFinding(Base, TimestampMixin):
 
 
 class ScopeTarget(Base, TimestampMixin):
-    """What the organization may audit or analyze: static positive list."""
+    """What the organization may audit or analyze: static positive list.
 
+    A target is a *declaration*, not a running job: `capabilities` records what
+    this row may later permit, and `scan_grants` remain the thing a collector
+    checks before touching anything. Wildcards are rules — they never create a
+    host; a concrete target links the canonical asset with source `scope`.
+    """
 
     __tablename__ = "scope_targets"
     __table_args__ = (
@@ -503,12 +508,29 @@ class ScopeTarget(Base, TimestampMixin):
     value: Mapped[str] = mapped_column(String(1024))
     status: Mapped[str] = mapped_column(String(32), default="active")
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(32), default="manual")
+    valid_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    restrictions: Mapped[list] = mapped_column(JSON, default=list)
+    capabilities: Mapped[list] = mapped_column(JSON, default=list)
+    include_apex: Mapped[bool] = mapped_column(Boolean, default=False)
+    asset_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("assets.id"), nullable=True, index=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ScopeExclusion(Base, TimestampMixin):
-    """Negative scope entries; resolved view subtracts these from targets."""
+    """Negative scope entries; resolved view subtracts these from targets.
+
+    An effective exclusion always wins, including over a wildcard target that
+    covers it. Excluding a resource never deletes its inventory and never
+    resolves its findings.
+    """
 
     __tablename__ = "scope_exclusions"
     __table_args__ = (
@@ -520,6 +542,11 @@ class ScopeExclusion(Base, TimestampMixin):
     target_type: Mapped[str] = mapped_column(String(32))
     value: Mapped[str] = mapped_column(String(1024))
     reason: Mapped[str] = mapped_column(Text)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), default="manual")
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

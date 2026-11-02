@@ -20,6 +20,7 @@ import Settings from './Settings'
 import Setup from './Setup'
 import Projects from './Projects'
 import CtemCycle from './CtemCycle'
+import Scope from './Scope'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
 import { Modal } from './ui'
@@ -38,6 +39,9 @@ const NAV = [
     { key: 'prioritization', label: 'Prioritization' },
     { key: 'validation', label: 'Validation' },
     { key: 'mobilization', label: 'Mobilization', badge: 'sla' },
+  ] },
+  { group: 'Scoping', collapsible: true, defaultOpen: true, items: [
+    { key: 'scope', label: 'Scope' },
   ] },
   { group: 'Work', collapsible: true, defaultOpen: true, items: [
     { key: 'findings', label: 'Findings', badge: 'critical' },
@@ -182,6 +186,7 @@ export default function App() {
       case 'remediation': return <Lifecycle />
       case 'members': return <Members />
       case 'assets': return <Assets />
+      case 'scope': return <Scope />
       case 'components': return <Components projects={projects} onChanged={loadProjects} />
       case 'pipelines': return <Pipelines />
       case 'notifications': return <Notifications />

@@ -259,3 +259,23 @@ throwaway PostgreSQL database; `npm run build` passes the UI import guard.
 Not deployed: the image was not rebuilt, because the worktree also carries the
 unfinished refresh-token work (`0032` is committed here only as the migration
 parent of `0033`; its code half stays uncommitted).
+
+### Slice C — Scope (2026-11-02)
+
+Landed (migration `0034_scope_targets`, engine in `backend/app/scoping.py`,
+console screen `Scope.jsx` under a new **Scoping** nav group):
+
+| Piece | Evidence | Still missing |
+|---|---|---|
+| Normalization + matching engine | `scoping.py`: types, wildcard depth/apex, URL scheme+host+port+path-prefix, IP/CIDR containment, capability defaults | No IPv6 UI hint, no port-range rules. |
+| Declared fields | `scope_targets.reason/owner/source/valid_from/valid_until/restrictions/capabilities/include_apex/asset_id`, `scope_exclusions.owner/status/expires_at` | Restrictions are stored, not enforced by any collector. |
+| Decisions without side effects | `POST /scope/check` returns allowed/denied with the matching rule or the exclusion that won | No batch check across a group. |
+| Exclusions prevail | Engine evaluates exclusions first; patterns cover concrete targets; expired exclusions stop applying | No exclusion templates or approval workflow. |
+| Scope → inventory link | Concrete targets create/link the canonical asset with `source=scope`; patterns create nothing | No unlink action; asset screen does not yet show "declared in scope". |
+| Validity, disable, audit | `PATCH /scope/targets/{id}`, `DELETE` disables by default (`hard=true` explicit), every mutation audited | No scheduled expiry job (state is computed per read). |
+| Console | `Scope.jsx`: targets, exclusions, check panel, declare/exclude dialogs | Cycle selection still uses `ctem` counts only. |
+
+Semantics are documented in `docs/architecture/scope-semantics.md` and pinned by
+`backend/tests/test_v0_scope.py` (7 cases). Verification: `pytest` 226 passed;
+`alembic upgrade head`, `downgrade 0034`, `upgrade head` all applied on a
+throwaway PostgreSQL database; `npm run build` passes the UI import guard.
