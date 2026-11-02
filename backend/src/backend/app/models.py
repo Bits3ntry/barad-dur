@@ -198,6 +198,9 @@ class Finding(Base, TimestampMixin):
     impact: Mapped[str | None] = mapped_column(Text, nullable=True)
     recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
     reproduction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Last run that actually evaluated this finding; closure requires it.
+    last_evaluated_run_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1544,4 +1547,45 @@ class FindingAttachment(Base):
     content: Mapped[str] = mapped_column(Text)
     redaction_state: Mapped[str] = mapped_column(String(24), default="unreviewed")
     added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── v0 analysis coverage ───────────────
+#
+# "Not seen by a scan" only means "fixed" when the scan actually covered the
+# thing. Runs record what they evaluated; closure is a separate, explicit step
+# that refuses to act on diff/partial coverage.
+
+ANALYSIS_COVERAGES = {"full", "diff", "partial", "unknown"}
+CLOSABLE_COVERAGES = {"full"}
+
+
+class AnalysisRun(Base):
+    """One import/scan: tool, revision, coverage and what it evaluated."""
+
+    __tablename__ = "analysis_runs"
+    __table_args__ = (
+        Index("ix_analysis_runs_project", "project_id", "project_version_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"))
+    project_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_versions.id"), nullable=True)
+    tool: Mapped[str] = mapped_column(String(64))
+    tool_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    coverage: Mapped[str] = mapped_column(String(16), default="unknown")
+    source: Mapped[str] = mapped_column(String(32), default="import")
+    revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    base_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    evaluated: Mapped[dict] = mapped_column(JSON, default=dict)
+    receipt: Mapped[dict] = mapped_column(JSON, default=dict)
+    findings_seen: Mapped[int] = mapped_column(Integer, default=0)
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

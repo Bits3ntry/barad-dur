@@ -45,7 +45,7 @@ export default function Findings({ projects }) {
   const [state, setState] = useState({
     rows: [], total: 0, error: '', loading: false,
     project: '', version: '', includeSuppressed: false, kind: '',
-    detail: null,
+    detail: null, history: [], assignee: '',
   })
   const [bump, setBump] = useState(0)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -104,7 +104,23 @@ export default function Findings({ projects }) {
         enriched.occurrences =
           (await api.get(`/api/v1/findings/${finding.id}/occurrences`)).data
       } catch { /* report only the primary failure */ }
-      setState((s) => ({ ...s, detail: enriched }))
+      let history = []
+      try {
+        history = (await api.get(`/api/v1/findings/${finding.id}/history`)).data
+      } catch { /* the timeline is additive; the detail still renders */ }
+      setState((s) => ({ ...s, detail: enriched, history,
+        assignee: enriched.assignee || '' }))
+    } catch (error) {
+      setState((s) => ({ ...s, error: String(error.message || error) }))
+    }
+  }
+
+  async function assign(row) {
+    try {
+      await api.patch(`/api/v1/findings/${row.id}/assignee`,
+        { assignee: state.assignee.trim(), actor: 'console' })
+      setBump((n) => n + 1)
+      openDetail(row)
     } catch (error) {
       setState((s) => ({ ...s, error: String(error.message || error) }))
     }
@@ -236,6 +252,19 @@ export default function Findings({ projects }) {
                                 <dt>tool</dt><dd>{state.detail.tool || '—'}</dd>
                                 <dt>location</dt><dd>{state.detail.path || '—'}{state.detail.line ? `:${state.detail.line}` : ''}</dd>
                                 <dt>component</dt><dd>{state.detail.component_purl || '—'}</dd>
+                                <dt>owner</dt>
+                                <dd>
+                                  {state.detail.assignee || <span className="muted">unassigned</span>}
+                                  {' '}
+                                  <input placeholder="assign to…" value={state.assignee}
+                                    onChange={(e) => setState((s) => ({ ...s, assignee: e.target.value }))} />
+                                  {' '}
+                                  <button className="mini" onClick={() => assign(row)}>assign</button>
+                                </dd>
+                                <dt>cwe</dt><dd>{state.detail.cwe || '—'}</dd>
+                                <dt>impact</dt><dd>{state.detail.impact || '—'}</dd>
+                                <dt>reproduction</dt><dd>{state.detail.reproduction || '—'}</dd>
+                                <dt>recommendation</dt><dd>{state.detail.recommendation || '—'}</dd>
                                 <dt>detail</dt><dd>{state.detail.detail || '—'}</dd>
                                 <dt>reason</dt><dd>{state.detail.status_reason || '—'}</dd>
                                 <dt>priority</dt><dd>{state.detail.priority || 'P3'} — {state.detail.priority_reason || 'severity fallback'}</dd>
@@ -256,7 +285,32 @@ export default function Findings({ projects }) {
                             </>
                           )}
                           {activeTab === 'occurrences' && <Occurrences occurrences={state.detail.occurrences} />}
-                          {activeTab === 'history' && <div className="occ-row"><span className="muted">history (status transitions)</span></div>}
+                          {activeTab === 'history' && (
+                            state.history.length ? (
+                              <div className="stack">
+                                {state.history.map((event) => (
+                                  <div key={event.ref} className="occ-row">
+                                    <span className="muted">
+                                      {new Date(event.at).toLocaleString()}
+                                    </span>
+                                    {' · '}
+                                    <strong>{event.action}</strong>
+                                    {' · '}
+                                    {event.actor || 'system'}
+                                    {event.detail && (
+                                      <div className="muted" style={{ fontSize: 11.5 }}>
+                                        {event.detail}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="muted">
+                                nothing has happened to this finding yet
+                              </span>
+                            )
+                          )}
                           {activeTab === 'remediation' && (
                             <div className="bar">
                               {state.detail.status !== 'open' && <button className="mini" onClick={() => dispose('open')}>reopen</button>}

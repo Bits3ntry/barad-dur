@@ -617,3 +617,51 @@ def read_attachment(finding_id: str, attachment_id: str,
     if row is None or row.org_id != org.id or row.finding_id != finding.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "attachment not found")
     return {"data": {**_attachment_meta(row), "content": row.content}}
+
+
+@router.get("/findings/{finding_id}/history")
+def finding_history(finding_id: str,
+                    limit: int = Query(default=200, ge=1, le=500),
+                    org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    """One merged timeline: status/disposition changes, sightings and comments.
+
+    The audit ledger is the source of truth for who changed what; occurrences
+    carry when the weakness was actually seen; comments are the conversation.
+    Nothing here is synthesised — an empty list means nothing has happened yet.
+    """
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    events = []
+    for row in (session.query(models.AuditLog)
+                .filter_by(org_id=org.id, resource_type="finding", resource_id=finding.id)
+                .all()):
+        events.append({"at": row.created_at.isoformat(), "kind": "audit",
+                       "actor": row.actor, "action": row.action,
+                       "detail": row.detail, "ref": f"chain:{row.chain_position}"})
+    for row in (session.query(models.Occurrence)
+                .filter_by(finding_id=finding.id)
+                .order_by(models.Occurrence.seen_at.desc()).all()):
+        events.append({"at": row.seen_at.isoformat(), "kind": "sighting",
+                       "actor": row.tool or row.source or "scanner",
+                       "action": "finding.observed",
+                       "detail": row.evidence,
+                       "ref": f"occurrence:{row.id}"})
+    for row in (session.query(models.FindingComment)
+                .filter_by(finding_id=finding.id).all()):
+        events.append({"at": row.created_at.isoformat(), "kind": "comment",
+                       "actor": row.author, "action": "finding.comment_added",
+                       "detail": row.body, "ref": f"comment:{row.id}"})
+    for row in (session.query(models.FindingAttachment)
+                .filter_by(finding_id=finding.id).all()):
+        events.append({"at": row.created_at.isoformat(), "kind": "attachment",
+                       "actor": row.added_by, "action": "finding.attachment_added",
+                       "detail": f"{row.name} ({row.size_bytes} bytes, "
+                                 f"{row.redaction_state})",
+                       "ref": f"attachment:{row.id}"})
+    events.sort(key=lambda event: event["at"], reverse=True)
+    return {"data": events[:limit], "total": len(events),
+            "first_seen_at": finding.first_seen_at.isoformat(),
+            "last_seen_at": finding.last_seen_at.isoformat(),
+            "last_evaluated_run_id": finding.last_evaluated_run_id}

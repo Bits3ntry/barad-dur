@@ -295,3 +295,25 @@ next to Findings).
 
 Verification: `pytest` 231 passed (5 new cases), `npm run build` passes the UI
 import guard. No migration in this slice.
+
+### Slice D (part 2) — coverage-gated closure + finding history (2026-11-02)
+
+Landed (migration `0035_analysis_runs`): `analysis_runs` records tool, version,
+revision, branch, base, coverage (`full|diff|partial|unknown`) and an explicit
+`evaluated` map; `findings.last_evaluated_run_id` points at the run that judged
+it. `POST /analysis/runs/{id}/close-unseen` previews by default and **refuses
+(409) unless coverage is `full`**; a full run closes only open findings of the
+same version whose tool matches and whose path was inside `evaluated.paths`.
+Every closure is audited (`finding.closed_by_analysis`). `GET
+/findings/{id}/history` merges audit rows, sightings, comments and attachments;
+the Findings drawer now renders that timeline plus owner, CWE and narrative
+fields.
+
+Verification: `pytest` 235 passed (4 new cases: diff/partial refusal, tool/path
+narrowing, validation + isolation, merged history); `alembic upgrade head` /
+`downgrade 0035` / `upgrade head` on a throwaway PostgreSQL database;
+`npm run build` passes the UI import guard.
+
+Still pending in slice D: recording runs automatically from the OSV analyze path
+and the SARIF/OpenGrep ingest, artefact-level SBOM usage, and the analysis-run
+list screen (it lands with the SAST viewer in slice E).
