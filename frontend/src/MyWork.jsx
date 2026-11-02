@@ -90,7 +90,7 @@ export default function MyWork() {
       <PageHeader
         title="My work"
         subtitle="Queues built from assignments, requests, tasks and acceptances — no static mock"
-        actions={<button onClick={() => setCreating(true)}>new work item</button>}
+        actions={<button className="primary-action" onClick={() => setCreating(true)}>new work item</button>}
       />
 
       <div className="toolbar">

@@ -125,10 +125,10 @@ export default function Login({ onAuthenticated }) {
           <div className="auth-tabs" role="tablist">
             <button role="tab" aria-selected={mode === 'signin'}
               className={mode === 'signin' ? 'active' : ''}
-              onClick={() => { setMode('signin'); setError('') }}>sign in</button>
+              onClick={() => { setMode('signin'); setError('') }}>Sign in</button>
             <button role="tab" aria-selected={mode === 'key'}
               className={mode === 'key' ? 'active' : ''}
-              onClick={() => { setMode('key'); setError('') }}>api key</button>
+              onClick={() => { setMode('key'); setError('') }}>API key</button>
           </div>
 
           {error && <div className="banner banner-error" role="alert">{error}</div>}

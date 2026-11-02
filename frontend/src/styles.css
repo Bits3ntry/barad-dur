@@ -11,54 +11,56 @@
 :root {
   color-scheme: light;
 
-  /* surfaces */
-  --bg: #f7f9fc;
-  --bg-soft: #eef2f8;
+  /* surfaces: white ground, one pale gray for "selected" and "table head".
+     Everything else is a hairline. The console reads as a document. */
+  --bg: #ffffff;
+  --bg-soft: #fafafa;
   --panel: #ffffff;
-  --panel-2: #f1f4f9;
-  --line: #dde3ec;
-  --line-strong: #b7c1ce;
+  --panel-2: #f4f4f5;
+  --line: #e5e7eb;
+  --line-strong: #d6dbe2;
 
   /* type */
-  --text: #0f1720;
-  --text-dim: #38424f;
-  --muted: #5c6878;
-  --fs-base: 15.5px;
-  --lh: 1.55;
+  --text: #111827;
+  --text-dim: #4b5563;
+  --muted: #6b7280;
+  --fs-base: 14.5px;
+  --lh: 1.5;
 
-  /* brand */
-  --accent: #c2410c;
+  /* brand: the primary action is black, not a hue. Severity keeps the only
+     saturated colours in the product. */
+  --accent: #111827;
   --accent-ink: #ffffff;
-  --accent-soft: rgba(194, 65, 12, 0.10);
-  --accent-line: rgba(194, 65, 12, 0.34);
-  --eye: #b45309;
+  --accent-soft: #f4f4f5;
+  --accent-line: #d6dbe2;
+  --eye: #111827;
 
   /* severity (only for severity) */
-  --critical: #b3261e;
-  --high: #b4510a;
-  --medium: #96690a;
-  --low: #17784a;
-  --ok: #17784a;
+  --critical: #b42318;
+  --high: #b54708;
+  --medium: #a16207;
+  --low: #15803d;
+  --ok: #15803d;
 
   /* feedback */
-  --err-bg: rgba(179, 38, 30, 0.08);
-  --err-line: rgba(179, 38, 30, 0.30);
-  --err-fg: #8c1d18;
-  --ok-bg: rgba(23, 120, 74, 0.08);
-  --ok-line: rgba(23, 120, 74, 0.28);
-  --ok-fg: #10603a;
-  --info-bg: rgba(194, 65, 12, 0.08);
-  --info-fg: #8a3208;
+  --err-bg: #fef3f2;
+  --err-line: #fecdc9;
+  --err-fg: #912018;
+  --ok-bg: #f0fdf4;
+  --ok-line: #bbf7d0;
+  --ok-fg: #166534;
+  --info-bg: #f8fafc;
+  --info-fg: #374151;
 
   /* structure */
-  --sidebar: 254px;
-  --topbar-bg: rgba(255, 255, 255, 0.90);
-  --overlay: rgba(15, 23, 32, 0.44);
+  --sidebar: 252px;
+  --topbar-bg: #ffffff;
+  --overlay: rgba(17, 24, 39, 0.32);
   --dialog-bg: var(--panel);
-  --dialog-border: var(--line-strong);
-  --focus: 0 0 0 3px rgba(194, 65, 12, 0.32);
-  --shadow: 0 12px 32px rgba(15, 23, 32, 0.12), 0 2px 6px rgba(15, 23, 32, 0.06);
-  --shadow-sm: 0 1px 2px rgba(15, 23, 32, 0.08);
+  --dialog-border: var(--line);
+  --focus: 0 0 0 3px rgba(17, 24, 39, 0.14);
+  --shadow: 0 12px 32px rgba(17, 24, 39, 0.08), 0 1px 3px rgba(17, 24, 39, 0.04);
+  --shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.05);
 }
 
 [data-theme="dark"],
@@ -223,7 +225,7 @@ a:hover { text-decoration: underline; }
 
 /* ------------------------------------------------------------------ shell */
 
-.shell { display: grid; grid-template-columns: var(--sidebar) 1fr; min-height: 100%; }
+.shell { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); min-height: 100%; }
 
 .sidebar {
   position: sticky; top: 0; align-self: start; height: 100vh;
@@ -999,3 +1001,218 @@ table:not(.table-wrap > table) {
 .code-hit { background: rgba(220, 38, 38, .12); border-left: 2px solid #dc2626; }
 .code-added { background: rgba(22, 163, 74, .12); }
 .code-removed { background: rgba(220, 38, 38, .10); }
+
+/* ── clean console ─────────────────────────────────────────────────────────
+   The document look: white ground, hairline structure, one black primary
+   action, no tinted chrome. Selected states are pale gray, section labels are
+   small gray text, tables lose their boxed tint and their uppercase headers.
+   Values come from tokens, so the dark theme keeps working with the same
+   structure and its own palette. */
+
+.sidebar { background: var(--panel); padding: 14px 12px 20px; gap: 14px; }
+.brand { border-bottom: none; padding: 4px 8px 8px; gap: 9px; }
+.brand-name { font-size: 15px; font-weight: 650; letter-spacing: -0.2px; }
+.brand-sub { display: none; }
+
+.nav-group-title,
+.nav-group-title.collapsible {
+  font-size: 11.5px; font-weight: 600; text-transform: none;
+  letter-spacing: 0; color: var(--muted); padding: 16px 8px 4px;
+}
+.nav-section-title {
+  font-size: 10.5px; letter-spacing: 0.5px; padding: 10px 8px 2px 12px;
+  color: var(--muted); opacity: 0.85;
+}
+.nav-item {
+  font-size: 13.5px; color: var(--text-dim); padding: 7px 10px;
+  border-left: none; border-radius: 8px;
+}
+.nav-section .nav-item { padding-left: 18px; }
+.nav-item:hover { background: var(--panel-2); color: var(--text); }
+.nav-item.active {
+  background: var(--panel-2); color: var(--text); font-weight: 600;
+  border-left-color: transparent;
+}
+.nav-item .badge-count { background: var(--bg-soft); border: 1px solid var(--line); }
+.nav-item .badge-count.bad { border: none; color: #fff; }
+
+.topbar { background: var(--panel); backdrop-filter: none; min-height: 56px;
+  padding: 0 32px; }
+.crumbs { text-transform: none; letter-spacing: 0; font-size: 12.5px;
+  font-weight: 500; color: var(--muted); }
+.content { padding: 28px 32px 56px; gap: 20px; max-width: 1600px; }
+
+.page-title { font-size: 29px; font-weight: 650; letter-spacing: -0.6px; }
+.page-sub { margin-top: 3px; font-size: 13.5px; color: var(--muted); }
+
+.card { border-radius: 10px; padding: 18px 20px; box-shadow: none; }
+.card-title { text-transform: none; letter-spacing: 0; font-size: 13px;
+  font-weight: 600; color: var(--text); margin-bottom: 12px; }
+
+button, .btn {
+  background: var(--panel); border-color: var(--line-strong);
+  border-radius: 8px; font-size: 13px; font-weight: 500;
+}
+button:hover, .btn:hover { background: var(--panel-2); border-color: var(--line-strong); }
+.btn-primary { background: var(--accent); border-color: var(--accent); }
+.btn-primary:hover { background: var(--accent); filter: none; opacity: 0.9; }
+.btn-danger { background: var(--panel); border-color: var(--err-line); color: var(--err-fg); }
+.btn-danger:hover { background: var(--err-bg); color: var(--err-fg); }
+
+.tabs { background: transparent; border: none; border-bottom: 1px solid var(--line);
+  border-radius: 0; padding: 0; gap: 20px; }
+.tab { background: none; border-radius: 0; margin-bottom: -1px; padding: 8px 0 9px;
+  font-size: 13.5px; color: var(--muted); border-bottom: 2px solid transparent; }
+.tab.active { background: none; color: var(--text); font-weight: 600;
+  border-bottom-color: var(--text); }
+
+.table-wrap { border-radius: 10px; }
+thead th {
+  text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 500;
+  color: var(--muted); background: var(--panel);
+  border-bottom: 1px solid var(--line); position: static;
+}
+th, td { padding: 13px 14px; }
+td { font-size: 13.5px; }
+tbody tr:hover { background: var(--bg-soft); }
+
+.sev {
+  background: var(--panel); border: 1px solid currentColor;
+  border-radius: 999px; padding: 1px 8px; font-size: 11.5px;
+  font-weight: 600; letter-spacing: 0;
+}
+.sev-critical { background: var(--panel); color: var(--critical); }
+.sev-high { background: var(--panel); color: var(--high); }
+.sev-medium { background: var(--panel); color: var(--medium); }
+.sev-low { background: var(--panel); color: var(--low); }
+.status { border-color: var(--line); color: var(--muted); }
+.pill { background: var(--panel); border-color: var(--line); color: var(--muted); }
+
+/* ── calm details ────────────────────────────────────────────────────────
+   Section labels read as text, not as micro-caps chrome; table cells never
+   break a domain or a date in half; row actions are quiet text, not a row of
+   outlined pills. */
+
+.nav-section-title {
+  text-transform: none; font-size: 11px; letter-spacing: 0; font-weight: 500;
+  padding: 10px 8px 2px 12px; opacity: 1;
+}
+.nav-item .badge-count,
+.nav-item .badge-count.bad {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  font-weight: 600;
+}
+
+.pill { border-color: transparent; background: var(--panel-2); }
+.table-wrap th, .table-wrap td { white-space: nowrap; }
+.table-wrap td.title, .table-wrap td.wrap { white-space: normal; }
+td .mono, .table-wrap td .mono { white-space: nowrap; }
+
+/* Row actions inside a table: text with a hover underline. The toolbar keeps
+   its outlined buttons — the density is in the row, not in the page. */
+.table-wrap td button,
+.table-wrap td .btn {
+  background: none; border: none; padding: 2px 6px; min-height: 0;
+  color: var(--text-dim); font-size: 12.5px;
+}
+.table-wrap td button:hover,
+.table-wrap td .btn:hover { background: var(--panel-2); color: var(--text); }
+
+.sidebar { scrollbar-width: thin; }
+.sidebar::-webkit-scrollbar { width: 8px; }
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--line); border-radius: 999px;
+}
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+
+/* One primary action per page: the last button of a toolbar is the commitment
+   button on screens that build things (add asset, new group, add rule). */
+.primary-action {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+  font-weight: 600;
+}
+.primary-action:hover { background: var(--accent); opacity: 0.9; }
+
+/* A domain is one token: never break it across lines. The action cluster stays
+   on one line even when the table is wide. */
+.table-wrap td.mono,
+.table-wrap .mono { white-space: nowrap; overflow-wrap: normal; }
+.table-wrap td .row { flex-wrap: nowrap; }
+.table-wrap td:last-child { white-space: nowrap; }
+
+/* Metrics: numbers are the content, the label is a caption. Severity keeps its
+   colour in the numeral only — no tinted tiles, no coloured rules. */
+.metric { border-radius: 10px; padding: 14px 16px; }
+.metric::before { display: none; }
+.metric-value { font-size: 24px; font-weight: 600; letter-spacing: -0.4px; }
+.metric-label { text-transform: none; letter-spacing: 0; font-size: 12px;
+  color: var(--muted); margin-top: 2px; }
+
+/* v0 counters read as a sentence of numbers, not as a row of buttons. */
+.card .row > button.mini {
+  background: transparent; border-color: transparent; padding: 3px 8px;
+  border-radius: 8px; color: var(--text-dim); font-size: 12.5px;
+}
+.card .row > button.mini:hover { background: var(--panel-2); color: var(--text); }
+.card .row > button.mini strong { color: var(--text); font-weight: 600; }
+
+/* Priority classes: a letter and a weight, not a coloured block. P0 keeps a
+   hairline ring so the eye finds it first; the rest are plain text. */
+.prio { background: none; border-radius: 4px; padding: 1px 6px; font-size: 11px;
+  font-weight: 600; color: var(--text-dim); }
+.prio-p0 { background: var(--panel); border: 1px solid var(--critical); color: var(--critical); }
+.prio-p1 { background: var(--panel); border: 1px solid var(--line-strong); color: var(--text); }
+.prio-p2, .prio-p3 { background: none; border: none; color: var(--muted); font-weight: 500; }
+
+/* The action column stays reachable while the rest of the table scrolls: a
+   clipped "disable" is worse than a sticky cell. */
+.table-wrap th:last-child,
+.table-wrap td:last-child { position: sticky; right: 0; background: var(--panel); }
+.table-wrap tbody tr:hover td:last-child { background: var(--bg-soft); }
+
+/* ── entrance ────────────────────────────────────────────────────────────
+   The gate is the first page anyone sees, so it follows the same rule as the
+   console: white ground, one hairline split, black type, no ornament. */
+.gate-brand { background: var(--panel); gap: 28px; }
+.gate-eyebrow { font-size: 10.5px; letter-spacing: 1.6px; color: var(--muted); }
+.gate-title { font-size: clamp(30px, 3.6vw, 40px); letter-spacing: -1.2px; font-weight: 650; }
+.gate-title span { color: var(--text); }
+.gate-copy { font-size: 14.5px; color: var(--muted); }
+.gate-list li::before {
+  width: 4px; height: 4px; transform: none; border-radius: 999px;
+  background: var(--line-strong);
+}
+.gate-panel { background: var(--bg-soft); }
+.auth-card { box-shadow: none; }
+.auth-tabs { background: transparent; border-bottom: 1px solid var(--line);
+  border-radius: 0; padding: 0; gap: 18px; }
+.auth-tabs button { border-radius: 0; padding: 7px 0 8px; margin-bottom: -1px;
+  border-bottom: 2px solid transparent; color: var(--muted); }
+.auth-tabs button.active { background: none; color: var(--text);
+  border-bottom-color: var(--text); }
+
+/* Every auth field is label-over-input, including the ones the browser used to
+   lay out inline; the form reads as one column. */
+.auth-card label { display: grid; gap: 6px; }
+.auth-card label > span:first-child { font-size: 12.5px; color: var(--text-dim); }
+.auth-card input { width: 100%; }
+
+/* P0 is a weight and a colour, not a box: inside a dense table a red ring
+   competes with the content it is meant to rank. */
+.prio-p0 { background: none; border: none; color: var(--critical); font-weight: 650; }
+.prio-p1 { background: none; border: none; color: var(--text); font-weight: 600; }
+
+/* Wide tables scroll inside their card instead of pushing the page sideways. */
+.content { min-width: 0; }
+.content > * { min-width: 0; }
+.table-wrap { max-width: 100%; }
+.table-wrap td.num, .table-wrap td.metric-value { min-width: 46px; }
+
+/* Grid children otherwise adopt their min-content width, which is how one wide
+   table pushed the whole page sideways. The content column is clamped. */
+.content { grid-template-columns: minmax(0, 1fr); }
+.stack, .grid, .row { min-width: 0; }
+
+/* Grid and flex children default to min-width:auto, which lets a wide child
+   report a min-content width larger than the page. Clamp the containers. */
+.stack > *, .grid > *, .row > *, .page-head, .page-head > * { min-width: 0; }

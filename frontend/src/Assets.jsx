@@ -326,7 +326,7 @@ export default function Assets() {
       <PageHeader
         title="Assets"
         subtitle={`${total} asset${total === 1 ? '' : 's'} in this organization · ownership here never grants a scan`}
-        actions={<button onClick={() => setGroupDialog(true)}>new group</button>}
+        actions={<button className="primary-action" onClick={() => setGroupDialog(true)}>new group</button>}
       />
 
       <Tabs
@@ -390,7 +390,7 @@ export default function Assets() {
                         <span className={asset.owner ? '' : 'muted'}>
                           {asset.owner || 'no owner'}
                         </span>
-                        <span className={asset.project ? 'muted' : 'sev sev-medium'}>
+                        <span className={asset.project ? 'muted' : 'pill'}>
                           {asset.project || 'no project'}
                         </span>
                       </div>
@@ -471,7 +471,7 @@ export default function Assets() {
             <input placeholder="add an asset manually" value={manual.value}
               onChange={(e) => setManual((m) => ({ ...m, value: e.target.value }))}
               onKeyDown={(e) => e.key === 'Enter' && addManual()} />
-            <button onClick={addManual}>add asset</button>
+            <button className="primary-action" onClick={addManual}>add asset</button>
           </div>
         </>
       )}

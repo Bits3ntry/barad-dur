@@ -126,7 +126,7 @@ export default function Lifecycle({ initialTab = 'tasks' }) {
             </select>
             <input placeholder="reason (auditable)" value={newRule.reason}
               onChange={(e) => setNewRule((r) => ({ ...r, reason: e.target.value }))} />
-            <button onClick={createRule}>add rule</button>
+            <button className="primary-action" onClick={createRule}>add rule</button>
           </div>
           <table>
             <thead><tr><th>pos</th><th>when</th><th>becomes</th><th>reason</th></tr></thead>

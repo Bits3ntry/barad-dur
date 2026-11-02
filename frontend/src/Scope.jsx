@@ -141,11 +141,11 @@ export default function Scope() {
     <div className="stack">
       <PageHeader
         title="Scope"
-        subtitle={`${targets.length} declared · ${activeCount} active · ${patternCount} pattern rules · exclusions always win`}
+        subtitle={`${targets.length} declared · ${activeCount} active · ${patternCount} pattern rule${patternCount === 1 ? '' : 's'} · exclusions always win`}
         actions={<>
           <button className="mini" onClick={() => setExclusionOpen(true)}>add exclusion</button>
           {' '}
-          <button onClick={() => setCreating(true)}>declare target</button>
+          <button className="primary-action" onClick={() => setCreating(true)}>declare target</button>
         </>}
       />
 

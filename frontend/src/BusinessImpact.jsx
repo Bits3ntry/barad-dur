@@ -50,11 +50,18 @@ export default function BusinessImpact({ onNavigate }) {
       {!error && !loading && data && (
         <>
           <div className="row" style={{ flexWrap: 'wrap' }}>
-            <Stat value={totals.projects ?? 0} label="applications" />
-            <Stat value={totals.open_findings ?? 0} label="open findings" />
-            <Stat value={totals.assets ?? 0} label="assets" />
-            <Stat value={totals.production_deployments ?? 0} label="production deployments" />
-            <Stat value={coverage.assets_without_project ?? 0} label="assets without project"
+            <Stat value={totals.projects ?? 0}
+              label={totals.projects === 1 ? 'application' : 'applications'} />
+            <Stat value={totals.open_findings ?? 0}
+              label={totals.open_findings === 1 ? 'open finding' : 'open findings'} />
+            <Stat value={totals.assets ?? 0}
+              label={totals.assets === 1 ? 'asset' : 'assets'} />
+            <Stat value={totals.production_deployments ?? 0}
+              label={totals.production_deployments === 1
+                ? 'production deployment' : 'production deployments'} />
+            <Stat value={coverage.assets_without_project ?? 0}
+              label={coverage.assets_without_project === 1
+                ? 'asset without project' : 'assets without project'}
               hint="coverage gap, not a business signal" />
           </div>
 

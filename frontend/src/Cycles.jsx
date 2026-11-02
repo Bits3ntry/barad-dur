@@ -170,7 +170,7 @@ export default function Cycles() {
       <PageHeader
         title="Cycles"
         subtitle="Time-boxed evaluations · a cycle freezes a reference and grants no authorization"
-        actions={<button onClick={() => setCreating(true)}>new cycle</button>}
+        actions={<button className="primary-action" onClick={() => setCreating(true)}>new cycle</button>}
       />
 
       {error && <ErrorBanner error={error} />}
