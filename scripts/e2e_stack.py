@@ -32,7 +32,7 @@ def main() -> int:
     db_path = args.db or str(Path(tempfile.mkdtemp(prefix="barad-e2e-")) / "e2e.db")
     os.environ["PLATFORM_DATABASE_URL"] = f"sqlite:///{db_path}"
 
-    from backend.app import models
+    from backend.app import auth_local, models
     from backend.app.auth import create_key
     from backend.app.db import session_factory
     from backend.app.main import create_app
@@ -44,6 +44,14 @@ def main() -> int:
     session.add(org)
     session.flush()
     key = create_key(session, org.id, "e2e")
+    # A human account, so the flows that need a session (MFA, SSO) can be
+    # exercised. Demo credentials on a throwaway database, printed below.
+    password = os.environ.get("E2E_PASSWORD") or "bitsentry-demo"
+    session.add(models.User(
+        org_id=org.id, email="ana@bitsentry.xyz", display_name="Ana (demo)",
+        role="owner", status="active",
+        password_hash=auth_local.hash_password(password),
+        created_at=models.utcnow(), updated_at=models.utcnow()))
     session.commit()
     session.close()
 
@@ -60,6 +68,7 @@ def main() -> int:
     print(f"console: http://127.0.0.1:{args.port}/")
     print(f"state:   {state}")
     print("organization: Bitsentry (empty — load data through the interface)")
+    print(f"user: ana@bitsentry.xyz · password: {password} (throwaway)")
 
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")

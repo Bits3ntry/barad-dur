@@ -1295,3 +1295,21 @@ td .mono, .table-wrap td .mono { white-space: nowrap; }
 [data-theme="dark"] .hl-s { color: #7dd3a8; }
 [data-theme="dark"] .hl-n { color: #fbbf24; }
 .code-line.code-hit { background: rgba(220, 38, 38, 0.08); }
+
+/* SSO entry point: a quiet outlined button under the password form. */
+.sso-button {
+  width: 100%; justify-content: center; gap: 8px; min-height: 38px;
+  background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: 8px; font-weight: 500;
+}
+.sso-button:hover { background: var(--panel-2); }
+.link { font-size: 12.5px; }
+
+/* Enrolment: QR beside the manual secret; codes in a two-column grid. */
+.mfa-enrol { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.mfa-qr { background: #fff; padding: 8px; border: 1px solid var(--line); border-radius: 10px; }
+.mfa-codes {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px 14px; font-family: ui-monospace, Menlo, monospace; font-size: 13px;
+}
+.mfa-codes code { background: var(--panel-2); padding: 4px 8px; border-radius: 6px; }

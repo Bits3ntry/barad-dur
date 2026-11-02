@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { Dialog, Input, Loading, Banner } from './ui'
 
@@ -32,6 +32,19 @@ export default function Login({ onAuthenticated }) {
   const [busy, setBusy] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const [resetEmail, setResetEmail] = useState('')
+  const [sso, setSso] = useState(null)
+  const [challenge, setChallenge] = useState(null)
+  const [mfaCode, setMfaCode] = useState('')
+  const [mfaBusy, setMfaBusy] = useState(false)
+  const [useRecovery, setUseRecovery] = useState(false)
+
+  // SSO is offered only when the deployment configured it; a button that leads
+  // to a 503 is worse than no button.
+  useEffect(() => {
+    api.get('/api/v1/auth/oidc/status')
+      .then((r) => setSso(r.data))
+      .catch(() => setSso(null))
+  }, [])
 
   const set = (field) => (event) => setForm((f) => ({ ...f, [field]: event.target.value }))
 
@@ -61,7 +74,19 @@ export default function Login({ onAuthenticated }) {
       if (form.org_slug.trim()) payload.org_slug = form.org_slug.trim()
       api.save({ url, key: '', token: '' })
       const response = await api.post('/api/v1/auth/login', payload)
-      api.save({ url, key: '', token: response.session.token })
+      if (response.data?.mfa_required) {
+        setChallenge(response.data)
+        setForm((f) => ({ ...f, password: '' }))
+        setMode('signin')
+        return
+      }
+      api.save({
+        url,
+        key: '',
+        token: response.session.access_token,
+        refresh_token: response.session.refresh_token,
+        expires_at: response.session.expires_at,
+      })
       onAuthenticated()
     } catch (e) {
       const message = String(e.message || e)
@@ -86,9 +111,62 @@ export default function Login({ onAuthenticated }) {
     }
   }
 
-  const oidcConfigured = typeof window !== 'undefined'
-    && (localStorage.getItem('barad.oidc') === 'true'
-        || (typeof process !== 'undefined' && process.env?.OIDC_ISSUER))
+  /* Pre-session exchange: the code proves the second factor before any
+     credential exists, so it cannot go through api.post (which refuses to run
+     without a key or token). */
+  async function postPublic(path, payload) {
+    const base = (api.settings().url || '').replace(/\/$/, '')
+    const response = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`)
+    return body
+  }
+
+  async function verifyMfa(event) {
+    event.preventDefault()
+    setError('')
+    setMfaBusy(true)
+    try {
+      const response = await postPublic('/api/v1/auth/mfa/verify', {
+        challenge: challenge.challenge,
+        code: mfaCode.trim(),
+      })
+      api.save({
+        url: form.url.trim(),
+        key: '',
+        token: response.session.access_token,
+        refresh_token: response.session.refresh_token,
+        expires_at: response.session.expires_at,
+      })
+      onAuthenticated()
+    } catch (e) {
+      setError('That code was not accepted. Try the next one, or use a recovery code.')
+    } finally {
+      setMfaBusy(false)
+    }
+  }
+
+  async function startSso() {
+    setError('')
+    const slug = form.org_slug.trim()
+    if (!slug) {
+      setError('Enter your organization slug first: SSO needs to know which workspace to sign in to.')
+      return
+    }
+    try {
+      const response = await api.get(
+        `/api/v1/auth/oidc/start?org_slug=${encodeURIComponent(slug)}`)
+      const target = response.data?.authorization_url || response.authorization_url
+      if (!target) throw new Error('The identity provider did not return a redirect.')
+      window.location.assign(target)
+    } catch (e) {
+      setError(String(e.message || e))
+    }
+  }
 
   return (
     <div className="gate">
@@ -133,6 +211,40 @@ export default function Login({ onAuthenticated }) {
 
           {error && <div className="banner banner-error" role="alert">{error}</div>}
 
+          {challenge ? (
+            <form onSubmit={verifyMfa}>
+              <p className="auth-sub">
+                {useRecovery
+                  ? 'Enter one of the recovery codes you saved when you enabled multi-factor.'
+                  : `Enter the 6-digit code from your authenticator app${
+                      sso?.provider ? '' : ''}.`}
+              </p>
+              <label>
+                <span>{useRecovery ? 'Recovery code' : 'Authentication code'}</span>
+                <input
+                  autoFocus
+                  value={mfaCode}
+                  onChange={(event) => setMfaCode(event.target.value)}
+                  inputMode={useRecovery ? 'text' : 'numeric'}
+                  autoComplete="one-time-code"
+                  placeholder={useRecovery ? 'XXXXX-XXXXX' : '123456'}
+                />
+              </label>
+              <button className="btn-primary" type="submit" disabled={mfaBusy || !mfaCode.trim()}>
+                {mfaBusy ? 'checking…' : 'Verify'}
+              </button>
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <button type="button" className="link"
+                  onClick={() => { setUseRecovery((v) => !v); setMfaCode('') }}>
+                  {useRecovery ? 'use an authenticator code' : 'use a recovery code'}
+                </button>
+                <button type="button" className="link"
+                  onClick={() => { setChallenge(null); setMfaCode(''); setUseRecovery(false) }}>
+                  back to sign in
+                </button>
+              </div>
+            </form>
+          ) : (
           <form onSubmit={submit}>
             {mode === 'signin' ? (
               <>
@@ -168,6 +280,20 @@ export default function Login({ onAuthenticated }) {
               {busy ? 'checking…' : mode === 'signin' ? 'Enter' : 'Connect'}
             </button>
           </form>
+          )}
+
+          {!challenge && sso?.configured && mode === 'signin' && (
+            <>
+              <button type="button" className="sso-button" onClick={startSso}>
+                Continue with {sso.provider}
+              </button>
+              {sso.auto_provision === false && (
+                <p className="auth-hint" style={{ borderTop: 'none', paddingTop: 0 }}>
+                  SSO signs in accounts that already exist here; it does not create new ones.
+                </p>
+              )}
+            </>
+          )}
 
           <p className="auth-hint">
             First time? The very first account is created with the deployment's
@@ -177,11 +303,6 @@ export default function Login({ onAuthenticated }) {
 
           <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button className="mini" onClick={() => setResetOpen(true)}>Forgot password?</button>
-            {oidcConfigured && (
-              <button className="mini" onClick={() => { setMode('oidc'); setError('') }}>
-                Sign in with OIDC
-              </button>
-            )}
           </div>
         </div>
       </section>
@@ -199,8 +320,8 @@ export default function Login({ onAuthenticated }) {
             a manual reset token and you will be contacted out-of-band.
           </p>
           <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-            {oidcConfigured
-              ? 'Password reset is available when OIDC is configured.'
+            {sso?.configured
+              ? 'SSO is configured for this deployment; the reset link still goes through SMTP.'
               : 'Password reset requires SMTP. Use the admin recovery process.'}
           </p>
         </form>

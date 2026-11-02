@@ -153,18 +153,61 @@ class PasswordResetRouter:
 
         return {"data": {"message": "Password has been reset successfully."}}
 def _issue_session(session: Session, user: models.User, user_agent: str = "") -> dict:
-    raw = auth_local.new_session_token()
+    """Mint an opaque access token plus a long-lived refresh token (rotation)."""
+    access = auth_local.new_session_token()
+    refresh = auth_local.new_refresh_token()
     row = models.UserSession(
         org_id=user.org_id, user_id=user.id,
-        token_hash=auth_local.token_hash(raw),
+        token_hash=auth_local.token_hash(access),
         created_at=models.utcnow(), expires_at=auth_local.session_expiry(),
-        user_agent=(user_agent or "")[:255])
+        user_agent=(user_agent or "")[:255],
+        refresh_token_hash=auth_local.token_hash(refresh),
+        refresh_token_expires_at=auth_local.refresh_expiry())
     session.add(row)
     user.last_login_at = models.utcnow()
     session.commit()
-    return {"token": raw, "expires_at": row.expires_at.isoformat(),
-            "role": user.role, "email": user.email,
-            "display_name": user.display_name}
+    expires_in = int((row.expires_at - auth_local.ensure_aware(
+        models.utcnow())).total_seconds())
+    return {
+        "access_token": access,
+        "refresh_token": refresh,
+        "token_type": "bearer",
+        "expires_in": expires_in,
+        "expires_at": row.expires_at.isoformat(),
+        "role": user.role,
+        "email": user.email,
+        "display_name": user.display_name}
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str = Field(min_length=1, max_length=512)
+
+
+@router.post("/refresh")
+def refresh(payload: RefreshIn = None, session: Session = Depends(get_session)):
+    """Renew an expired access token with a long-lived refresh token.
+
+    Each successful refresh revokes the whole session and returns a fresh
+    access + refresh pair (rotation), so a captured token can only be used once.
+    The endpoint is public: the refresh token itself is the credential.
+    """
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    if not payload.refresh_token:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "refresh_token is required")
+    hashed = auth_local.token_hash(payload.refresh_token)
+    row = (session.query(models.UserSession)
+           .filter_by(refresh_token_hash=hashed).one_or_none())
+    if row is None or row.revoked_at is not None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "invalid or expired refresh token")
+    if auth_local.ensure_aware(row.refresh_token_expires_at) <= models.utcnow():
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "invalid or expired refresh token")
+    row.revoked_at = models.utcnow()
+    session.commit()
+    return {"data": _issue_session(session, session.get(models.User, row.user_id))}
 
 
 class BootstrapIn(BaseModel):
@@ -245,6 +288,15 @@ def login(request: Request, payload: LoginIn = None,
                    "user", user.id, "bad credentials")
         session.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+    if user.totp_enabled_at is not None:
+        # A correct password is only half a login when a second factor is on.
+        from backend.app.routers import mfa as mfa_router
+
+        challenge = mfa_router.issue_challenge(session, user)
+        _audit_log(session, user.org_id, user.email, "auth.mfa_challenge",
+                   "user", user.id, "password accepted, code required")
+        session.commit()
+        return {"data": {"mfa_required": True, **_user_data(user), **challenge}}
     _audit_log(session, user.org_id, user.email, "auth.login", "user", user.id,
                request.headers.get("user-agent", "")[:120])
     session.commit()
@@ -279,6 +331,8 @@ def logout(request: Request,
     if row is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid session")
     row.revoked_at = models.utcnow()
+    row.refresh_token_hash = None
+    row.refresh_token_expires_at = None
     session.commit()
     return {"data": {"revoked": True}}
 
@@ -368,6 +422,8 @@ def patch_user(user_id: str, payload: UserPatch = None,
             for row in (session.query(models.UserSession)
                         .filter_by(user_id=user.id).all()):
                 row.revoked_at = models.utcnow()
+                row.refresh_token_hash = None
+                row.refresh_token_expires_at = None
     user.updated_at = models.utcnow()
     _audit_log(session, org.id, payload.actor, "auth.user_updated", "user",
                user.id, f"role={user.role} status={user.status}")
@@ -395,6 +451,8 @@ def set_password(user_id: str, payload: PasswordIn = None,
     user.updated_at = models.utcnow()
     for row in session.query(models.UserSession).filter_by(user_id=user.id).all():
         row.revoked_at = models.utcnow()
+        row.refresh_token_hash = None
+        row.refresh_token_expires_at = None
     session.commit()
     return {"data": {"id": user.id, "sessions_revoked": True}}
 
@@ -403,8 +461,21 @@ def set_password(user_id: str, payload: PasswordIn = None,
 
 @router.get("/oidc/status")
 def oidc_status():
+    issuer = (auth_local.oidc_settings().get("issuer") or "").lower()
+    # The label is cosmetic; SSO carries the identity, not the branding.
+    if "accounts.google.com" in issuer:
+        provider = "Google"
+    elif "login.microsoftonline.com" in issuer:
+        provider = "Microsoft"
+    elif "okta" in issuer:
+        provider = "Okta"
+    else:
+        provider = "your identity provider"
     return {"data": {"configured": auth_local.oidc_configured(),
-                     "crypto_available": auth_local._crypto_available()}}
+                     "crypto_available": auth_local._crypto_available(),
+                     "provider": provider, "issuer": issuer,
+                     "auto_provision": (os.environ.get("OIDC_AUTO_PROVISION") or "").lower()
+                     in {"1", "true", "yes"}}}
 
 
 @router.get("/oidc/start")
@@ -455,6 +526,13 @@ def oidc_callback(code: str = Query(...), state: str = Query(...),
     user = (session.query(models.User)
             .filter_by(org_id=row.org_id, email=email).one_or_none())
     if user is None:
+        # SSO signs in people who already belong here. Auto-provisioning is an
+        # explicit deployment decision, never the default: an IdP that vouches
+        # for an address must not invent a member.
+        auto = (os.environ.get("OIDC_AUTO_PROVISION") or "").lower() in {"1", "true", "yes"}
+        if not auto:
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                "no account for this identity; ask an administrator")
         user = models.User(org_id=row.org_id, email=email,
                            display_name=claims.get("name") or email,
                            role="viewer", password_hash=None, status="active",
@@ -463,6 +541,14 @@ def oidc_callback(code: str = Query(...), state: str = Query(...),
         session.flush()
     if user.status != "active":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "user disabled")
+    if user.totp_enabled_at is not None:
+        from backend.app.routers import mfa as mfa_router
+
+        challenge = mfa_router.issue_challenge(session, user)
+        _audit_log(session, row.org_id, email, "auth.mfa_challenge", "user", user.id,
+                   "sso accepted, code required")
+        session.commit()
+        return {"data": {"mfa_required": True, **_user_data(user), **challenge}}
     _audit_log(session, row.org_id, email, "auth.oidc_login", "user", user.id, "")
     session.commit()
     return {"data": _user_data(user), "session": _issue_session(session, user)}

@@ -27,6 +27,7 @@ import Exposures from './Exposures'
 import AttackSurface from './AttackSurface'
 import Cycles from './Cycles'
 import BusinessImpact from './BusinessImpact'
+import Security from './Security'
 import Icon from './icons'
 import MyWork from './MyWork'
 import { api } from './api'
@@ -83,6 +84,7 @@ const NAV = [
     { key: 'remediation', label: 'Remediation', icon: 'remediation' },
   ] },
   { group: 'Administration', collapsible: true, items: [
+    { key: 'security', label: 'My security', icon: 'grants' },
     { key: 'notifications', label: 'Notifications', icon: 'notifications' },
     { key: 'grants', label: 'Grants', icon: 'grants' },
     { key: 'members', label: 'Members', icon: 'members' },
@@ -278,6 +280,7 @@ export default function App() {
       case 'my-work': return <MyWork />
       case 'components': return <Components projects={projects} onChanged={loadProjects} />
       case 'pipelines': return <Pipelines />
+      case 'security': return <Security />
       case 'notifications': return <Notifications />
       default: return <Dashboard projects={projects} onNavigate={go} />
     }
@@ -392,6 +395,8 @@ export default function App() {
             </button>
             <button className="btn-ghost mini" onClick={async () => {
               if (session.token) { try { await api.post('/api/v1/auth/logout', {}) } catch { /* session may be gone */ } }
+              api.save({ url: api.settings().url || '', key: '', token: '',
+                refresh_token: '', expires_at: '' })
               setSession(api.settings())
             }}>sign out</button>
           </div>

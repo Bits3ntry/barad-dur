@@ -59,10 +59,14 @@ export default function Settings({ onClose }) {
 
   function save(event) {
     event.preventDefault()
+    const next = api.settings()
+    const cleared = !form.token.trim()
     api.save({
       url: form.url.trim(),
       key: (form.key || '').trim(),
-      token: (form.token || '').trim(),
+      token: cleared ? '' : (next.token || ''),
+      refresh_token: cleared ? '' : (next.refresh_token || ''),
+      expires_at: cleared ? '' : (next.expires_at || ''),
     })
     onClose(true)
   }
@@ -93,7 +97,8 @@ export default function Settings({ onClose }) {
 
   async function signOut() {
     try { await api.post('/api/v1/auth/logout', {}) } catch { /* session may be gone */ }
-    const next = { url: form.url.trim(), key: '', token: '' }
+    const next = { url: form.url.trim(), key: '', token: '',
+      refresh_token: '', expires_at: '' }
     api.save(next)
     setForm(next)
     setIdentity(null)

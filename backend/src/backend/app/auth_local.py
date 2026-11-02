@@ -23,6 +23,7 @@ SCRYPT_N = 2 ** 14
 SCRYPT_R = 8
 SCRYPT_P = 1
 TOKEN_TTL_HOURS = int(os.environ.get("SESSION_TTL_HOURS") or 12)
+REFRESH_TTL_DAYS = int(os.environ.get("REFRESH_TTL_DAYS") or 7)
 
 
 class AuthError(RuntimeError):
@@ -64,6 +65,10 @@ def new_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def new_refresh_token() -> str:
+    return secrets.token_urlsafe(40)
+
+
 def token_hash(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -82,8 +87,16 @@ def ensure_aware(value):
 def session_expiry(hours: int | None = None):
     import datetime
 
-    return datetime.datetime.now(datetime.timezone.utc) + \
-        datetime.timedelta(hours=hours or TOKEN_TTL_HOURS)
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+        hours=hours or TOKEN_TTL_HOURS)
+
+
+def refresh_expiry(days: int | None = None):
+    """Absolute expiry for the long-lived refresh token (not the access token)."""
+    import datetime
+
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+        days=days or REFRESH_TTL_DAYS)
 
 
 # ── OIDC ─────────────────────────────────────────────────────────────────────

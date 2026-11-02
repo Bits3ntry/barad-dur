@@ -1220,8 +1220,45 @@ class User(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(16), default="active")
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+    # Optional second factor. A secret exists from enrolment, but only
+    # `totp_enabled_at` makes it required at login — that is what separates an
+    # abandoned enrolment from an active one.
+    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    totp_enabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MfaChallenge(Base):
+    """Short-lived half-session between "password ok" and "code ok"."""
+
+    __tablename__ = "mfa_challenges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class MfaRecoveryCode(Base):
+    """One-time codes shown once at activation; only their hashes persist."""
+
+    __tablename__ = "mfa_recovery_codes"
+    __table_args__ = (Index("ix_mfa_recovery_user", "user_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
+    code_hash: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
 
 
 class UserSession(Base):
@@ -1236,6 +1273,10 @@ class UserSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    refresh_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True)
+    refresh_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
 
 
 class OidcState(Base):
