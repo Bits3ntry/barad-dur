@@ -10,7 +10,7 @@ implemented below.
 
 | Check | Result |
 |---|---|
-| `pytest -q` (backend) | **258 passed** |
+| `pytest -q` (backend) | **261 passed** |
 | `alembic upgrade head` on a throwaway PostgreSQL DB | 0031 → **0040** |
 | `alembic downgrade -1` / `upgrade head` for 0040 | clean, `sbom_imports.artifact_id` recreated with FK + index |
 | `npm run build` (console) | passes |
@@ -47,6 +47,9 @@ code half remains out of these commits (see "Honest limits").
 | §4 Vulnerabilities: grouped by CVE over visible findings, honest enrichment, grouped actions with preview | `routers/vulnerabilities.py`, `Vulnerabilities.jsx`, tests (catalog ≠ inventory) |
 | §4 My work: six trays, counters, 72 h window, acceptances 30 d, no self-approval, withdraw/remind with rate limit | `routers/work.py`, `MyWork.jsx`, tests |
 | §4 Dashboard: counters with their filters and destinations | `GET /dashboard/v0` + `V0Overview` block in `Dashboard.jsx`; each counter navigates to the list it counts and carries its filter; test `test_dashboard_counters_equal_their_destinations` |
+| §2 Navigation: Dashboard / My work / Findings / Vulnerabilities with no group label; CTEM cycle as one frame with Scoping, Discovery and Prioritization areas | `App.jsx` (`NAV` with `sections`), `nav-section` styles; legacy phase keys resolve to the cycle overview instead of landing on the dashboard |
+| §4/§8 Prioritization: ordered first-match rules, SLA buckets, reclassification on save | `routers/lifecycle.py`, `Prioritization rules` screen (opens the rule editor directly) |
+| §3/§8 Business impact: open work per application — priority mix, late, unassigned, CVEs, assets, production deployments — with `criticality: not modelled` declared | `routers/impact.py`, `BusinessImpact.jsx`, `tests/test_v0_impact.py` |
 | §5 Scope: declared entries only, typed fields, validity, capabilities, wildcard rules, exclusions win, scope→asset, audit | `scoping.py`, `routers/scope.py`, `docs/architecture/scope-semantics.md`, `Scope.jsx`, tests |
 | §5 Cycles: charter, explicit selection, preview, freeze, findings linking **inside the frozen selection**, review, close | `routers/cycles.py`, `Cycles.jsx`, `test_auto_link_respects_the_frozen_selection` |
 | §6 Assets: inventory, needs-attention with reasons, groups, activity | `routers/easm.py`, `inventory_groups.py`, `Assets.jsx`, tests |
