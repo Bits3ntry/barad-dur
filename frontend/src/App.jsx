@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Audit from './Audit'
 import Dashboard from './Dashboard'
 import Gates from './Gates'
@@ -27,6 +27,7 @@ import Exposures from './Exposures'
 import AttackSurface from './AttackSurface'
 import Cycles from './Cycles'
 import BusinessImpact from './BusinessImpact'
+import Icon from './icons'
 import MyWork from './MyWork'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
@@ -39,54 +40,54 @@ const NAV = [
   // The four things an operator reads every day, with no group label: a label
   // over a first row is furniture, not information.
   { group: '', collapsible: false, items: [
-    { key: 'dashboard', label: 'Dashboard' },
-    { key: 'my-work', label: 'My work' },
-    { key: 'findings', label: 'Findings', badge: 'critical' },
-    { key: 'vulnerabilities', label: 'Vulnerabilities' },
+    { key: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+    { key: 'my-work', label: 'My work', icon: 'my-work' },
+    { key: 'findings', label: 'Findings', icon: 'findings', badge: 'critical' },
+    { key: 'vulnerabilities', label: 'Vulnerabilities', icon: 'vulnerabilities' },
   ] },
   // The cycle is one frame with three working areas inside it. Each area owns
   // the screens that feed it; nothing is duplicated across groups.
   { group: 'CTEM cycle', collapsible: true, defaultOpen: true, items: [
-    { key: 'ctem', label: 'Cycle overview' },
+    { key: 'ctem', label: 'Cycle overview', icon: 'cycle' },
   ], sections: [
     { label: 'Scoping', items: [
-      { key: 'cycles', label: 'Cycles' },
-      { key: 'scope', label: 'Scope' },
+      { key: 'cycles', label: 'Cycles', icon: 'cycles' },
+      { key: 'scope', label: 'Scope', icon: 'scope' },
     ] },
     { label: 'Discovery', items: [
-      { key: 'assets', label: 'Assets' },
-      { key: 'attack-surface', label: 'Attack surface' },
-      { key: 'components', label: 'Components' },
-      { key: 'exposures', label: 'Exposures' },
-      { key: 'projects', label: 'Applications' },
+      { key: 'assets', label: 'Assets', icon: 'assets' },
+      { key: 'attack-surface', label: 'Attack surface', icon: 'attack-surface' },
+      { key: 'components', label: 'Components', icon: 'components' },
+      { key: 'exposures', label: 'Exposures', icon: 'exposures' },
+      { key: 'projects', label: 'Applications', icon: 'applications' },
     ] },
     { label: 'Prioritization', items: [
-      { key: 'priority-rules', label: 'Prioritization rules' },
-      { key: 'business-impact', label: 'Business impact' },
+      { key: 'priority-rules', label: 'Prioritization rules', icon: 'prioritization' },
+      { key: 'business-impact', label: 'Business impact', icon: 'business-impact' },
     ] },
   ] },
   { group: 'Code security', collapsible: true, defaultOpen: true, items: [
-    { key: 'analysis', label: 'Code analysis' },
-    { key: 'code', label: 'Pull requests' },
+    { key: 'analysis', label: 'Code analysis', icon: 'analysis' },
+    { key: 'code', label: 'Pull requests', icon: 'code' },
   ] },
   { group: 'Delivery', collapsible: true, items: [
-    { key: 'pipelines', label: 'Pipelines' },
-    { key: 'gates', label: 'Quality gates' },
-    { key: 'pentest', label: 'Pentests' },
-    { key: 'regression', label: 'Regression' },
+    { key: 'pipelines', label: 'Pipelines', icon: 'pipelines' },
+    { key: 'gates', label: 'Quality gates', icon: 'gates' },
+    { key: 'pentest', label: 'Pentests', icon: 'pentest' },
+    { key: 'regression', label: 'Regression', icon: 'regression' },
   ] },
   { group: 'Supply chain', collapsible: true, items: [
-    { key: 'licenses', label: 'Licenses' },
-    { key: 'orchestration', label: 'Orchestration' },
-    { key: 'jira', label: 'Jira' },
-    { key: 'remediation', label: 'Remediation' },
+    { key: 'licenses', label: 'Licenses', icon: 'licenses' },
+    { key: 'orchestration', label: 'Orchestration', icon: 'orchestration' },
+    { key: 'jira', label: 'Jira', icon: 'jira' },
+    { key: 'remediation', label: 'Remediation', icon: 'remediation' },
   ] },
   { group: 'Administration', collapsible: true, items: [
-    { key: 'notifications', label: 'Notifications' },
-    { key: 'grants', label: 'Grants' },
-    { key: 'members', label: 'Members' },
-    { key: 'audit', label: 'Audit trail' },
-    { key: 'setup', label: 'Setup guide' },
+    { key: 'notifications', label: 'Notifications', icon: 'notifications' },
+    { key: 'grants', label: 'Grants', icon: 'grants' },
+    { key: 'members', label: 'Members', icon: 'members' },
+    { key: 'audit', label: 'Audit trail', icon: 'audit' },
+    { key: 'setup', label: 'Setup guide', icon: 'setup' },
   ] },
 ]
 
@@ -120,6 +121,26 @@ export default function App() {
   const [session, setSession] = useState(() => api.settings())
   const [org, setOrg] = useState(null)
   const [badges, setBadges] = useState({})
+  const [query, setQuery] = useState('')
+  const searchRef = useRef(null)
+
+  // ⌘K / Ctrl+K jumps to the search box; the box is the keyboard path to every
+  // screen, which is cheaper than memorising the tree.
+  useEffect(() => {
+    const onKey = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        searchRef.current?.focus()
+        searchRef.current?.select()
+      }
+      if (event.key === 'Escape') {
+        setQuery('')
+        searchRef.current?.blur()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const needsKey = !session.key && !session.token
   const [providerUrl, setProviderUrl] = useState(session.url || '')
@@ -180,6 +201,12 @@ export default function App() {
     setTab(key)
     window.location.hash = key
   }
+
+  const matches = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return []
+    return NAV_ITEMS.filter((item) => item.label.toLowerCase().includes(needle)).slice(0, 8)
+  }, [query])
 
   const title = useMemo(() => {
     const found = NAV_ITEMS.find((item) => item.key === tab)
@@ -247,7 +274,10 @@ export default function App() {
                 aria-current={tab === item.key ? 'page' : undefined}
                 onClick={() => go(item.key)}
               >
-                <span>{item.label}</span>
+                <span className="nav-item-label">
+                  <Icon name={item.icon} />
+                  <span>{item.label}</span>
+                </span>
                 {count > 0 && (
                   <span className={`badge-count${item.badge === 'critical' ? ' bad' : ''}`}>
                     {count}
@@ -288,6 +318,40 @@ export default function App() {
         <header className="topbar">
           <div className="topbar-left">
             <div className="crumbs">barad-dûr / {title.toLowerCase()}</div>
+          </div>
+          <div className="topbar-search">
+            <Icon name="search" size={14} />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search or go to"
+              aria-label="Search or go to"
+            />
+            {!query && <kbd className="kbd">⌘K</kbd>}
+            {query && (
+              <div className="search-results" role="listbox">
+                {matches.length === 0 && (
+                  <div className="search-empty">no screen matches “{query.trim()}”</div>
+                )}
+                {matches.map((item) => (
+                  <button
+                    key={item.key}
+                    role="option"
+                    aria-selected={tab === item.key}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      go(item.key)
+                      setQuery('')
+                      searchRef.current?.blur()
+                    }}
+                  >
+                    <Icon name={item.icon} size={14} />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="topbar-actions">
             <span className="pill">
