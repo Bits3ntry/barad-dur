@@ -25,6 +25,8 @@ import Vulnerabilities from './Vulnerabilities'
 import Analysis from './Analysis'
 import Exposures from './Exposures'
 import AttackSurface from './AttackSurface'
+import Cycles from './Cycles'
+import MyWork from './MyWork'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
 import { Modal } from './ui'
@@ -46,11 +48,13 @@ const NAV = [
   ] },
   { group: 'Scoping', collapsible: true, defaultOpen: true, items: [
     { key: 'scope', label: 'Scope' },
+    { key: 'cycles', label: 'Cycles' },
   ] },
   { group: 'Code security', collapsible: true, defaultOpen: true, items: [
     { key: 'analysis', label: 'Code analysis' },
   ] },
   { group: 'General', collapsible: true, defaultOpen: true, items: [
+    { key: 'my-work', label: 'My work' },
     { key: 'findings', label: 'Findings', badge: 'critical' },
     { key: 'vulnerabilities', label: 'Vulnerabilities' },
     { key: 'projects', label: 'Projects' },
@@ -203,6 +207,8 @@ export default function App() {
       case 'analysis': return <Analysis projects={projects} />
       case 'exposures': return <Exposures />
       case 'attack-surface': return <AttackSurface />
+      case 'cycles': return <Cycles />
+      case 'my-work': return <MyWork />
       case 'components': return <Components projects={projects} onChanged={loadProjects} />
       case 'pipelines': return <Pipelines />
       case 'notifications': return <Notifications />

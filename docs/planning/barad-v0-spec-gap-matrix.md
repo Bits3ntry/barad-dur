@@ -387,3 +387,23 @@ Verification: `pytest` 250 passed (5 new cases: 200-is-not-vulnerable + excluded
 path, lookalike external + no scope entry, review grants nothing, weekly delivery
 not configured, isolation); migrations `upgrade → downgrade 0038 → upgrade`;
 `npm run build` passes the UI import guard.
+
+### Slice G — cycles, My work, dashboard counters (2026-11-02)
+
+Landed (migration `0039_cycles_and_work`): `cycles` (charter, selection, state
+machine planning→active→review→closed, frozen snapshot), `cycle_memberships`
+(frozen reference; later group edits never rewrite it), `cycle_findings`
+(identity-preserving links), `work_items` (tasks, decision requests,
+acceptances). Endpoints: cycles CRUD + preview/activate/link-findings/candidates/
+review/close; `/my-work` six trays with counters and a 72 h filter;
+`/my-work/items` create/decide/patch with no self-approval, reviewer-only
+decisions, requester-only withdraw/remind and a one-hour reminder limit;
+`GET /dashboard/v0` counters with links and declared coverage gaps.
+
+Console: **Cycles** (Scoping group) and **My work** (General group).
+
+Verification: `pytest` 253 passed (3 new cases: frozen reference + candidates,
+link/review/close history, trays + decision policy); migrations `upgrade →
+downgrade 0039 → upgrade`; `npm run build` passes the UI import guard.
+
+Final report per §15: `docs/planning/barad-v0-final-report.md`.

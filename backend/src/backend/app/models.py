@@ -1799,3 +1799,114 @@ class LookalikeDomain(Base, TimestampMixin):
     last_checked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── v0 cycles and work management ───────────────
+#
+# A cycle is a time-boxed evaluation with a charter and a frozen reference.
+# Activating it snapshots the charter and the membership: changing a group later
+# never rewrites what the cycle was looking at. A cycle grants no authorization.
+
+CYCLE_STATES = {"planning", "active", "review", "closed"}
+WORK_ITEM_KINDS = {"task", "request", "review", "acceptance"}
+WORK_ITEM_STATUSES = {"open", "in_progress", "awaiting_review", "approved",
+                      "rejected", "withdrawn", "done"}
+
+
+class Cycle(Base):
+    __tablename__ = "cycles"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_cycle_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    state: Mapped[str] = mapped_column(String(16), default="planning", index=True)
+    starts_on: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    ends_on: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    charter: Mapped[dict] = mapped_column(JSON, default=dict)
+    selection: Mapped[dict] = mapped_column(JSON, default=dict)
+    snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    snapshot_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    review: Mapped[dict] = mapped_column(JSON, default=dict)
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CycleMembership(Base):
+    """Frozen initial reference: one row per resource the cycle was opened on."""
+
+    __tablename__ = "cycle_memberships"
+    __table_args__ = (
+        UniqueConstraint("cycle_id", "entity_type", "entity_id",
+                         name="uq_cycle_membership"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    cycle_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cycles.id", ondelete="CASCADE"), index=True)
+    entity_type: Mapped[str] = mapped_column(String(24))
+    entity_id: Mapped[str] = mapped_column(String(36))
+    label: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    included_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+
+class CycleFinding(Base):
+    __tablename__ = "cycle_findings"
+    __table_args__ = (UniqueConstraint("cycle_id", "finding_id", name="uq_cycle_finding"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    cycle_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cycles.id", ondelete="CASCADE"), index=True)
+    finding_id: Mapped[str] = mapped_column(String(36), ForeignKey("findings.id"))
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    source: Mapped[str] = mapped_column(String(16), default="manual")
+
+
+class WorkItem(Base, TimestampMixin):
+    """A task, a request for a decision, or an acceptance with a validity.
+
+    Assignments and findings keep their own identity; this row is the work the
+    queues read, never a duplicate of the finding.
+    """
+
+    __tablename__ = "work_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="task", index=True)
+    title: Mapped[str] = mapped_column(String(512))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="open", index=True)
+    assignee: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    reviewer: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    remind_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_reminded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    cycle_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("cycles.id"), nullable=True)
+    finding_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("findings.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

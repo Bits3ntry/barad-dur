@@ -375,3 +375,84 @@ def exposure_flow(window: int = Query(default=30, ge=1, le=365),
             "closed_in_window": closed_in_window,
         },
     }}
+
+
+@router.get("/dashboard/v0")
+def v0_overview(org: models.Organization = Depends(auth.require_org),
+                session: Session = Depends(get_session)):
+    """The v0 dashboard block: every number comes from a query, and each one
+    declares where it links. Blocks that depend on coverage say so."""
+    from backend.app import severity as severity_vocab
+    from backend.app.routers.vulnerabilities import _group_rows
+
+    now = models.utcnow()
+    findings = (session.query(models.Finding)
+                .filter_by(org_id=org.id)
+                .filter(models.Finding.status != "suppressed").all())
+    open_findings = [row for row in findings if row.status in {"open", "acknowledged"}]
+    by_severity: dict[str, int] = {}
+    by_priority: dict[str, int] = {}
+    for row in open_findings:
+        severity = severity_vocab.canonical(row.severity)
+        by_severity[severity] = by_severity.get(severity, 0) + 1
+        key = row.priority or "unclassified"
+        by_priority[key] = by_priority.get(key, 0) + 1
+
+    assets = (session.query(models.Asset)
+              .filter_by(org_id=org.id)
+              .filter(models.Asset.archived_at.is_(None)).count())
+    projects = (session.query(models.Project).filter_by(org_id=org.id).count())
+    cves = _group_rows(session, org, include_suppressed=False)
+    cycles_active = (session.query(models.Cycle)
+                     .filter_by(org_id=org.id, state="active").count())
+    cycles_review = (session.query(models.Cycle)
+                     .filter_by(org_id=org.id, state="review").count())
+    open_exposures = (session.query(models.ExposureEvent)
+                      .filter_by(org_id=org.id, state="open").count())
+    needs_owner = (session.query(models.Asset)
+                   .filter_by(org_id=org.id, owner=None)
+                   .filter(models.Asset.archived_at.is_(None)).count())
+    acceptances_soon = (session.query(models.WorkItem)
+                        .filter_by(org_id=org.id, kind="acceptance")
+                        .filter(models.WorkItem.status.notin_(["rejected", "withdrawn"]))
+                        .all())
+    expiring = 0
+    for item in acceptances_soon:
+        if item.valid_until is None:
+            continue
+        due = item.valid_until if item.valid_until.tzinfo else \
+            item.valid_until.replace(tzinfo=datetime.timezone.utc)
+        if due <= now + datetime.timedelta(days=30):
+            expiring += 1
+
+    from backend.app.routers.attack_surface import changes as changes_query
+    recent = changes_query(days=7, category=None, asset=None, limit=1,
+                           org=org, session=session)
+
+    return {"data": {
+        "generated_at": now.isoformat(),
+        "assets": {"value": assets, "link": "assets"},
+        "projects": {"value": projects, "link": "projects"},
+        "findings": {"open": len(open_findings), "by_severity": by_severity,
+                     "by_priority": by_priority, "link": "findings"},
+        "vulnerabilities": {"cves": len(cves),
+                            "kev": sum(1 for row in cves
+                                       if row["enrichment"]["kev"]["listed"]),
+                            "link": "vulnerabilities"},
+        "recent_changes": {"last_7d": recent["total"],
+                           "link": "attack-surface"},
+        "exposures": {"open": open_exposures, "link": "exposures"},
+        "cycles": {"active": cycles_active, "in_review": cycles_review,
+                   "link": "cycles"},
+        "expiries": {"acceptances_next_30d": expiring, "link": "my-work"},
+        "coverage": {
+            "assets_without_owner": needs_owner,
+            "assets_without_project": (session.query(models.Asset)
+                                       .filter_by(org_id=org.id, project_id=None)
+                                       .filter(models.Asset.archived_at.is_(None))
+                                       .count()),
+            "change_coverage_notes": len(recent["coverage_notes"]),
+            "note": ("counters count what exists; a coverage gap means nothing was "
+                     "observed or evaluated there, not that it is clean"),
+        },
+    }}
