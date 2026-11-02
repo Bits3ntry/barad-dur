@@ -70,15 +70,20 @@ export default function CodeReview({ projects }) {
     } catch (e) { setError(String(e.message || e)) }
   }
 
+  // The dialog needs the pull request it was opened for; reading a `pr` that
+  // only exists inside the table's map crashed the whole screen.
+  const [publishFor, setPublishFor] = useState(null)
+
   async function publish(pr) {
+    setPublishFor(pr.id)
     setPublishResult('')
     setPublishOpen(true)
   }
 
   async function confirmPublish() {
-    const pr_id = pr.id
+    if (!publishFor) { setPublishOpen(false); return }
     try {
-      const r = await api.post(`/api/v1/code/pull-requests/${pr_id}/publish`,
+      const r = await api.post(`/api/v1/code/pull-requests/${publishFor}/publish`,
         { actor: 'console' })
       setPublishResult(`published ${r.data.state} to ${r.data.repository}`)
       setPublishOpen(false)
@@ -125,21 +130,6 @@ export default function CodeReview({ projects }) {
       })
       setForm({ number: '', title: '', project: '', version: '' })
       load()
-    } catch (e) { setError(String(e.message || e)) }
-  }
-
-  async function publish(pr) {
-    setPublishResult('')
-    setPublishOpen(true)
-  }
-
-  async function confirmPublish() {
-    const pr_id = pr.id
-    try {
-      const r = await api.post(`/api/v1/code/pull-requests/${pr_id}/publish`,
-        { actor: 'console' })
-      setPublishResult(`published ${r.data.state} to ${r.data.repository}`)
-      setPublishOpen(false)
     } catch (e) { setError(String(e.message || e)) }
   }
 
@@ -349,7 +339,7 @@ export default function CodeReview({ projects }) {
         onClose={() => setBaselineOpen(false)}
         confirmLabel="Snapshot" onConfirm={confirmSnapshotBaseline}>
         <Input label="Baseline name" value={baselineName}
-          onChange={(v) => setBaselineName(v)} placeholder={`baseline-${pr.number}`} />
+          onChange={(v) => setBaselineName(v)} placeholder="baseline name" />
       </Dialog>
       <Dialog open={reviewerOpen} title="Enter reviewer identity"
         onClose={() => setReviewerOpen(false)}

@@ -86,7 +86,7 @@ export default function SetupGuide({ onNavigate }) {
       safeCount('/api/v1/projects', (b) => (b.data || []).length),
       safeCount('/api/v1/components?limit=1', (b) => b.total ?? (b.data || []).length),
       safeCount('/api/v1/gate-policies', (b) => (b.data || []).length),
-      safeCount('/api/v1/pipelines', (b) => (b.data || []).length),
+      safeCount('/api/v1/ci/pipelines', (b) => (b.data || []).length),
       safeCount('/api/v1/auth/users', (b) => (b.data || []).length),
     ])
       .then(([grants, projects, components, gatePolicies, pipelines, members]) =>

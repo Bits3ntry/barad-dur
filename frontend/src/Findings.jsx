@@ -48,6 +48,12 @@ export default function Findings({ projects }) {
     detail: null, history: [], assignee: '',
   })
   const [bump, setBump] = useState(0)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createError, setCreateError] = useState('')
+  const [draft, setDraft] = useState({
+    kind: 'code-weakness', title: '', severity: 'HIGH', path: '', line: '',
+    cwe: '', impact: '', recommendation: '', reproduction: '', assignee: '',
+  })
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
 
@@ -185,6 +191,32 @@ export default function Findings({ projects }) {
     }
   }
 
+  async function createFinding() {
+    setCreateError('')
+    try {
+      await api.post('/api/v1/findings', {
+        project: state.project,
+        kind: draft.kind,
+        title: draft.title.trim(),
+        severity: draft.severity,
+        path: draft.path.trim() || undefined,
+        line: draft.line ? Number(draft.line) : undefined,
+        cwe: draft.cwe.trim() || undefined,
+        impact: draft.impact.trim() || undefined,
+        recommendation: draft.recommendation.trim() || undefined,
+        reproduction: draft.reproduction.trim() || undefined,
+        assignee: draft.assignee.trim() || undefined,
+        actor: 'console',
+      })
+      setCreateOpen(false)
+      setDraft({ kind: 'code-weakness', title: '', severity: 'HIGH', path: '', line: '',
+        cwe: '', impact: '', recommendation: '', reproduction: '', assignee: '' })
+      setBump((n) => n + 1)
+    } catch (error) {
+      setCreateError(String(error.message || error))
+    }
+  }
+
   return (
     <div>
       <PageHeader
@@ -192,7 +224,12 @@ export default function Findings({ projects }) {
         subtitle={state.error
           ? 'not loaded — the server rejected the request'
           : `${state.total} ${state.total === 1 ? 'finding' : 'findings'} in scope`}
-        actions={<button onClick={() => setBump((n) => n + 1)}>refresh</button>}
+        actions={(
+          <div className="row">
+            <button onClick={() => setBump((n) => n + 1)}>refresh</button>
+            <button className="primary-action" onClick={() => setCreateOpen(true)}>new finding</button>
+          </div>
+        )}
       />
       <div className="toolbar" style={{ marginBottom: 12 }}>
         <select value={state.project} onChange={(e) => setState((s) => ({ ...s, project: e.target.value, version: '' }))}>
@@ -341,6 +378,55 @@ export default function Findings({ projects }) {
             </React.Fragment>
           ))}
       </Table>
+
+      <Dialog open={createOpen} title="Record a finding"
+        onClose={() => setCreateOpen(false)} confirmLabel="create"
+        onConfirm={createFinding} size="normal">
+        {createError && <ErrorBanner error={createError} />}
+        <Input label="Title" value={draft.title}
+          onChange={(v) => setDraft((d) => ({ ...d, title: v }))}
+          placeholder="IDOR on invoice export" />
+        <div className="row">
+          <label className="field">
+            <span>Kind</span>
+            <select value={draft.kind}
+              onChange={(e) => setDraft((d) => ({ ...d, kind: e.target.value }))}>
+              <option value="code-weakness">code weakness</option>
+              <option value="misconfiguration">misconfiguration</option>
+              <option value="secret">secret</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Severity</span>
+            <select value={draft.severity}
+              onChange={(e) => setDraft((d) => ({ ...d, severity: e.target.value }))}>
+              {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((v) => <option key={v}>{v}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="row">
+          <Input label="Path" value={draft.path}
+            onChange={(v) => setDraft((d) => ({ ...d, path: v }))} placeholder="app/api/invoices.py" />
+          <Input label="Line" value={draft.line}
+            onChange={(v) => setDraft((d) => ({ ...d, line: v }))} placeholder="42" />
+          <Input label="CWE" value={draft.cwe}
+            onChange={(v) => setDraft((d) => ({ ...d, cwe: v }))} placeholder="CWE-639" />
+        </div>
+        <Input label="Impact" value={draft.impact}
+          onChange={(v) => setDraft((d) => ({ ...d, impact: v }))}
+          placeholder="one tenant can read another tenant's invoices" />
+        <Input label="Reproduction" value={draft.reproduction}
+          onChange={(v) => setDraft((d) => ({ ...d, reproduction: v }))}
+          placeholder="GET /invoices/123 with another tenant session" />
+        <Input label="Recommendation" value={draft.recommendation}
+          onChange={(v) => setDraft((d) => ({ ...d, recommendation: v }))}
+          placeholder="authorize by tenant before serializing" />
+        <Input label="Assignee" value={draft.assignee}
+          onChange={(v) => setDraft((d) => ({ ...d, assignee: v }))} placeholder="ana@bitsentry.xyz" />
+        <p className="muted" style={{ margin: 0 }}>
+          A finding without a CVE stays in Findings; it never invents an advisory.
+        </p>
+      </Dialog>
     </div>
   )
 }
