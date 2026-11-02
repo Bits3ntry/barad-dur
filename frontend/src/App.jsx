@@ -42,7 +42,7 @@ const NAV = [
   { group: 'Work', collapsible: true, defaultOpen: true, items: [
     { key: 'findings', label: 'Findings', badge: 'critical' },
     { key: 'projects', label: 'Projects' },
-    { key: 'assets', label: 'Attack surface' },
+    { key: 'assets', label: 'Assets' },
     { key: 'components', label: 'Components' },
   ] },
   { group: 'Delivery', collapsible: true, items: [

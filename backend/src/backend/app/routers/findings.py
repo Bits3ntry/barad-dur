@@ -1,11 +1,13 @@
-"""Finding endpoints: list, multi-kind ingest, status lifecycle (F2)."""
+"""Finding endpoints: list, manual creation, ingest, lifecycle, comments,
+evidence, ownership."""
+import hashlib
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from backend.app import auth, ci, incidents, models, vulns
+from backend.app import auth, ci, incidents, models, severity as severity_vocab, vulns
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
@@ -116,7 +118,16 @@ def get_finding(finding_id: str,
         "title": finding.title, "detail": finding.detail,
         "tool": finding.tool, "rule_id": finding.rule_id,
         "path": finding.path, "line": finding.line,
+        "assignee": finding.assignee, "cwe": finding.cwe,
+        "impact": finding.impact, "recommendation": finding.recommendation,
+        "reproduction": finding.reproduction,
+        "project_id": finding.project_id,
         "fingerprint": finding.fingerprint, "first_seen_at": finding.first_seen_at.isoformat(),
+        "last_seen_at": finding.last_seen_at.isoformat(),
+        "comments": (session.query(models.FindingComment)
+                     .filter_by(finding_id=finding.id).count()),
+        "attachments": (session.query(models.FindingAttachment)
+                        .filter_by(finding_id=finding.id).count()),
         "component_purl": (component.purl or component.identity_key) if component else None,
         "source_id": vulnerability.source_id if vulnerability else None,
         "cve_id": vulnerability.cve_id if vulnerability else None,
@@ -294,9 +305,16 @@ def list_findings(
     project: str | None = Query(default=None),
     version: str | None = Query(default=None),
     kind: str | None = Query(default=None),
+    q: str | None = Query(default=None, description="title / rule / path / cve text"),
+    severity: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    assignee: str | None = Query(default=None),
+    source: str | None = Query(default=None),
     include_suppressed: bool = Query(default=False,
                                      description="approved suppressions leave the default view"),
     status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     org: models.Organization = Depends(auth.require_org),
     session: Session = Depends(get_session),
 ):
@@ -307,6 +325,24 @@ def list_findings(
         query = query.filter(models.Finding.status != "suppressed")
     if status_filter:
         query = query.filter(models.Finding.status == status_filter)
+    if severity:
+        query = query.filter(models.Finding.severity.in_(
+            severity_vocab.raw_variants(severity)))
+    if priority:
+        query = query.filter(models.Finding.priority == priority.upper())
+    if assignee:
+        query = query.filter(models.Finding.assignee == assignee)
+    if source:
+        query = query.filter(models.Finding.source == source)
+    if q:
+        needle = f"%{q.strip()}%"
+        query = (query.outerjoin(models.Vulnerability,
+                                 models.Finding.vulnerability_id == models.Vulnerability.id)
+                 .filter(models.Finding.title.ilike(needle)
+                         | models.Finding.rule_id.ilike(needle)
+                         | models.Finding.path.ilike(needle)
+                         | models.Vulnerability.cve_id.ilike(needle)
+                         | models.Vulnerability.source_id.ilike(needle)))
     if project or version:
         if not (project and version):
             # Project-only filter is a legitimate view: every version's
@@ -325,7 +361,9 @@ def list_findings(
             query = query.filter(models.Finding.last_seen_version_id == project_version.id)
     if kind:
         query = query.filter(models.Finding.kind == kind)
-    rows = query.order_by(models.Finding.last_seen_at.desc()).all()
+    total = query.count()
+    rows = (query.order_by(models.Finding.last_seen_at.desc())
+            .offset(offset).limit(limit).all())
 
     data = []
     for finding in rows:
@@ -353,11 +391,12 @@ def list_findings(
             "project_id": finding.project_id,
             "priority": finding.priority,
             "priority_reason": finding.priority_reason,
+            "assignee": finding.assignee,
             "sla_deadline": finding.sla_deadline.isoformat() if finding.sla_deadline else None,
             "first_seen_at": finding.first_seen_at.isoformat(),
             "last_seen_at": finding.last_seen_at.isoformat(),
         })
-    return {"data": data, "total": len(data)}
+    return {"data": data, "total": total, "limit": limit, "offset": offset}
 
 
 def _resolve(session, org_id: str, project: str, version: str):
@@ -372,3 +411,209 @@ def _resolve(session, org_id: str, project: str, version: str):
 def _version(session, project_row, version: str):
     return (session.query(models.ProjectVersion)
             .filter_by(project_id=project_row.id, version=version).one_or_none())
+
+
+# ─────────────── v0: manual findings, ownership, comments, evidence ───────────────
+
+MANUAL_KINDS = {"secret", "misconfiguration", "code-weakness"}
+MAX_ATTACHMENT_CHARS = 200_000
+
+
+class ManualFindingIn(BaseModel):
+    """A finding a human observed. An IDOR without a CVE is exactly this: a
+    concrete problem at a concrete location, with no advisory behind it."""
+
+    project: str = Field(min_length=1, max_length=128)
+    kind: str
+    title: str = Field(min_length=3, max_length=1024)
+    severity: str | None = None
+    detail: str | None = Field(default=None, max_length=20000)
+    path: str | None = Field(default=None, max_length=1024)
+    line: int | None = Field(default=None, ge=1)
+    cwe: str | None = Field(default=None, max_length=64)
+    impact: str | None = Field(default=None, max_length=20000)
+    recommendation: str | None = Field(default=None, max_length=20000)
+    reproduction: str | None = Field(default=None, max_length=20000)
+    assignee: str | None = Field(default=None, max_length=255)
+    actor: str = Field(default="system", max_length=255)
+
+    @field_validator("kind")
+    @classmethod
+    def kind_known(cls, value):
+        if value not in MANUAL_KINDS:
+            raise ValueError(f"kind must be one of {sorted(MANUAL_KINDS)}")
+        return value
+
+
+@router.post("/findings", status_code=status.HTTP_201_CREATED)
+def create_manual_finding(payload: ManualFindingIn = None,
+                          org: models.Organization = Depends(auth.require_org),
+                          session: Session = Depends(get_session)):
+    """Manual creation shares the finding identity space with imports.
+
+    The fingerprint recipe is its own (`manual|…`) so a hand-recorded weakness
+    is never fused with an advisory-derived finding; repeating the same manual
+    report in the same project returns the existing row instead of a duplicate.
+    """
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    project_row = (session.query(models.Project)
+                   .filter_by(org_id=org.id, slug=payload.project).one_or_none())
+    if project_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    recipe = "|".join(["manual", org.id, project_row.id, payload.kind,
+                       payload.title.strip(), payload.path or "", str(payload.line or "")])
+    fingerprint = hashlib.sha256(recipe.encode()).hexdigest()
+    existing = (session.query(models.Finding)
+                .filter_by(org_id=org.id, fingerprint=fingerprint).one_or_none())
+    if existing is not None:
+        existing.last_seen_at = models.utcnow()
+        session.commit()
+        return {"data": {"id": existing.id, "status": existing.status},
+                "already_known": True}
+    finding = models.Finding(
+        org_id=org.id, project_id=project_row.id, kind=payload.kind,
+        fingerprint=fingerprint, source="manual",
+        title=payload.title.strip(),
+        detail=payload.detail,
+        severity=severity_vocab.canonical(payload.severity),
+        path=payload.path, line=payload.line, cwe=payload.cwe,
+        impact=payload.impact, recommendation=payload.recommendation,
+        reproduction=payload.reproduction, assignee=payload.assignee,
+        status="open", first_seen_at=models.utcnow(), last_seen_at=models.utcnow())
+    session.add(finding)
+    session.flush()
+    _audit_log(session, org.id, payload.actor, "finding.created", "finding",
+               finding.id, f"{payload.kind}: {finding.title}")
+    session.commit()
+    return {"data": {"id": finding.id, "kind": finding.kind,
+                     "severity": finding.severity, "status": finding.status,
+                     "cve_id": None}, "already_known": False}
+
+
+class AssigneeIn(BaseModel):
+    assignee: str | None = Field(default=None, max_length=255)
+    actor: str = Field(min_length=1, max_length=255)
+
+
+@router.patch("/findings/{finding_id}/assignee")
+def assign_finding(finding_id: str, payload: AssigneeIn = None,
+                   org: models.Organization = Depends(auth.require_org),
+                   session: Session = Depends(get_session)):
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    finding.assignee = (payload.assignee or "").strip() or None
+    _audit_log(session, org.id, payload.actor, "finding.assigned", "finding",
+               finding.id, finding.assignee or "unassigned")
+    session.commit()
+    return {"data": {"id": finding.id, "assignee": finding.assignee}}
+
+
+class CommentIn(BaseModel):
+    body: str = Field(min_length=1, max_length=20000)
+    author: str = Field(min_length=1, max_length=255)
+
+
+@router.get("/findings/{finding_id}/comments")
+def list_comments(finding_id: str,
+                  org: models.Organization = Depends(auth.require_org),
+                  session: Session = Depends(get_session)):
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    rows = (session.query(models.FindingComment)
+            .filter_by(finding_id=finding.id)
+            .order_by(models.FindingComment.created_at).all())
+    return {"data": [{"id": row.id, "author": row.author, "body": row.body,
+                      "created_at": row.created_at.isoformat()} for row in rows],
+            "total": len(rows)}
+
+
+@router.post("/findings/{finding_id}/comments", status_code=status.HTTP_201_CREATED)
+def add_comment(finding_id: str, payload: CommentIn = None,
+                org: models.Organization = Depends(auth.require_org),
+                session: Session = Depends(get_session)):
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    comment = models.FindingComment(org_id=org.id, finding_id=finding.id,
+                                    author=payload.author, body=payload.body)
+    session.add(comment)
+    session.flush()
+    _audit_log(session, org.id, payload.author, "finding.comment_added", "finding",
+               finding.id, payload.body[:120])
+    session.commit()
+    return {"data": {"id": comment.id, "author": comment.author,
+                     "body": comment.body,
+                     "created_at": comment.created_at.isoformat()}}
+
+
+class AttachmentIn(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    media_type: str = Field(default="text/plain", max_length=128)
+    content: str = Field(min_length=1, max_length=MAX_ATTACHMENT_CHARS)
+    added_by: str = Field(min_length=1, max_length=255)
+
+
+def _attachment_meta(row: models.FindingAttachment) -> dict:
+    return {"id": row.id, "name": row.name, "media_type": row.media_type,
+            "size_bytes": row.size_bytes, "sha256": row.sha256,
+            "redaction_state": row.redaction_state, "added_by": row.added_by,
+            "created_at": row.created_at.isoformat()}
+
+
+@router.get("/findings/{finding_id}/attachments")
+def list_attachments(finding_id: str,
+                     org: models.Organization = Depends(auth.require_org),
+                     session: Session = Depends(get_session)):
+    """Metadata only: reading the bytes is a separate, explicit call."""
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    rows = (session.query(models.FindingAttachment)
+            .filter_by(finding_id=finding.id)
+            .order_by(models.FindingAttachment.created_at).all())
+    return {"data": [_attachment_meta(row) for row in rows], "total": len(rows)}
+
+
+@router.post("/findings/{finding_id}/attachments",
+             status_code=status.HTTP_201_CREATED)
+def add_attachment(finding_id: str, payload: AttachmentIn = None,
+                   org: models.Organization = Depends(auth.require_org),
+                   session: Session = Depends(get_session)):
+    """Evidence is stored bounded and marked `unreviewed`; v0 does not detect
+    secrets inside it, and the badge says so rather than implying a check."""
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    digest = hashlib.sha256(payload.content.encode()).hexdigest()
+    row = models.FindingAttachment(
+        org_id=org.id, finding_id=finding.id, name=payload.name,
+        media_type=payload.media_type, size_bytes=len(payload.content.encode()),
+        sha256=digest, content=payload.content, added_by=payload.added_by)
+    session.add(row)
+    session.flush()
+    _audit_log(session, org.id, payload.added_by, "finding.attachment_added",
+               "finding", finding.id, f"{payload.name} ({row.size_bytes} bytes)")
+    session.commit()
+    return {"data": _attachment_meta(row)}
+
+
+@router.get("/findings/{finding_id}/attachments/{attachment_id}")
+def read_attachment(finding_id: str, attachment_id: str,
+                    org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    row = session.get(models.FindingAttachment, attachment_id)
+    if row is None or row.org_id != org.id or row.finding_id != finding.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "attachment not found")
+    return {"data": {**_attachment_meta(row), "content": row.content}}

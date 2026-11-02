@@ -232,3 +232,30 @@ Dependencies only reorder work; nothing below is dropped silently.
 3. Code analysis intake: create a repository implicitly when the report names a
    URL — recommendation: yes, with `source=import` provenance so it is not
    mistaken for a connected provider.
+
+## 14. Progress log
+
+### Slice B — shared model (2026-11-02)
+
+Landed (backend + tests + console tabs, migration `0033_v0_inventory`):
+
+| Piece | Evidence | Still missing |
+|---|---|---|
+| Application components + artifacts | `models.py` (`ApplicationComponent`, `Artifact`), `deployments.artifact_id` | No API/UI yet; deployments cannot be pointed at an artifact from the console. |
+| Asset ownership & classification | `assets.owner/project_id/classification_status/notes/archived_at`, `PATCH /assets/{id}`, archive/unarchive, filters + search + paging (`easm.py`) | No asset↔deployment/version link from the UI; technology provenance table still absent. |
+| Inventory groups | `inventory_groups.py` (CRUD, bulk membership, soft removal, stakeholders), `Assets.jsx` Groups tab | Dynamic groups, per-group findings view. |
+| Needs attention | `GET /assets/needs-attention` with reason codes + actions, own tab | Rules are the four implemented ones only (owner, project, classification, staleness, deployment). |
+| Activity | `GET /activity` over the audit ledger, Activity tab, audited asset/group/finding mutations | Import/run FKs are not attached to audit rows yet. |
+| Finding ownership + narrative + evidence | `findings.assignee/cwe/impact/recommendation/reproduction`, `PATCH /findings/{id}/assignee`, comments, attachments (`findings.py`) | Detail screen fields, attachment export guard, comment edit/delete. |
+| Manual findings (IDOR without CVE) | `POST /findings` with its own `manual|…` fingerprint recipe, dedup on repeat | Manual findings reach Findings list/detail; project screen not yet. |
+| Findings list filters | search, severity, priority, assignee, source, pagination (`findings.py:get list`) | Asset/deployment/environment filters need the relations from slice C. |
+
+Verification run for this slice: `pytest` 219 passed (incl. `tests/test_v0_inventory.py`,
+8 cases covering N:M membership, removal keeping the asset, group deletion, org
+isolation, needs-attention reasons, activity scoping, manual IDOR with no CVE,
+assignment/comments/attachments); `alembic upgrade head` applied cleanly on a
+throwaway PostgreSQL database; `npm run build` passes the UI import guard.
+
+Not deployed: the image was not rebuilt, because the worktree also carries the
+unfinished refresh-token work (`0032` is committed here only as the migration
+parent of `0033`; its code half stays uncommitted).

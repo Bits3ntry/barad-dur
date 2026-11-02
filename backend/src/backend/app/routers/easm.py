@@ -4,7 +4,7 @@ import json
 import urllib.request
 from email.utils import parsedate_to_datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -80,20 +80,204 @@ def crtsh_subdomains(domain: str, timeout: float = 25.0) -> list[str]:
     return sorted(found)
 
 
+def _asset_data(session: Session, asset: models.Asset) -> dict:
+    project = session.get(models.Project, asset.project_id) if asset.project_id else None
+    groups = (session.query(models.InventoryGroup)
+              .join(models.InventoryGroupMember,
+                    models.InventoryGroupMember.group_id == models.InventoryGroup.id)
+              .filter(models.InventoryGroupMember.asset_id == asset.id,
+                      models.InventoryGroupMember.removed_at.is_(None)).all())
+    return {"id": asset.id, "type": asset.type, "value": asset.value,
+            "source": asset.source, "detail": asset.detail,
+            "project": project.slug if project else None,
+            "owner": asset.owner,
+            "classification_status": asset.classification_status,
+            "notes": asset.notes,
+            "archived_at": asset.archived_at.isoformat() if asset.archived_at else None,
+            "groups": [{"id": g.id, "name": g.name} for g in groups],
+            "discovered_at": asset.discovered_at.isoformat(),
+            "last_seen_at": asset.last_seen_at.isoformat(),
+            "latest": _latest_observation(session, asset)}
+
+
 @router.get("/assets")
 def list_assets(type: str | None = None,
+                project: str | None = None,
+                group_id: str | None = None,
+                owner: str | None = None,
+                classification: str | None = None,
+                q: str | None = None,
+                include_archived: bool = False,
+                limit: int = Query(default=100, ge=1, le=500),
+                offset: int = Query(default=0, ge=0),
                 org: models.Organization = Depends(auth.require_org),
                 session: Session = Depends(get_session)):
+    """Inventory paging/filtering. `total` counts the filtered set, not the page."""
     query = session.query(models.Asset).filter_by(org_id=org.id)
     if type is not None:
         query = query.filter_by(type=type)
-    rows = query.order_by(models.Asset.last_seen_at.desc()).all()
-    return {"data": [{"id": r.id, "type": r.type, "value": r.value,
-                      "source": r.source, "detail": r.detail,
-                      "discovered_at": r.discovered_at.isoformat(),
-                      "last_seen_at": r.last_seen_at.isoformat(),
-                      "latest": _latest_observation(session, r)} for r in rows],
-            "total": len(rows)}
+    if not include_archived:
+        query = query.filter(models.Asset.archived_at.is_(None))
+    if owner is not None:
+        query = query.filter(models.Asset.owner == owner)
+    if classification is not None:
+        query = query.filter(models.Asset.classification_status == classification)
+    if project is not None:
+        project_row = (session.query(models.Project)
+                       .filter_by(org_id=org.id, slug=project).one_or_none())
+        if project_row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+        query = query.filter(models.Asset.project_id == project_row.id)
+    if group_id is not None:
+        query = (query.join(models.InventoryGroupMember,
+                            models.InventoryGroupMember.asset_id == models.Asset.id)
+                 .filter(models.InventoryGroupMember.group_id == group_id,
+                         models.InventoryGroupMember.removed_at.is_(None)))
+    if q:
+        needle = f"%{q.strip()}%"
+        query = query.filter(models.Asset.value.ilike(needle))
+    total = query.count()
+    rows = (query.order_by(models.Asset.last_seen_at.desc())
+            .offset(offset).limit(limit).all())
+    return {"data": [_asset_data(session, r) for r in rows], "total": total,
+            "limit": limit, "offset": offset}
+
+
+@router.get("/assets/needs-attention")
+def needs_attention(limit: int = Query(default=100, ge=1, le=500),
+                    org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    """Computed queue: each row says what is missing and which action fixes it.
+
+    Every reason is a rule that is actually implemented here; "not observed" is
+    reported as a coverage gap, never as "does not exist".
+    """
+    rows = (session.query(models.Asset)
+            .filter_by(org_id=org.id)
+            .filter(models.Asset.archived_at.is_(None))
+            .order_by(models.Asset.last_seen_at.asc()).all())
+    items = []
+    now = models.utcnow()
+    for asset in rows:
+        reasons = []
+        if not asset.owner:
+            reasons.append({"code": "no_owner", "what": "no accountable owner",
+                            "action": "assign an owner"})
+        if asset.project_id is None:
+            reasons.append({"code": "no_project", "what": "not attached to a project",
+                            "action": "link it to a project or mark it external"})
+        if asset.classification_status in {"unclassified", "pending"}:
+            reasons.append({"code": "ownership_unconfirmed",
+                            "what": f"classification is {asset.classification_status}",
+                            "action": "confirm ownership, mark external, or discard"})
+        last = asset.last_seen_at
+        if last is not None and last.tzinfo is None:
+            last = last.replace(tzinfo=datetime.timezone.utc)
+        if last is None or (now - last).days >= 30:
+            reasons.append({"code": "stale", "what": "no observation in 30+ days",
+                            "action": "re-collect, or record that it is retired"})
+        groups = (session.query(models.InventoryGroupMember)
+                  .filter_by(asset_id=asset.id, removed_at=None).count())
+        deployments = (session.query(models.AssetLink)
+                       .filter_by(asset_id=asset.id, entity_type="deployment",
+                                  removed_at=None).count())
+        if deployments == 0:
+            reasons.append({"code": "no_deployment",
+                            "what": "no deployment relation recorded",
+                            "action": "link it to the deployment that serves it"})
+        if not reasons:
+            continue
+        items.append({"asset": _asset_data(session, asset), "groups": groups,
+                      "reasons": reasons,
+                      "observation": "observed" if last else "never observed"})
+    items.sort(key=lambda row: (-len(row["reasons"]), row["asset"]["value"]))
+    return {"data": items[:limit], "total": len(items)}
+
+
+class AssetPatch(BaseModel):
+    owner: str | None = Field(default=None, max_length=255)
+    project: str | None = Field(default=None, max_length=128)
+    classification_status: str | None = None
+    notes: str | None = Field(default=None, max_length=8192)
+    detail: str | None = Field(default=None, max_length=4096)
+    actor: str | None = Field(default=None, max_length=255)
+
+
+@router.patch("/assets/{asset_id}")
+def patch_asset(asset_id: str, payload: AssetPatch = None,
+                org: models.Organization = Depends(auth.require_org),
+                session: Session = Depends(get_session)):
+    """Ownership and classification only. Scope authorization is a separate
+    decision and is never granted by confirming that an asset is ours."""
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    asset = session.get(models.Asset, asset_id)
+    if asset is None or asset.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+    changes = []
+    if payload.owner is not None:
+        asset.owner = payload.owner.strip() or None
+        changes.append(f"owner={asset.owner or 'none'}")
+    if payload.project is not None:
+        if payload.project == "":
+            asset.project_id = None
+            changes.append("project=none")
+        else:
+            project_row = (session.query(models.Project)
+                           .filter_by(org_id=org.id, slug=payload.project).one_or_none())
+            if project_row is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+            asset.project_id = project_row.id
+            changes.append(f"project={project_row.slug}")
+    if payload.classification_status is not None:
+        if payload.classification_status not in models.ASSET_CLASSIFICATION:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"classification_status must be one of "
+                                f"{sorted(models.ASSET_CLASSIFICATION)}")
+        asset.classification_status = payload.classification_status
+        changes.append(f"classification={payload.classification_status}")
+    if payload.notes is not None:
+        asset.notes = payload.notes
+        changes.append("notes")
+    if payload.detail is not None:
+        asset.detail = payload.detail
+        changes.append("detail")
+    if not changes:
+        return {"data": _asset_data(session, asset), "changed": False}
+    _audit_log(session, org.id, payload.actor or "system", "asset.updated",
+               "asset", asset.id, ", ".join(changes))
+    session.commit()
+    return {"data": _asset_data(session, asset), "changed": True}
+
+
+def _set_archived(asset_id: str, actor: str | None, archived: bool, org, session):
+    asset = session.get(models.Asset, asset_id)
+    if asset is None or asset.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+    if (asset.archived_at is not None) == archived:
+        return {"data": _asset_data(session, asset), "changed": False}
+    asset.archived_at = models.utcnow() if archived else None
+    _audit_log(session, org.id, actor or "system",
+               "asset.archived" if archived else "asset.unarchived",
+               "asset", asset.id, asset.value)
+    session.commit()
+    return {"data": _asset_data(session, asset), "changed": True}
+
+
+@router.post("/assets/{asset_id}/archive")
+def archive_asset(asset_id: str, actor: str | None = Query(default=None),
+                  org: models.Organization = Depends(auth.require_org),
+                  session: Session = Depends(get_session)):
+    """Archive keeps every relation and the whole history; it only leaves the
+    default inventory view."""
+    return _set_archived(asset_id, actor, True, org, session)
+
+
+@router.post("/assets/{asset_id}/unarchive")
+def unarchive_asset(asset_id: str, actor: str | None = Query(default=None),
+                    org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    return _set_archived(asset_id, actor, False, org, session)
 
 
 class AssetIn(BaseModel):

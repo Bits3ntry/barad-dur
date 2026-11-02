@@ -190,6 +190,14 @@ class Finding(Base, TimestampMixin):
     rule_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Owner and narrative fields the detail screen owes the reader. `assignee`
+    # is a free identity (email or principal name) so API-key and human actors
+    # share one column; My work resolves it against the caller.
+    assignee: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    cwe: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    impact: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reproduction: Mapped[str | None] = mapped_column(Text, nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -407,6 +415,16 @@ class Asset(Base):
     value: Mapped[str] = mapped_column(String(1024))
     source: Mapped[str] = mapped_column(String(64))
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Inventory ownership. `classification_status` is deliberately separate from
+    # scope authorization: confirming an asset is ours never grants a scan.
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True, index=True)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    classification_status: Mapped[str] = mapped_column(
+        String(24), default="unclassified", index=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -597,6 +615,18 @@ class Deployment(Base, TimestampMixin):
         String(36), ForeignKey("services.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(255))
     environment: Mapped[str] = mapped_column(String(64), default="production")
+    # What exactly is running here. A deployment points at an artifact (and
+    # through it at a version); "in production" is read from these rows, never
+    # from a flag on the version.
+    artifact_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("artifacts.id"), nullable=True, index=True)
+    application_component_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("application_components.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    deployed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1337,3 +1367,154 @@ class TrivyDbUpdate(Base, TimestampMixin):
 
 
 
+
+
+# ─────────────── v0 inventory: application components, artifacts ───────────────
+#
+# A technical component (backend/frontend/worker) is *not* a software package:
+# `Component` is a purl-identified dependency, `Service` is a deployable, and
+# this is the code unit the application is made of. Keeping them apart is what
+# makes "which package is in which build" answerable later.
+
+APP_COMPONENT_KINDS = {"backend", "frontend", "worker", "other"}
+ASSET_CLASSIFICATION = {"unclassified", "pending", "confirmed", "external", "discarded"}
+DEPLOYMENT_STATUSES = {"planned", "active", "retired"}
+
+
+class ApplicationComponent(Base):
+    """One code unit of a project (AUREA backend, AUREA web, workers)."""
+
+    __tablename__ = "application_components"
+    __table_args__ = (
+        UniqueConstraint("project_id", "slug", name="uq_app_component_slug"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(24), default="backend")
+    name: Mapped[str] = mapped_column(String(255))
+    slug: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Artifact(Base):
+    """The exact build: digest, provenance and the SBOM that describes it.
+
+    A version can have many artifacts, and only a deployment (not the version
+    row) says what is running where.
+    """
+
+    __tablename__ = "artifacts"
+    __table_args__ = (
+        UniqueConstraint("org_id", "digest", name="uq_artifact_digest"),
+        Index("ix_artifacts_version", "project_version_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    project_version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_versions.id"), nullable=True)
+    application_component_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("application_components.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(255))
+    digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    digest_algorithm: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provenance: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), default="import")
+    build_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── v0 inventory: groups + stakeholders ───────────────
+#
+# Inventory groups organize *resources*. They are unrelated to access groups
+# (which do not exist yet): membership here never grants a permission.
+
+INVENTORY_GROUP_ROLES = {"owner", "collaborator"}
+
+
+class InventoryGroup(Base):
+    __tablename__ = "inventory_groups"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_inventory_group_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class InventoryGroupMember(Base):
+    """Asset ↔ group edge. Removal is soft (`removed_at`) so activity survives."""
+
+    __tablename__ = "inventory_group_members"
+    __table_args__ = (UniqueConstraint("group_id", "asset_id", name="uq_group_asset"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    group_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("inventory_groups.id", ondelete="CASCADE"), index=True)
+    asset_id: Mapped[str] = mapped_column(String(36), ForeignKey("assets.id"), index=True)
+    added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+
+class InventoryGroupStakeholder(Base):
+    __tablename__ = "inventory_group_stakeholders"
+    __table_args__ = (UniqueConstraint("group_id", "actor", name="uq_group_stakeholder"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    group_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("inventory_groups.id", ondelete="CASCADE"), index=True)
+    actor: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(24), default="collaborator")
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── v0 findings: owner, comments, evidence ───────────────
+
+class FindingComment(Base):
+    __tablename__ = "finding_comments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("findings.id", ondelete="CASCADE"), index=True)
+    author: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FindingAttachment(Base):
+    """Evidence attachment. Contents live in the row (bounded), never on disk.
+
+    `redaction_state` starts `unreviewed`: v0 stores the bytes as uploaded and
+    marks them; automated secret detection is not implemented and must not be
+    implied by a clean-looking badge.
+    """
+
+    __tablename__ = "finding_attachments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("findings.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    media_type: Mapped[str] = mapped_column(String(128), default="text/plain")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str] = mapped_column(String(64))
+    content: Mapped[str] = mapped_column(Text)
+    redaction_state: Mapped[str] = mapped_column(String(24), default="unreviewed")
+    added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
