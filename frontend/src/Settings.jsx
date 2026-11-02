@@ -12,6 +12,7 @@ export default function Settings({ onClose }) {
   const [busy, setBusy] = useState(false)
   const [revokeOpen, setRevokeOpen] = useState(false)
   const [revokeRow, setRevokeRow] = useState(null)
+  const [signOptions, setSignOptions] = useState({ sso: null, mfa: null })
 
   function loadKeys() {
     api.get('/api/v1/org/keys')
@@ -51,6 +52,12 @@ export default function Settings({ onClose }) {
   }
 
   useEffect(() => {
+    api.get('/api/v1/auth/oidc/status')
+      .then((r) => setSignOptions((s) => ({ ...s, sso: r.data })))
+      .catch(() => setSignOptions((s) => ({ ...s, sso: null })))
+    api.get('/api/v1/auth/mfa')
+      .then((r) => setSignOptions((s) => ({ ...s, mfa: r.data })))
+      .catch(() => setSignOptions((s) => ({ ...s, mfa: null })))
     api.get('/api/v1/auth/me')
       .then((r) => setIdentity(r.data))
       .catch(() => setIdentity(null))
@@ -146,6 +153,31 @@ export default function Settings({ onClose }) {
           {identity.kind === 'user' && <button className="mini" onClick={signOut}>sign out</button>}
         </p>
       )}
+
+      <div className="signin-block">
+        <h3 className="section">sign-in and security</h3>
+        <p className="muted" style={{ margin: '0 0 6px' }}>
+          Second factor:{' '}
+          {signOptions.mfa === null
+            ? 'needs a signed-in user'
+            : signOptions.mfa.enabled
+              ? `enabled · ${signOptions.mfa.recovery_codes_left} recovery code(s) left`
+              : 'off'}
+          {identity?.kind === 'user' && ' — manage it in Administration → My security'}
+        </p>
+        <p className="muted" style={{ margin: 0 }}>
+          Single sign-on:{' '}
+          {signOptions.sso?.configured
+            ? `${signOptions.sso.provider} · ${signOptions.sso.issuer}`
+            : 'not configured'}
+          {' · '}
+          {signOptions.sso?.configured
+            ? (signOptions.sso.auto_provision
+              ? 'new identities are provisioned as viewers'
+              : 'only accounts that already exist here can sign in')
+            : 'set OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET and OIDC_REDIRECT_URI'}
+        </p>
+      </div>
 
       {identity && identity.kind === 'user' && (
         <>

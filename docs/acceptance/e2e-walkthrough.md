@@ -40,6 +40,18 @@ endpoint is the supported path.
 | 13 | Activate, link findings, review, close | Cycles → *activate and freeze* → *link project findings* → *record review* → *close cycle* | `activated: 3 members frozen`; findings `2`; `review recorded`; detail keeps charter, selection and review after closing |
 | 14 | Re-read Business impact | Business impact | `1 application · 2 open findings · 1 asset · 0 production deployments`, P1 1 / untriaged 1, and the note that criticality is not modelled |
 
+## Identity and channels (same stack, session login)
+
+The e2e stack also creates a human account (`ana@bitsentry.xyz`, throwaway
+password printed by `scripts/e2e_stack.py`) so the flows that need a session can
+be walked:
+
+| # | Step | Expected |
+|---|---|---|
+| 15 | Settings shows *sign-in and security* | with an API key: "second factor needs a signed-in user"; the SSO line names the provider when `OIDC_*` is set, otherwise the four variables to set |
+| 16 | Sign in with email+password → Administration → *My security* → start enrolment → scan the QR/manual secret → confirm a code | factor becomes `enabled`, eight recovery codes appear **once**, and the next login asks for a code before issuing a session (wrong code rejected, recovery code accepted once) |
+| 17 | Notifications → *Delivery channels* → kind `slack` → paste a webhook URL → **test** | `test delivered … HTTP 200`; the receiver gets `{text, blocks}`, not the signed generic envelope |
+
 ## What the pass checks under the surface
 
 - **Console errors and failed calls.** Before navigating, the browser records

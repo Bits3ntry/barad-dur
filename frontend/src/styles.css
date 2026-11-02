@@ -1313,3 +1313,9 @@ td .mono, .table-wrap td .mono { white-space: nowrap; }
   gap: 6px 14px; font-family: ui-monospace, Menlo, monospace; font-size: 13px;
 }
 .mfa-codes code { background: var(--panel-2); padding: 4px 8px; border-radius: 6px; }
+
+.signin-block {
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  background: var(--bg-soft);
+}
+.signin-block .section { margin-top: 0; }
