@@ -1,16 +1,27 @@
-# Barad-dûr v0 — final report (audit → implementation)
+# Barad-dûr v0 — final report (audit → implementation → acceptance)
 
 Date 2026-11-02. This is the §15 deliverable: what is implemented, what is
-partial, what is pending, and why. "Implemented" means: persistence + API +
-permissions + console + tests, verified by running the suite and the migration
-chain. A screen or route alone is not called implemented anywhere below.
+partial, what is pending, and why. "Implemented" means persistence + API +
+permissions + console + tests, verified by running the suite, the migration
+chain and a browser walkthrough. A screen or a route alone is never called
+implemented below.
 
-Verification baseline for every slice: `pytest` green, `alembic upgrade head`
-(and the slice's `downgrade`) applied on a throwaway PostgreSQL database, and
-`npm run build` passing the console's import guard. The suite ended at
-**253 passed**.
+## Verification baseline
 
-## Migrations added (all additive, chain 0031 → 0039)
+| Check | Result |
+|---|---|
+| `pytest -q` (backend) | **258 passed** |
+| `alembic upgrade head` on a throwaway PostgreSQL DB | 0031 → **0040** |
+| `alembic downgrade -1` / `upgrade head` for 0040 | clean, `sbom_imports.artifact_id` recreated with FK + index |
+| `npm run build` (console) | passes |
+| `scripts/demo_v0.py` on an isolated SQLite stack | 25 assertions, all green |
+| Browser walkthrough of that stack (`--serve`) | see "Acceptance walkthrough" |
+
+The suite runs against SQLite; the migration chain was exercised against the
+compose PostgreSQL in a disposable database (`v0_mig_check`), never against the
+live schema.
+
+## Migrations added (all additive, chain 0031 → 0040)
 
 | Rev | What |
 |---|---|
@@ -21,71 +32,103 @@ Verification baseline for every slice: `pytest` green, `alembic upgrade head`
 | 0037_attack_surface | observations (with coverage), exposure events, exposure decisions |
 | 0038_web_and_lookalikes | web endpoints, lookalike domains |
 | 0039_cycles_and_work | cycles, frozen memberships, cycle findings, work items |
+| 0040_sbom_artifact | `sbom_imports.artifact_id` — a receipt can name the build it describes |
 
-(`0032_refresh_tokens` was already in the worktree and is the parent of 0033;
-its code half remains out of these commits.)
+`0032_refresh_tokens` was already in the worktree and is the parent of 0033; its
+code half remains out of these commits (see "Honest limits").
 
 ## Implemented (requirement → evidence)
 
 | Requirement | Evidence |
 |---|---|
-| §3 shared model: technical components, artifacts, deployment→artifact, asset ownership, inventory groups, exposure events, cycles | `models.py`, migrations 0033/0037/0039; groups and assets have their own screens and tests |
-| §4 Findings: search/filters, manual creation (IDOR without CVE), assignment, comments, evidence, narrative fields, history | `routers/findings.py` (`/findings`, `POST /findings`, assignee, comments, attachments, `/history`), `Findings.jsx` drawer |
-| §4 Findings: an import or diff cannot close what it did not evaluate | `analysis.plan_closure` + `POST /analysis/runs/{id}/close-unseen` (409 for diff/partial), tests pin the refusals |
-| §4 Vulnerabilities: grouped by CVE over visible findings, assets/projects/findings counts, honest enrichment, grouped actions with preview | `routers/vulnerabilities.py`, `Vulnerabilities.jsx`, tests (catalog ≠ inventory, manual IDOR excluded) |
-| §4 My work: six trays, counters, expiry ordering, 72 h window, acceptances 30 d, no self-approval, withdraw/remind with rate limit | `routers/work.py`, `MyWork.jsx`, tests |
-| §5 Scope: declared entries only, typed fields, validity, capabilities, wildcard rules documented and enforced, exclusions win, scope→asset, audit | `scoping.py`, `routers/scope.py`, `docs/architecture/scope-semantics.md`, `Scope.jsx`, tests |
-| §5 Cycles: charter, explicit selection, preview, freeze on activation, candidates outside the reference, findings linking, review criteria, close keeps history | `routers/cycles.py`, `Cycles.jsx`, tests |
-| §6 Assets: inventory with filters/paging/owner/project/classification/archive, needs-attention with reasons and actions, groups, activity | `routers/easm.py`, `inventory_groups.py`, `Assets.jsx`, tests |
-| §7 Changes: categories, before/after, source, equal-coverage comparison | `surface.py`, `/attack-surface/changes`, `Exposures.jsx` Changes tab, tests (failed collection ≠ closed port) |
-| §7 Web surface: origins/paths, states, excluded = not evaluated, 200 ≠ vulnerable | `routers/attack_surface.py`, `AttackSurface.jsx`, tests |
-| §7 Lookalikes: watch root, candidates, similarity, registration state, passive-only, decisions with reason | same router/screen, tests (no scope entry, "authorization: none") |
-| §7 Review: ownership queue, confirm/external/discard with reason, ownership ≠ authorization | same router/screen, tests |
-| §8 Exposures: overview with decisions, stable identity, reopen policy, decision history; four summaries over the same findings | `routers/exposures.py`, tests |
-| §10 SAST: SARIF + OpenGrep import, snapshots, diff, file/diff viewer, classification only against a comparable base, "on a modified line" ≠ "introduced" | `sast.py`, `routers/analysis.py`, `Analysis.jsx`, `docs/analysis-formats.md`, tests |
-| §12 isolation and audit on every new surface | org checks in every route; `_audit` on all mutations; isolation tests per slice |
-| §14 acceptance steps 1–10 and 12–13 | covered by the slice test files listed above (see `tests/test_v0_*.py`) |
+| §3 shared model: technical components, artifacts, deployment→artifact, asset ownership, inventory groups, exposure events, cycles | `models.py`, migrations 0033/0037/0039/0040; groups and assets have screens and tests |
+| §4 Findings: search/filters, manual creation (IDOR without CVE), assignment, comments, evidence, narrative fields, history | `routers/findings.py`, `Findings.jsx` drawer (Overview / Occurrences / History / Remediation / Related) |
+| §4 Findings: an import or diff cannot close what it did not evaluate | `analysis.plan_closure`, 409 for diff/partial, tests pin the refusals |
+| §4 Vulnerabilities: grouped by CVE over visible findings, honest enrichment, grouped actions with preview | `routers/vulnerabilities.py`, `Vulnerabilities.jsx`, tests (catalog ≠ inventory) |
+| §4 My work: six trays, counters, 72 h window, acceptances 30 d, no self-approval, withdraw/remind with rate limit | `routers/work.py`, `MyWork.jsx`, tests |
+| §4 Dashboard: counters with their filters and destinations | `GET /dashboard/v0` + `V0Overview` block in `Dashboard.jsx`; each counter navigates to the list it counts and carries its filter; test `test_dashboard_counters_equal_their_destinations` |
+| §5 Scope: declared entries only, typed fields, validity, capabilities, wildcard rules, exclusions win, scope→asset, audit | `scoping.py`, `routers/scope.py`, `docs/architecture/scope-semantics.md`, `Scope.jsx`, tests |
+| §5 Cycles: charter, explicit selection, preview, freeze, findings linking **inside the frozen selection**, review, close | `routers/cycles.py`, `Cycles.jsx`, `test_auto_link_respects_the_frozen_selection` |
+| §6 Assets: inventory, needs-attention with reasons, groups, activity | `routers/easm.py`, `inventory_groups.py`, `Assets.jsx`, tests |
+| §7 Changes: categories, before/after, source, equal-coverage comparison | `surface.py`, `/attack-surface/changes`, `Exposures.jsx` Changes tab, tests |
+| §7 Web surface / Lookalikes / Review | `routers/attack_surface.py`, `AttackSurface.jsx`, tests (excluded = not evaluated; passive only) |
+| §8 Exposures: decisions with reason and validity, stable identity, reopen policy | `routers/exposures.py`, tests |
+| §9 SBOM landing: CycloneDX + SPDX, hash/receipt, per-version usage, direct/transitive, licenses | `routers/sbom.py`, `components` screens, tests |
+| §9/§3 artifact chain: version → artifact → SBOM → deployment, "in production" read from deployments | `routers/artifacts.py`, `test_artifact_sbom_deployment_chain` |
+| §10 SAST: SARIF + OpenGrep, snapshots, diff, viewer, classification only against a comparable base | `sast.py`, `routers/analysis.py`, `Analysis.jsx`, `docs/analysis-formats.md`, tests |
+| §12 isolation and audit on every new surface | org checks in every route, `_audit` on mutations, isolation tests per slice |
+| §14 steps 1–13 | `backend/tests/test_v0_acceptance.py` + `scripts/demo_v0.py` (steps 1–13, including the cross-organization check) |
 
-## Partial (declared, with the reason)
+## Defects found and corrected during acceptance
 
-| Area | What exists | What is missing and why |
+| # | Defect | Fix |
 |---|---|---|
-| §4 Dashboard | `GET /dashboard/v0` returns assets, projects, findings by severity/priority, CVE/KEV counts, recent changes, open exposures, cycles, acceptances expiring, coverage gaps — each with a link | The console block on `Dashboard.jsx` was not wired to it yet; the existing dashboard still shows the pre-v0 summary |
-| §9 Components/SBOM | CycloneDX + SPDX import, per-version usage, direct/transitive, licenses, `components/impact` | Artifact-level SBOM association (artifacts exist but no import path binds a document to one); advisory alias handling and re-evaluation records |
-| §10 SAST | One format pair done end to end; viewer with tree/code/diff | Source→sink traces (only a `codeFlows` count is kept); deep links from Components/Assets/project; PR intake from a provider |
-| §11 Integrations | Repositories, Jira links/outbox, notification channels; references are manual | Capability-based connector contract, connection health check, credential store, sync/idempotency |
-| §2 Navigation | General / Scoping / Discovery / Code security groups with the v0 screens | Configuration group (users/roles/permissions/connectors) still spread across Members/Grants/Settings; "My team" has no team objects — the tray says so |
-| §14 acceptance demo | Every step is covered by an automated test | There is no single runnable demo script that walks the 13 steps against a live stack; the tests are the reproducible proof today |
+| 1 | Cycle auto-link dropped findings when the selection named a project: the assets resolved from that project were treated as a *narrowing* filter, so findings without a located asset never linked | a project (or whole-org) selection is the declared scope; only asset/group/environment selections narrow. Test asserts a finding on a sibling deployment of the same project stays out |
+| 2 | Findings and the dashboard sent the project **name** where the API read the **slug** → `HTTP 404: project not found` on a project whose name differs from its slug | `backend/app/projects.py:by_ref` accepts either; used by findings, dashboard, analysis, vulnerabilities, attack-surface review and the cycle resolver |
+| 3 | `/dashboard/summary` and `/dashboard/exposure-flow` answered **the whole organization** when the requested project did not exist — an unknown scope silently widened | 404 when a project was requested and is not visible; an omitted project still means the portfolio. Tests cover both |
+| 4 | Exposure counters were computed over the *filtered* rows, so the header said "0 accepted" while one acceptance existed | counts are computed over the organization's events; `total_events` added |
+| 5 | `GET /artifacts/{id}` omitted its coverage keys for artifacts without an SBOM | both branches return `sbom` / `components` / `usage_per_artifact`, the last one declared "not implemented" |
+| 6 | The v0 dashboard block existed in the API only | `V0Overview` wired into `Dashboard.jsx`, with the coverage note ("a gap means nothing was observed, not that it is clean") |
+| 7 | "Team queue" claimed a team model that does not exist | backend returns `scope: organization` + label "Organization queue (no teams yet)"; the tray explains it instead of implying teams |
+
+## Partial — separated by cause
+
+### A. Shortfall of this delivery (real v0 functionality thinner than the spec)
+
+| Area | What exists | What is missing |
+|---|---|---|
+| §2/§9 Components and artifacts in the console | SBOM import, component catalog, usage, licenses, `GET /artifacts/{id}` with the full chain | No artifact screen and no deep link from a component to the artifact/deployment that uses it; the chain is API + tests only |
+| §10 viewer navigation | Rule → finding → line works inside the viewer; findings carry `analysis_run_id` | Deep links from a Finding drawer or a repository/project screen into the run are not rendered yet |
+| §10 source→sink traces | `codeFlows` count is kept and displayed as a count | No trace rendering: scanners rarely supply enough data and inventing impact is forbidden by the spec |
+| §11 connector contract | Repositories, Jira links/outbox, notification channels, manual references | Capability-shaped connector contract + health check; "connected" is never claimed without a probe (v0 scope was manual references) |
+| §14 weekly summary | `GET /attack-surface/summary` + recipients config | Scheduled delivery: `delivery.configured=false`, no scheduler/channel in this delivery |
+
+### B. Explicit future extension (out of v0 by the spec itself)
+
+- Scans, sensor administration, CI/CD execution, provider synchronization.
+- Access groups and per-team data scoping (`My work → My team` stays org-wide and says so).
+- Quality policies / enforcement over analysis runs (the structure admits a gate; none reads it yet).
+- Dynamic inventory groups and advanced expressions.
+- Configuration group (users/roles/permissions/connectors) as one menu; those screens exist under Members/Grants/Settings.
 
 ## Pending (not started)
 
-- Acquisition: scans, sensor administration, CI/CD execution, provider sync.
-- Scheduled weekly delivery: the query exists, `delivery.configured=false`; no
-  scheduler/channel wiring.
-- Alert-driven tasks: remediation exists, but no per-finding notification rule.
-- Access groups and per-team data scoping (`My work → My team` is org-wide).
-- Quality policies/enforcement on analysis runs (the structure admits them; no
-  gate reads them yet).
+- Alert-driven tasks: remediation exists, no per-finding notification rule.
+- Advisory re-evaluation records (a new advisory version re-scoring an unchanged artifact).
+- Advisory alias merging policy (aliases are surfaced, never merged silently).
+
+## Acceptance walkthrough (isolated stack)
+
+`python scripts/demo_v0.py --serve` sets `PLATFORM_DATABASE_URL` to a temporary
+SQLite file, seeds Bitsentry → AUREA → backend v3/v4 → `api-aurea` → deployment →
+SBOM → findings → SAST base/head with diff → group → cycle → review → close, then
+serves the built console plus the API on `127.0.0.1:8099`. It prints the ids and
+writes them to `barad_demo_state.json` so a browser pass can be tied to records.
+
+Verified in the browser during acceptance:
+
+1. **Persistence** — the closed cycle keeps its frozen snapshot, charter and two review criteria across a full reload; findings stayed at 3 rows over two reloads (no duplicate from the re-import path).
+2. **Links between screens** — the v0 counter "open findings: 3" navigates to Findings and the list renders exactly 3 rows; "changes 7d" opens the Changes tab with the open-port event.
+3. **Empty vs error vs no-permission** — Vulnerabilities shows "0 CVEs affecting this inventory" as an honest empty state; an invalid key produces `HTTP 401: the API key or session was rejected.` and the Findings header reads "not loaded" instead of "0 findings in scope"; the cross-organization check is asserted in the demo (cycle 404, zero findings).
+4. **SAST viewer** — file tree → code with the rule in the gutter at line 12 (`py.sqli · CWE-89`), diff tab with 1 added / 1 removed, results tab showing `persistent` and `modified line: yes` (not "introduced").
+5. **Exposures** — `1 open · 1 accepted` after the acceptance decision, with Changes showing `open port · — → 8080 · demo-import`.
+6. **Assets** — the scope-created asset appears once, with group `Production`, `no_owner` / `no_project` in Needs attention, and the ledger rows for cycle/deployment in Activity.
+
+Not covered by that pass: mobile widths, Safari/Firefox, concurrent operators,
+and anything requiring a real collector (scans, crt.sh sweeps).
 
 ## Decisions taken during implementation
 
-1. A wildcard scope rule excludes the apex unless `include_apex` is set; depth is
-   unlimited. Documented in `docs/architecture/scope-semantics.md`.
-2. Exposures and findings are separate identities: a condition under management
-   vs. a weakness with a location. Neither duplicates the other.
-3. Only a `coverage: full` run may close findings, and only the ones it
-   evaluated (same tool, path inside `evaluated.paths`).
-4. Analysis classification is `no_reference` without a comparable baseline; "new"
-   is never inferred from the absence of a base run.
-5. A cycle freezes charter + membership at activation; later group changes are
-   shown as candidates for the next cycle, not merged into the reference.
+1. A wildcard scope rule excludes the apex unless `include_apex` is set; depth is unlimited (`docs/architecture/scope-semantics.md`).
+2. Exposures and findings are separate identities: a condition under management vs. a weakness with a location.
+3. Only a `coverage: full` run may close findings, and only those it evaluated.
+4. Analysis classification is `no_reference` without a comparable baseline; "new" is never inferred.
+5. A cycle freezes charter + membership at activation; later discoveries are candidates for the next cycle.
+6. A project reference is accepted as slug or name on reading screens; unknown references answer 404 rather than widening to the organization.
 
 ## Honest limits of this delivery
 
-- Nothing was deployed: the running stack still serves the previous image. The
-  worktree also carries unrelated, unfinished refresh-token code that was
-  deliberately kept out of these commits.
-- The console was rebuilt and type-checked by its import guard, but not clicked
-  through in a browser during this session.
-- This report does not claim parity with OpenCTEM; it records what this fork does
-  now.
+- **Nothing was deployed.** The live compose stack still serves the previous image; per instruction, deployment is a later action. Everything above ran on an isolated SQLite database and a disposable PostgreSQL database.
+- The worktree carries unrelated, unfinished refresh-token code (`auth_local.py`, `accounts.py`, `Login.jsx`, `Settings.jsx`, parts of `models.py`/`api.js`). Those hunks were deliberately kept out of these commits; the API-key 401 message improvement in `api.js` rides with that pending work.
+- Application components are seeded directly in the demo: they have a model and relationships but no CRUD endpoint yet (documented in Partial A).
+- This report does not claim parity with OpenCTEM; it records what this fork does now, verified by the suite, the migration chain and the walkthrough above.
