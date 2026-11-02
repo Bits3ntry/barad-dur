@@ -1583,9 +1583,70 @@ class AnalysisRun(Base):
     evaluated: Mapped[dict] = mapped_column(JSON, default=dict)
     receipt: Mapped[dict] = mapped_column(JSON, default=dict)
     findings_seen: Mapped[int] = mapped_column(Integer, default=0)
+    # Comparison and viewer material. `base_run_id` is what "new" is relative
+    # to; without it nothing is classified new or resolved.
+    base_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    report_format: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    rules: Mapped[list] = mapped_column(JSON, default=list)
+    uninterpreted: Mapped[dict] = mapped_column(JSON, default=dict)
+    diff_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AnalysisFile(Base):
+    """One file of an analysis: the code we can actually show.
+
+    A JSON report alone does not give us the source; when the importer supplies
+    no content the viewer says so instead of drawing an empty file.
+    """
+
+    __tablename__ = "analysis_files"
+    __table_args__ = (UniqueConstraint("run_id", "path", name="uq_analysis_file_path"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("analysis_runs.id", ondelete="CASCADE"), index=True)
+    path: Mapped[str] = mapped_column(String(1024))
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    line_count: Mapped[int] = mapped_column(Integer, default=0)
+    kind: Mapped[str] = mapped_column(String(16), default="analyzed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AnalysisFinding(Base):
+    """A result inside one analysis, classified against a comparable baseline."""
+
+    __tablename__ = "analysis_findings"
+    # One finding identity can fire on several lines; the viewer shows each
+    # location, so uniqueness includes the line.
+    __table_args__ = (UniqueConstraint("run_id", "finding_id", "line",
+                                       name="uq_analysis_finding_line"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("analysis_runs.id", ondelete="CASCADE"), index=True)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("findings.id"), index=True)
+    path: Mapped[str] = mapped_column(String(1024))
+    line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rule_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cwe: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # new | persistent | resolved | no_reference — no_reference means there was
+    # no comparable baseline, not that the finding is new.
+    classification: Mapped[str] = mapped_column(String(24), default="no_reference")
+    on_modified_line: Mapped[bool] = mapped_column(Boolean, default=False)
+    introduced_by_pr: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_sink: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

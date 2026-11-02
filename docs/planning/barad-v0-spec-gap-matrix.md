@@ -317,3 +317,25 @@ narrowing, validation + isolation, merged history); `alembic upgrade head` /
 Still pending in slice D: recording runs automatically from the OSV analyze path
 and the SARIF/OpenGrep ingest, artefact-level SBOM usage, and the analysis-run
 list screen (it lands with the SAST viewer in slice E).
+
+### Slice E — SAST viewer intake (2026-11-02)
+
+Landed (migration `0036_analysis_material`): `POST /api/v1/analysis/import`
+accepts **SARIF 2.1.0 and OpenGrep/Semgrep JSON** end to end, plus optional code
+snapshots and a unified diff. `analysis_files` stores the code we were given,
+`analysis_findings` one row per result location with classification
+(`new|persistent|resolved|no_reference`), `on_modified_line` and
+`introduced_by_pr`. Viewer endpoints: `/runs/{id}/files`, `/file?path=`,
+`/diff`, `/findings`; `Analysis.jsx` renders the tree, the code with a line
+gutter and flagged lines, the diff hunks with finding positions, and the result
+table. Formats and semantics documented in `docs/analysis-formats.md`.
+
+Verification: `pytest` 241 passed (6 new cases: SARIF import + tree/code/diff,
+re-import dedupe, OpenGrep JSON + missing snapshot, baseline new/persistent/
+resolved, base tool/version mismatch 409, isolation + validation); migrations
+`upgrade → downgrade 0036 → upgrade` on a throwaway PostgreSQL database;
+`npm run build` passes the UI import guard.
+
+Still missing for §10: source→sink traces (kept only as a count), analysis
+history screen per repository/project from Components/Assets (deep links land
+with the nav restructure), PR intake from a connected provider (post-v0).

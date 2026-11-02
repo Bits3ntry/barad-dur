@@ -957,3 +957,31 @@ table:not(.table-wrap > table) {
   color: var(--muted);
   margin-top: 1px;
 }
+
+/* ── analysis viewer: code lines with a stable gutter ── */
+.code {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  background: var(--surface-2, rgba(127,127,127,.06));
+  border-radius: 8px;
+  padding: 8px 10px;
+  overflow: auto;
+  max-height: 460px;
+}
+.code-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  white-space: pre;
+  padding: 0 2px;
+}
+.code-num {
+  min-width: 44px;
+  text-align: right;
+  color: var(--muted, #8a8f98);
+  user-select: none;
+}
+.code-text { flex: 1; }
+.code-hit { background: rgba(220, 38, 38, .12); border-left: 2px solid #dc2626; }
+.code-added { background: rgba(22, 163, 74, .12); }
+.code-removed { background: rgba(220, 38, 38, .10); }
