@@ -368,3 +368,22 @@ UI import guard.
 Lookalikes (watch roots, candidates, review states, passive-only), Review queue
 (ownership confirmation, external/discard), the weekly summary query, and the
 lookalike/web-surface importers. Declared pending, not claimed.
+
+### Slice F (part 2) — web surface, lookalikes, review, weekly query (2026-11-02)
+
+Landed (migration `0038_web_and_lookalikes`):
+
+| Piece | Evidence | Missing |
+|---|---|---|
+| Web surface | `web_endpoints` + import/list/state endpoints; counters (origins, new in 7d, not evaluated, confirmed, sensitive-observed); a 200 is `observed`, never vulnerable; an excluded origin becomes `not_evaluated` with the exclusion reason | No crawler; no per-origin coverage record beyond the observation itself. |
+| Lookalikes | `lookalike_domains` import (watched root + candidates), registration state `confirmed|unconfirmed|unknown`, DNS/MX/cert evidence, decide `confirm|external|dismiss` with reason; response states "authorization: none" | No passive DNS/CT collector; cadence declared, never simulated. |
+| Review | `GET /attack-surface/review` (assets with unsettled classification), `POST /review/{asset_id}` confirm/external/discard with reason; ownership ≠ authorization stated in the response | Resolved-address review rows (needs observation-level IP ownership). |
+| Weekly summary | `GET /attack-surface/summary/weekly` returns the digest and declares `delivery.configured=false` with the reason | No scheduler/channel wiring (post-v0). |
+
+Console: **Attack surface** screen (Web surface / Lookalikes / Review / Weekly) in
+the Discovery group.
+
+Verification: `pytest` 250 passed (5 new cases: 200-is-not-vulnerable + excluded
+path, lookalike external + no scope entry, review grants nothing, weekly delivery
+not configured, isolation); migrations `upgrade → downgrade 0038 → upgrade`;
+`npm run build` passes the UI import guard.

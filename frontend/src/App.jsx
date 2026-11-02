@@ -24,6 +24,7 @@ import Scope from './Scope'
 import Vulnerabilities from './Vulnerabilities'
 import Analysis from './Analysis'
 import Exposures from './Exposures'
+import AttackSurface from './AttackSurface'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
 import { Modal } from './ui'
@@ -56,6 +57,7 @@ const NAV = [
   ] },
   { group: 'Discovery', collapsible: true, defaultOpen: true, items: [
     { key: 'assets', label: 'Assets' },
+    { key: 'attack-surface', label: 'Attack surface' },
     { key: 'exposures', label: 'Exposures' },
     { key: 'components', label: 'Components' },
   ] },
@@ -200,6 +202,7 @@ export default function App() {
       case 'vulnerabilities': return <Vulnerabilities onNavigate={go} />
       case 'analysis': return <Analysis projects={projects} />
       case 'exposures': return <Exposures />
+      case 'attack-surface': return <AttackSurface />
       case 'components': return <Components projects={projects} onChanged={loadProjects} />
       case 'pipelines': return <Pipelines />
       case 'notifications': return <Notifications />

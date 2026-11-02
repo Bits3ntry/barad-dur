@@ -1731,3 +1731,71 @@ class ExposureDecision(Base):
     valid_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── v0 attack surface: web endpoints, lookalikes ───────────────
+#
+# A path returning HTTP 200 is an observation, not a vulnerability. States are
+# explicit so the screen can distinguish a candidate, an observed response, a
+# confirmed finding and something nobody evaluated (excluded).
+
+WEB_ENDPOINT_STATES = {"candidate", "observed", "confirmed_finding",
+                       "excluded", "not_evaluated"}
+LOOKALIKE_STATES = {"candidate", "confirmed", "external", "dismissed"}
+LOOKALIKE_SIMILARITY = {"typosquat", "homoglyph", "tld_swap", "subdomain",
+                        "combosquatting", "bitsquatting", "other"}
+
+
+class WebEndpoint(Base, TimestampMixin):
+    __tablename__ = "web_endpoints"
+    __table_args__ = (
+        UniqueConstraint("org_id", "origin", "path", "method",
+                         name="uq_web_endpoint_identity"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    asset_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("assets.id"), nullable=True, index=True)
+    origin: Mapped[str] = mapped_column(String(512), index=True)
+    path: Mapped[str] = mapped_column(String(1024))
+    method: Mapped[str] = mapped_column(String(16), default="GET")
+    state: Mapped[str] = mapped_column(String(24), default="candidate", index=True)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovery_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+    finding_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("findings.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LookalikeDomain(Base, TimestampMixin):
+    """A watched root domain or a candidate impersonating it.
+
+    Candidates are **external observed resources**: nothing here authorizes
+    active testing, and DNS resolving is not proof of registration or malice.
+    """
+
+    __tablename__ = "lookalike_domains"
+    __table_args__ = (
+        UniqueConstraint("org_id", "root_domain", "candidate",
+                         name="uq_lookalike_identity"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    root_domain: Mapped[str] = mapped_column(String(255), index=True)
+    candidate: Mapped[str] = mapped_column(String(255), index=True)
+    similarity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    state: Mapped[str] = mapped_column(String(24), default="candidate", index=True)
+    registration_evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    dns: Mapped[dict] = mapped_column(JSON, default=dict)
+    mx: Mapped[dict] = mapped_column(JSON, default=dict)
+    certificates: Mapped[dict] = mapped_column(JSON, default=dict)
+    registration_state: Mapped[str] = mapped_column(String(24), default="unknown")
+    review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
