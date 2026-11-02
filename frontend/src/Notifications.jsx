@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { PageHeader, Card, StatusBadge, EmptyState, ErrorBanner, Loading,
-         Dialog, Input, CheckBox, Toggle, Banner } from './ui'
+         Dialog, Input, CheckBox, Toggle, Banner, Table } from './ui'
 
 export default function Notifications() {
   const [notifications, setNotifications] = useState([])
@@ -15,11 +15,67 @@ export default function Notifications() {
   const [markOpen, setMarkOpen] = useState(false)
   const [markId, setMarkId] = useState('')
   const [markResult, setMarkResult] = useState('')
+  const [channels, setChannels] = useState([])
+  const [channelError, setChannelError] = useState('')
+  const [channelNote, setChannelNote] = useState('')
+  const [draft, setDraft] = useState({ name: '', kind: 'slack', url: '' })
 
   useEffect(() => {
     load()
     loadPrefs()
+    loadChannels()
   }, [])
+
+  async function loadChannels() {
+    try {
+      const r = await api.get('/api/v1/notifications/channels')
+      setChannels(r.data || [])
+    } catch {
+      setChannels([])   // viewers cannot read channels; the card says so
+    }
+  }
+
+  async function createChannel() {
+    setChannelError('')
+    setChannelNote('')
+    try {
+      const { data } = await api.post('/api/v1/notifications/channels', {
+        name: draft.name.trim(), kind: draft.kind, url: draft.url.trim(),
+        events: ['sla.breached'], actor: 'console',
+      })
+      setChannelNote(data.secret
+        ? `channel created · signing secret (shown once): ${data.secret}`
+        : 'channel created')
+      setDraft({ name: '', kind: 'slack', url: '' })
+      loadChannels()
+    } catch (e) {
+      setChannelError(String(e.message || e))
+    }
+  }
+
+  async function testChannel(row) {
+    setChannelError('')
+    setChannelNote('')
+    try {
+      const r = await api.post(`/api/v1/notifications/channels/${row.id}/test`,
+        { actor: 'console' })
+      setChannelNote(r.data.delivered
+        ? `test delivered to ${row.name} (HTTP ${r.data.http_status})`
+        : `test failed for ${row.name}: ${r.data.error}`)
+    } catch (e) {
+      setChannelError(String(e.message || e))
+    }
+  }
+
+  async function toggleChannel(row) {
+    try {
+      await api.patch(`/api/v1/notifications/channels/${row.id}`,
+        { enabled: !row.enabled, actor: 'console' })
+      loadChannels()
+    } catch (e) {
+      setChannelError(String(e.message || e))
+    }
+  }
 
   async function load() {
     setError('')
@@ -165,6 +221,59 @@ export default function Notifications() {
           <button className="mini" onClick={savePrefs}>Save preferences</button>
         </Card>
       </div>
+
+      <Card title="Delivery channels" actions={<span className="muted">{channels.length} configured</span>}>
+        <p className="muted" style={{ marginTop: 0 }}>
+          A channel receives the SLA digest and test messages. Slack expects an
+          incoming-webhook URL; webhooks receive a signed JSON envelope.
+        </p>
+        {channelError && <Banner kind="error">{channelError}</Banner>}
+        {channelNote && <p className="ok">{channelNote}</p>}
+        <div className="row">
+          <Input label="Name" value={draft.name}
+            onChange={(v) => setDraft((d) => ({ ...d, name: v }))} placeholder="sec-alerts" />
+          <label className="field">
+            <span>Kind</span>
+            <select value={draft.kind}
+              onChange={(e) => setDraft((d) => ({ ...d, kind: e.target.value }))}>
+              <option value="slack">slack</option>
+              <option value="webhook">webhook</option>
+              <option value="email">email</option>
+            </select>
+          </label>
+          <Input label={draft.kind === 'email' ? 'Address' : 'URL'} value={draft.url}
+            onChange={(v) => setDraft((d) => ({ ...d, url: v }))}
+            placeholder={draft.kind === 'slack'
+              ? 'https://hooks.slack.com/services/…'
+              : draft.kind === 'email' ? 'sec@example.com' : 'https://example.com/hook'} />
+          <button className="primary-action" disabled={!draft.name.trim() || !draft.url.trim()}
+            onClick={createChannel}>add channel</button>
+        </div>
+        {channels.length ? (
+          <Table head={['name', 'kind', 'target', 'events', 'state', '']}>
+            {channels.map((row) => (
+              <tr key={row.id}>
+                <td>{row.name}</td>
+                <td><span className="pill">{row.kind}</span></td>
+                <td className="mono muted" style={{ fontSize: 11.5 }}>{row.url}</td>
+                <td className="muted">{(row.events || []).join(', ') || '—'}</td>
+                <td><span className={`status st-${row.enabled ? 'active' : 'disabled'}`}>
+                  {row.enabled ? 'active' : 'paused'}
+                </span></td>
+                <td>
+                  <button className="mini" onClick={() => testChannel(row)}>test</button>
+                  <button className="mini" onClick={() => toggleChannel(row)}>
+                    {row.enabled ? 'pause' : 'resume'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </Table>
+        ) : (
+          <EmptyState title="No channel yet"
+            hint="Slack: create an incoming webhook in the Slack app and paste its URL here." />
+        )}
+      </Card>
 
       {markResult && <p className={markResult.includes('error') ? 'error' : 'ok'}>{markResult}</p>}
     </div>

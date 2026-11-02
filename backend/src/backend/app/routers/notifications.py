@@ -48,12 +48,21 @@ def create_channel(payload: ChannelIn = None,
                    session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
-    if payload.kind not in {"webhook", "email"}:
+    if payload.kind not in {"webhook", "email", "slack"}:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            "kind must be webhook | email")
-    if payload.kind == "webhook" and not payload.url.lower().startswith(
+                            "kind must be webhook | email | slack")
+    if payload.kind in {"webhook", "slack"} and not payload.url.lower().startswith(
             ("http://", "https://")):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "url must be http(s)")
+    if payload.kind == "slack" and "hooks.slack.com" not in payload.url.lower():
+        # Relays and Slack-compatible gateways are legitimate, but a plain-http
+        # target is not: the URL itself is the credential. Localhost stays
+        # allowed so a deployment can be exercised without a tunnel.
+        url = payload.url.lower()
+        local = url.startswith(("http://127.0.0.1", "http://localhost"))
+        if not url.startswith("https://") and not local:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                "slack webhooks must be https (localhost excepted)")
     if payload.kind == "email" and "@" not in payload.url:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "email channels need an address")
@@ -159,10 +168,56 @@ def _deliver_email(channel: models.NotificationChannel, event: str,
         return None, f"smtp_error: {type(exc).__name__}: {exc}"[:400]
 
 
+def _slack_text(event: str, payload: dict) -> str:
+    """One readable line: Slack shows `text` in notifications and as fallback."""
+    parts = [f"*{event}*"]
+    for key in ("title", "finding", "project", "severity", "priority", "url",
+                "message", "count", "cycle"):
+        value = payload.get(key)
+        if value not in (None, ""):
+            parts.append(f"{key}: {value}")
+    return " · ".join(parts)
+
+
+def _deliver_slack(channel: models.NotificationChannel, event: str,
+                   payload: dict) -> tuple[int | None, str | None]:
+    """Slack incoming webhooks take {"text": ...} (plus Block Kit blocks).
+
+    Slack authenticates by the secret URL itself, so the HMAC envelope used for
+    generic webhooks is not sent here; Slack would ignore it and the payload
+    shape is what matters.
+    """
+    text = _slack_text(event, payload)
+    body = json.dumps({
+        "text": text,
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+            {"type": "context",
+             "elements": [{"type": "mrkdwn",
+                           "text": f"channel `{channel.name}` · event `{event}`"}]},
+        ],
+    }).encode()
+    request = urllib.request.Request(channel.url, data=body, method="POST")
+    request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            status = response.status
+            reply = (response.read() or b"").decode(errors="replace")[:200]
+        if status == 200 and reply.strip() not in ("", "ok"):
+            return status, f"slack_rejected: {reply}"
+        return status, None
+    except urllib.error.HTTPError as exc:
+        return exc.code, f"http_{exc.code}: {exc.read()[:200].decode(errors='replace')}"
+    except urllib.error.URLError as exc:
+        return None, f"unreachable: {exc.reason}"
+
+
 def deliver(channel: models.NotificationChannel, event: str,
             payload: dict) -> tuple[int | None, str | None]:
     if channel.kind == "email":
         return _deliver_email(channel, event, payload)
+    if channel.kind == "slack":
+        return _deliver_slack(channel, event, payload)
     body = json.dumps({"event": event, "channel": channel.name,
                        "payload": payload}, sort_keys=True).encode()
     signature = hmac.new(channel.secret.encode(), body, hashlib.sha256).hexdigest()

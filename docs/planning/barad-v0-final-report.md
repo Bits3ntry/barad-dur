@@ -10,9 +10,9 @@ implemented below.
 
 | Check | Result |
 |---|---|
-| `pytest -q` (backend) | **263 passed** |
-| `alembic upgrade head` on a throwaway PostgreSQL DB | 0031 → **0041** |
-| `alembic downgrade -1` / `upgrade head` for 0040 and 0041 | clean; `sbom_imports.artifact_id` and `analysis_runs.repository_id/pull_request` recreated with their FKs and index |
+| `pytest -q` (backend) | **274 passed** |
+| `alembic upgrade head` on a throwaway PostgreSQL DB | 0031 → **0042** |
+| `alembic downgrade -1` / `upgrade head` for 0040–0042 | clean; artifacts, run origin and the MFA tables recreated with their FKs and indexes |
 | `npm run build` (console) | passes |
 | `scripts/demo_v0.py` on an isolated SQLite stack | 25 assertions, all green |
 | Browser walkthrough of that stack (`--serve`) | see "Acceptance walkthrough" |
@@ -34,6 +34,7 @@ live schema.
 | 0039_cycles_and_work | cycles, frozen memberships, cycle findings, work items |
 | 0040_sbom_artifact | `sbom_imports.artifact_id` — a receipt can name the build it describes |
 | 0041_analysis_origin | `analysis_runs.repository_id` + `pull_request` — which remote and PR a report came from |
+| 0042_user_mfa | optional TOTP per user: `users.totp_secret/totp_enabled_at`, `mfa_challenges`, `mfa_recovery_codes` |
 
 `0032_refresh_tokens` was already in the worktree and is the parent of 0033; its
 code half remains out of these commits (see "Honest limits").
@@ -61,6 +62,8 @@ code half remains out of these commits (see "Honest limits").
 | §9/§3 artifact chain: version → artifact → SBOM → deployment, "in production" read from deployments | `routers/artifacts.py`, `test_artifact_sbom_deployment_chain` |
 | §10 SAST: SARIF + OpenGrep, snapshots, diff, viewer with syntax colour, repository + revision + branch + PR on every run, classification only against a comparable base | `sast.py`, `routers/analysis.py`, `Analysis.jsx`, `highlight.jsx`, `docs/analysis-formats.md`, tests |
 | §10 navigation: result → finding → same run and line | `#findings::<id>` and `#analysis::run=<id>&path=…&line=…`; the finding shows the run that last evaluated it and the viewer links back |
+| §12 authentication: optional TOTP per user (enrol → confirm → recovery codes), SSO through OIDC with pre-registered users only, both composable | `app/mfa.py`, `routers/mfa.py`, `Security.jsx`, `Login.jsx`, `docs/security/mfa-and-sso.md`, `tests/test_v0_mfa_sso.py` |
+| §11 notifications: in-app, email, signed webhook and Slack incoming webhook | `routers/notifications.py`, `Notifications.jsx` channels card, `docs/integrations/slack.md` (payload verified against a local mock) |
 | §12 isolation and audit on every new surface | org checks in every route, `_audit` on mutations, isolation tests per slice |
 | §14 steps 1–13 | `backend/tests/test_v0_acceptance.py` + `scripts/demo_v0.py` (steps 1–13, including the cross-organization check) |
 
