@@ -279,3 +279,19 @@ Semantics are documented in `docs/architecture/scope-semantics.md` and pinned by
 `backend/tests/test_v0_scope.py` (7 cases). Verification: `pytest` 226 passed;
 `alembic upgrade head`, `downgrade 0034`, `upgrade head` all applied on a
 throwaway PostgreSQL database; `npm run build` passes the UI import guard.
+
+### Slice D (part 1) — Vulnerabilities aggregation (2026-11-02)
+
+Landed: `routers/vulnerabilities.py` + `Vulnerabilities.jsx` (nav under Work,
+next to Findings).
+
+| Piece | Evidence | Still missing |
+|---|---|---|
+| CVE grouping over visible findings | `GET /vulnerabilities` (filters: project, severity, KEV, CVE search, pagination); a CVE with no finding and a manual IDOR never appear | Cross-organization "my team" scoping; CVSS vector display. |
+| Detail | `GET /vulnerabilities/{cve}` returns the concrete findings with project, version, component purl, assignee | No deep link from a finding row (id rendered only). |
+| Honest enrichment | KEV row + date/source/fetched_at, EPSS score/percentile/fetched_at, `exploit.known=false` with reason | No exploit feed; no re-evaluation record when intel changes. |
+| Versions | `versions_known=false` + reason: v0 stores no advisory ranges | Affected/fixed version extraction. |
+| Grouped action | `bulk-preview` (writes nothing) then `bulk-status` over exactly the previewed ids; suppressed rows skipped; every change audited | No permission pre-check beyond the viewer write guard. |
+
+Verification: `pytest` 231 passed (5 new cases), `npm run build` passes the UI
+import guard. No migration in this slice.

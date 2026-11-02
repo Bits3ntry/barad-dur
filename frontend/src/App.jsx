@@ -21,6 +21,7 @@ import Setup from './Setup'
 import Projects from './Projects'
 import CtemCycle from './CtemCycle'
 import Scope from './Scope'
+import Vulnerabilities from './Vulnerabilities'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
 import { Modal } from './ui'
@@ -45,6 +46,7 @@ const NAV = [
   ] },
   { group: 'Work', collapsible: true, defaultOpen: true, items: [
     { key: 'findings', label: 'Findings', badge: 'critical' },
+    { key: 'vulnerabilities', label: 'Vulnerabilities' },
     { key: 'projects', label: 'Projects' },
     { key: 'assets', label: 'Assets' },
     { key: 'components', label: 'Components' },
@@ -187,6 +189,7 @@ export default function App() {
       case 'members': return <Members />
       case 'assets': return <Assets />
       case 'scope': return <Scope />
+      case 'vulnerabilities': return <Vulnerabilities onNavigate={go} />
       case 'components': return <Components projects={projects} onChanged={loadProjects} />
       case 'pipelines': return <Pipelines />
       case 'notifications': return <Notifications />
