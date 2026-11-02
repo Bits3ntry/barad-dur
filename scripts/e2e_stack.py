@@ -27,6 +27,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8099)
     parser.add_argument("--db", default=None)
+    parser.add_argument("--seed", action="store_true",
+                        help="load the QA dataset (scope, SBOM, findings, SAST, "
+                             "observations, cycle) before serving")
     args = parser.parse_args()
 
     db_path = args.db or str(Path(tempfile.mkdtemp(prefix="barad-e2e-")) / "e2e.db")
@@ -54,6 +57,19 @@ def main() -> int:
         created_at=models.utcnow(), updated_at=models.utcnow()))
     session.commit()
     session.close()
+
+    if args.seed:
+        # The same walk the acceptance demo uses, so QA starts from a known world
+        # instead of an empty one. Fixtures are labelled "demo" on purpose.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from fastapi.testclient import TestClient
+
+        import demo_v0  # noqa: E402  (script next to this one)
+
+        demo_v0.walk(TestClient(app), {"X-API-Key": key}, org.id)
+        print("seeded: scope, asset, group, SBOM, findings, SAST run, "
+              "observations, exposure decision, cycle (closed)")
+        print("manifest:", json.dumps(demo_v0.STATE, indent=2))
 
     dist = ROOT / "frontend" / "dist"
     if not dist.is_dir():

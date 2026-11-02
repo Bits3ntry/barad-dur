@@ -88,3 +88,15 @@ def test_slack_rejection_is_reported(seeded, monkeypatch):
     code, error = notifications.deliver(row, "sla.breached", {"count": 1})
     assert code == 200
     assert error and error.startswith("slack_rejected")
+
+
+def test_the_in_app_tray_returns_an_envelope(seeded):
+    test_client, headers, session, org = seeded
+    session.add(models.Notification(org_id=org.id, event="sla.breached",
+                                    count=3, read=False, created_at=models.utcnow()))
+    session.commit()
+    response = test_client.get("/api/v1/notifications/notifications", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["data"][0]["event"] == "sla.breached"
+    assert body["data"][0]["count"] == 3

@@ -393,10 +393,11 @@ class NotificationIn(BaseModel):
     actor: str = Field(min_length=2, max_length=255)
 
 
-@router.get("/notifications", response_model=list[dict])
+@router.get("/notifications")
 def list_notifications(org: models.Organization = Depends(auth.require_org),
-                       payload: NotificationIn = None,
                        session: Session = Depends(get_session)):
+    """The in-app tray. Returns an envelope, like every other list endpoint —
+    a bare `response_model=list[dict]` here turned every read into a 500."""
     """List notifications for the organization's users."""
     query = session.query(models.Notification).filter_by(org_id=org.id)
     rows = query.order_by(models.Notification.created_at.desc()).limit(100).all()
