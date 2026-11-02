@@ -4,8 +4,10 @@ import { PageHeader } from './ui'
 
 const PRIORITY_CLASSES = ['P0', 'P1', 'P2', 'P3']
 
-export default function Lifecycle() {
-  const [tab, setTab] = useState('tasks')
+/** `initialTab` lets a dedicated menu entry open straight into its own view
+    (Prioritization rules) instead of duplicating the screen. */
+export default function Lifecycle({ initialTab = 'tasks' }) {
+  const [tab, setTab] = useState(initialTab)
   const [tasks, setTasks] = useState([])
   const [rules, setRules] = useState([])
   const [policy, setPolicy] = useState(null)
@@ -57,13 +59,19 @@ export default function Lifecycle() {
 
   return (
     <div className="stack">
-      <PageHeader title="Remediation" />
+      <PageHeader
+        title={initialTab === 'rules' ? 'Prioritization rules' : 'Remediation'}
+        subtitle={initialTab === 'rules'
+          ? 'First match wins; a finding with no match keeps the severity fallback and shows it'
+          : undefined} />
       <div className="toolbar">
         <select value={tab} onChange={(e) => setTab(e.target.value)}>
           <option value="tasks">remediation tasks</option>
           <option value="rules">priority rules</option>
         </select>
-        <span className="count">{tab === 'tasks' ? `${tasks.length} tasks` : `${rules.length} rules`}</span>
+        <span className="count">{tab === 'tasks'
+          ? `${tasks.length} task${tasks.length === 1 ? '' : 's'}`
+          : `${rules.length} rule${rules.length === 1 ? '' : 's'}`}</span>
       </div>
       {error && <div className="banner banner-error">{error}</div>}
       {tab === 'tasks' && (

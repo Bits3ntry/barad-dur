@@ -26,6 +26,7 @@ import Analysis from './Analysis'
 import Exposures from './Exposures'
 import AttackSurface from './AttackSurface'
 import Cycles from './Cycles'
+import BusinessImpact from './BusinessImpact'
 import MyWork from './MyWork'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
@@ -35,40 +36,42 @@ import { Modal } from './ui'
    screens that feed them sit underneath. Groups collapse, because 20 flat rows
    pushed everything below the fold — the sidebar is a map, not a list. */
 const NAV = [
+  // The four things an operator reads every day, with no group label: a label
+  // over a first row is furniture, not information.
   { group: '', collapsible: false, items: [
     { key: 'dashboard', label: 'Dashboard' },
-  ] },
-  { group: 'CTEM cycle', collapsible: true, defaultOpen: true, items: [
-    { key: 'ctem', label: 'Cycle overview' },
-    { key: 'scoping', label: 'Scoping' },
-    { key: 'discovery', label: 'Discovery' },
-    { key: 'prioritization', label: 'Prioritization' },
-    { key: 'validation', label: 'Validation' },
-    { key: 'mobilization', label: 'Mobilization', badge: 'sla' },
-  ] },
-  { group: 'Scoping', collapsible: true, defaultOpen: true, items: [
-    { key: 'scope', label: 'Scope' },
-    { key: 'cycles', label: 'Cycles' },
-  ] },
-  { group: 'Code security', collapsible: true, defaultOpen: true, items: [
-    { key: 'analysis', label: 'Code analysis' },
-  ] },
-  { group: 'General', collapsible: true, defaultOpen: true, items: [
     { key: 'my-work', label: 'My work' },
     { key: 'findings', label: 'Findings', badge: 'critical' },
     { key: 'vulnerabilities', label: 'Vulnerabilities' },
-    { key: 'projects', label: 'Projects' },
   ] },
-  { group: 'Discovery', collapsible: true, defaultOpen: true, items: [
-    { key: 'assets', label: 'Assets' },
-    { key: 'attack-surface', label: 'Attack surface' },
-    { key: 'exposures', label: 'Exposures' },
-    { key: 'components', label: 'Components' },
+  // The cycle is one frame with three working areas inside it. Each area owns
+  // the screens that feed it; nothing is duplicated across groups.
+  { group: 'CTEM cycle', collapsible: true, defaultOpen: true, items: [
+    { key: 'ctem', label: 'Cycle overview' },
+  ], sections: [
+    { label: 'Scoping', items: [
+      { key: 'cycles', label: 'Cycles' },
+      { key: 'scope', label: 'Scope' },
+    ] },
+    { label: 'Discovery', items: [
+      { key: 'assets', label: 'Assets' },
+      { key: 'attack-surface', label: 'Attack surface' },
+      { key: 'components', label: 'Components' },
+      { key: 'exposures', label: 'Exposures' },
+      { key: 'projects', label: 'Applications' },
+    ] },
+    { label: 'Prioritization', items: [
+      { key: 'priority-rules', label: 'Prioritization rules' },
+      { key: 'business-impact', label: 'Business impact' },
+    ] },
+  ] },
+  { group: 'Code security', collapsible: true, defaultOpen: true, items: [
+    { key: 'analysis', label: 'Code analysis' },
+    { key: 'code', label: 'Pull requests' },
   ] },
   { group: 'Delivery', collapsible: true, items: [
     { key: 'pipelines', label: 'Pipelines' },
     { key: 'gates', label: 'Quality gates' },
-    { key: 'code', label: 'Pull requests' },
     { key: 'pentest', label: 'Pentests' },
     { key: 'regression', label: 'Regression' },
   ] },
@@ -87,10 +90,25 @@ const NAV = [
   ] },
 ]
 
-const ALL_KEYS = NAV.flatMap((entry) => entry.items.map((item) => item.key))
+/* Keys that used to live in the sidebar. They keep resolving so an old link or
+   a bookmark lands on the screen that replaced it instead of the dashboard. */
+const LEGACY_KEYS = {
+  scoping: 'ctem',
+  discovery: 'ctem',
+  prioritization: 'ctem',
+  validation: 'ctem',
+  mobilization: 'ctem',
+}
+
+const NAV_ITEMS = NAV.flatMap((entry) => [
+  ...entry.items,
+  ...((entry.sections || []).flatMap((section) => section.items)),
+])
+const ALL_KEYS = [...NAV_ITEMS.map((item) => item.key), ...Object.keys(LEGACY_KEYS)]
 
 function tabFromHash() {
   const requested = (window.location.hash || '').replace('#', '')
+  if (LEGACY_KEYS[requested]) return LEGACY_KEYS[requested]
   return ALL_KEYS.includes(requested) ? requested : 'dashboard'
 }
 
@@ -164,11 +182,8 @@ export default function App() {
   }
 
   const title = useMemo(() => {
-    for (const entry of NAV) {
-      const found = entry.items.find((item) => item.key === tab)
-      if (found) return found.label
-    }
-    return 'Dashboard'
+    const found = NAV_ITEMS.find((item) => item.key === tab)
+    return found ? found.label : 'Dashboard'
   }, [tab])
 
   if (needsKey) {
@@ -182,12 +197,8 @@ export default function App() {
     switch (tab) {
       case 'setup': return <Setup onNavigate={go} />
       case 'ctem': return <CtemCycle onNavigate={go} />
-      case 'scoping':
-      case 'discovery':
-      case 'prioritization':
-      case 'validation':
-      case 'mobilization':
-        return <CtemCycle focus={tab} onNavigate={go} />
+      case 'priority-rules': return <Lifecycle initialTab="rules" />
+      case 'business-impact': return <BusinessImpact onNavigate={go} />
       case 'projects': return <Projects onNavigate={go} />
       case 'findings': return <Findings projects={projects} />
       case 'code': return <CodeReview projects={projects} />
@@ -226,7 +237,26 @@ export default function App() {
             <span className="brand-sub">continuous exposure</span>
           </span>
         </div>
-        {NAV.map((entry) => {
+        {(() => {
+          const renderNavItem = (item) => {
+            const count = item.badge ? badges[item.badge] : 0
+            return (
+              <button
+                key={item.key}
+                className={`nav-item${tab === item.key ? ' active' : ''}`}
+                aria-current={tab === item.key ? 'page' : undefined}
+                onClick={() => go(item.key)}
+              >
+                <span>{item.label}</span>
+                {count > 0 && (
+                  <span className={`badge-count${item.badge === 'critical' ? ' bad' : ''}`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            )
+          }
+          return NAV.map((entry) => {
           const closed = entry.collapsible && closedGroups.has(entry.group)
           return (
             <div className="nav-group" key={entry.group || 'primary'}>
@@ -241,28 +271,17 @@ export default function App() {
               ) : (
                 <div className="nav-group-title">{entry.group}</div>
               ))}
-              {!closed && entry.items.map((item) => {
-                const count = item.badge ? badges[item.badge] : 0
-                return (
-                  <button
-                    key={item.key}
-                    className={`nav-item${entry.group === 'CTEM cycle' && item.key !== 'ctem' ? ' nested' : ''}`
-                      + `${tab === item.key ? ' active' : ''}`}
-                    aria-current={tab === item.key ? 'page' : undefined}
-                    onClick={() => go(item.key)}
-                  >
-                    <span>{item.label}</span>
-                    {count > 0 && (
-                      <span className={`badge-count${item.badge === 'critical' ? ' bad' : ''}`}>
-                        {count}
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
+              {!closed && entry.items.map(renderNavItem)}
+              {!closed && (entry.sections || []).map((section) => (
+                <div className="nav-section" key={section.label}>
+                  <div className="nav-section-title">{section.label}</div>
+                  {section.items.map(renderNavItem)}
+                </div>
+              ))}
             </div>
-          )
-        })}
+            )
+          })
+        })()}
       </aside>
 
       <div className="main">
