@@ -30,6 +30,8 @@ services:
       POSTGRES_PASSWORD: ${DT_DB_PASSWORD:?set DT_DB_PASSWORD in .env}
       # Read only by init-restore.sh, to create the DefectDojo role. Never printed.
       DD_DB_PASSWORD: ${DD_DB_PASSWORD:?set DD_DB_PASSWORD in .env}
+      # Read only by init-restore.sh, to create the isolated Platform role/database.
+      BARAD_DB_PASSWORD: ${barad_db_password:?set barad_db_password in .env}
     volumes:
       - postgres-db:/var/lib/postgresql
       # Verified dumps; read-only, never written by the server.

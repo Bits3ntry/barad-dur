@@ -90,10 +90,13 @@ def parse(document: dict) -> dict:
     if not root or not isinstance(root.get("name"), str) or not root["name"]:
         raise SbomDocumentError("metadata.component.name is required")
     components = document.get("components")
+<<<<<<< Updated upstream
     if components is None:
         # A valid SBOM may declare no components at all (an iOS app with only
         # a resolved manifest, an empty service). Treat it as an empty set.
         components = []
+=======
+>>>>>>> Stashed changes
     if not isinstance(components, list):
         raise SbomDocumentError("components must be a list")
 
@@ -187,12 +190,15 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
     counters = {"components_received": len(parsed["components"]),
                 "components_created": 0, "components_updated": 0,
                 "components_skipped": 0, "links_created": 0}
+<<<<<<< Updated upstream
     # A real SBOM repeats the same component when several manifests pull it in.
     # The session runs with autoflush=False, so a query cannot see rows added
     # earlier in this loop: track them here or the unique constraints
     # (version, component) and (component, license) fail on the second sighting.
     linked: dict[str, models.VersionComponent] = {}
     seen_licenses: set[tuple[str, str]] = set()
+=======
+>>>>>>> Stashed changes
     for row in parsed["components"]:
         component = session.query(models.Component).filter_by(
             org_id=org_id, identity_key=row["identity_key"]).one_or_none()
@@ -215,10 +221,13 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
         # BL-060: full license set (idempotent rows; never duplicated on
         # re-ingest thanks to uq(component, license)).
         for license_id in row.get("licenses") or []:
+<<<<<<< Updated upstream
             license_key = (component.id, license_id)
             if license_key in seen_licenses:
                 continue
             seen_licenses.add(license_key)
+=======
+>>>>>>> Stashed changes
             exists = (session.query(models.ComponentLicense)
                       .filter_by(component_id=component.id, license_id=license_id)
                       .one_or_none())
@@ -226,6 +235,7 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
                 session.add(models.ComponentLicense(
                     org_id=org_id, component_id=component.id,
                     license_id=license_id, created_at=models.utcnow()))
+<<<<<<< Updated upstream
         link = linked.get(component.id)
         if link is None:
             link = (session.query(models.VersionComponent)
@@ -242,6 +252,16 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
             # The same component seen both directly and transitively is direct.
             link.is_direct = True
         linked[component.id] = link
+=======
+        link = session.query(models.VersionComponent).filter_by(
+            project_version_id=project_version.id, component_id=component.id).one_or_none()
+        if link is None:
+            session.add(models.VersionComponent(
+                project_version_id=project_version.id, component_id=component.id,
+                is_direct=row["is_direct"], parent_purl=row["parent_purl"],
+                manifest_path=row["manifest_path"]))
+            counters["links_created"] += 1
+>>>>>>> Stashed changes
 
     receipt = models.SbomImport(
         project_version_id=project_version.id, content_sha256=digest, source=source,

@@ -48,6 +48,7 @@ def create_channel(payload: ChannelIn = None,
                    session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+<<<<<<< Updated upstream
     if payload.kind not in {"webhook", "email", "slack"}:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "kind must be webhook | email | slack")
@@ -63,6 +64,14 @@ def create_channel(payload: ChannelIn = None,
         if not url.startswith("https://") and not local:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 "slack webhooks must be https (localhost excepted)")
+=======
+    if payload.kind not in {"webhook", "email"}:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "kind must be webhook | email")
+    if payload.kind == "webhook" and not payload.url.lower().startswith(
+            ("http://", "https://")):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "url must be http(s)")
+>>>>>>> Stashed changes
     if payload.kind == "email" and "@" not in payload.url:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "email channels need an address")
@@ -168,6 +177,7 @@ def _deliver_email(channel: models.NotificationChannel, event: str,
         return None, f"smtp_error: {type(exc).__name__}: {exc}"[:400]
 
 
+<<<<<<< Updated upstream
 def _slack_text(event: str, payload: dict) -> str:
     """One readable line: Slack shows `text` in notifications and as fallback."""
     parts = [f"*{event}*"]
@@ -212,12 +222,17 @@ def _deliver_slack(channel: models.NotificationChannel, event: str,
         return None, f"unreachable: {exc.reason}"
 
 
+=======
+>>>>>>> Stashed changes
 def deliver(channel: models.NotificationChannel, event: str,
             payload: dict) -> tuple[int | None, str | None]:
     if channel.kind == "email":
         return _deliver_email(channel, event, payload)
+<<<<<<< Updated upstream
     if channel.kind == "slack":
         return _deliver_slack(channel, event, payload)
+=======
+>>>>>>> Stashed changes
     body = json.dumps({"event": event, "channel": channel.name,
                        "payload": payload}, sort_keys=True).encode()
     signature = hmac.new(channel.secret.encode(), body, hashlib.sha256).hexdigest()
@@ -325,6 +340,7 @@ def list_deliveries(limit: int = Query(default=50, ge=1, le=200),
                       "error": r.error,
                       "created_at": r.created_at.isoformat()} for r in rows],
             "total": len(rows)}
+<<<<<<< Updated upstream
 
 
 
@@ -419,3 +435,5 @@ def mark_notification_read(notification_id: str,
     row.read = True
     session.commit()
     return {"data": {"read": row.read}}
+=======
+>>>>>>> Stashed changes

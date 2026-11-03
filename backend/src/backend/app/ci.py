@@ -1,7 +1,11 @@
 """F3: CI run registration, findings attachment and gate verdicts."""
 import datetime
 
+<<<<<<< Updated upstream
 from backend.app import models, severity as severity_mod
+=======
+from backend.app import models
+>>>>>>> Stashed changes
 
 DEFAULT_GATE_MAX_SEVERITY = "HIGH"  # fails on HIGH and CRITICAL
 _SEVERITY_ORDER = {"UNKNOWN": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
@@ -74,7 +78,11 @@ def finish_run(session, run: models.CiRun, *, status: str) -> dict:
     reasons = []
     worst = "UNKNOWN"
     for _link, finding in rows:
+<<<<<<< Updated upstream
         severity = severity_mod.canonical(finding.severity)
+=======
+        severity = (finding.severity or "UNKNOWN").upper()
+>>>>>>> Stashed changes
         if _SEVERITY_ORDER.get(severity, 0) > _SEVERITY_ORDER.get(worst, 0):
             worst = severity
         if _SEVERITY_ORDER.get(severity, 0) >= _SEVERITY_ORDER[DEFAULT_GATE_MAX_SEVERITY]:
@@ -87,7 +95,11 @@ def finish_run(session, run: models.CiRun, *, status: str) -> dict:
         return _summary(run, failed=True)
 
     exceeding = any(
+<<<<<<< Updated upstream
         severity_mod.canonical(link.severity) in ("HIGH", "CRITICAL")
+=======
+        (link.severity or "UNKNOWN").upper() in ("HIGH", "CRITICAL")
+>>>>>>> Stashed changes
         for link, _finding in rows)
     if exceeding:
         run.verdict = "fail"

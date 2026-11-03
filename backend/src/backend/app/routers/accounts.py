@@ -9,7 +9,10 @@ import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+<<<<<<< Updated upstream
 from sqlalchemy import func
+=======
+>>>>>>> Stashed changes
 from sqlalchemy.orm import Session
 
 from backend.app import auth, auth_local, models
@@ -26,6 +29,7 @@ def _user_data(row: models.User) -> dict:
             "created_at": row.created_at.isoformat()}
 
 
+<<<<<<< Updated upstream
 
 
 class PasswordResetRequest(BaseModel):
@@ -208,6 +212,21 @@ def refresh(payload: RefreshIn = None, session: Session = Depends(get_session)):
     row.revoked_at = models.utcnow()
     session.commit()
     return {"data": _issue_session(session, session.get(models.User, row.user_id))}
+=======
+def _issue_session(session: Session, user: models.User, user_agent: str = "") -> dict:
+    raw = auth_local.new_session_token()
+    row = models.UserSession(
+        org_id=user.org_id, user_id=user.id,
+        token_hash=auth_local.token_hash(raw),
+        created_at=models.utcnow(), expires_at=auth_local.session_expiry(),
+        user_agent=(user_agent or "")[:255])
+    session.add(row)
+    user.last_login_at = models.utcnow()
+    session.commit()
+    return {"token": raw, "expires_at": row.expires_at.isoformat(),
+            "role": user.role, "email": user.email,
+            "display_name": user.display_name}
+>>>>>>> Stashed changes
 
 
 class BootstrapIn(BaseModel):
@@ -288,6 +307,7 @@ def login(request: Request, payload: LoginIn = None,
                    "user", user.id, "bad credentials")
         session.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+<<<<<<< Updated upstream
     if user.totp_enabled_at is not None:
         # A correct password is only half a login when a second factor is on.
         from backend.app.routers import mfa as mfa_router
@@ -297,6 +317,8 @@ def login(request: Request, payload: LoginIn = None,
                    "user", user.id, "password accepted, code required")
         session.commit()
         return {"data": {"mfa_required": True, **_user_data(user), **challenge}}
+=======
+>>>>>>> Stashed changes
     _audit_log(session, user.org_id, user.email, "auth.login", "user", user.id,
                request.headers.get("user-agent", "")[:120])
     session.commit()
@@ -331,8 +353,11 @@ def logout(request: Request,
     if row is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid session")
     row.revoked_at = models.utcnow()
+<<<<<<< Updated upstream
     row.refresh_token_hash = None
     row.refresh_token_expires_at = None
+=======
+>>>>>>> Stashed changes
     session.commit()
     return {"data": {"revoked": True}}
 
@@ -422,8 +447,11 @@ def patch_user(user_id: str, payload: UserPatch = None,
             for row in (session.query(models.UserSession)
                         .filter_by(user_id=user.id).all()):
                 row.revoked_at = models.utcnow()
+<<<<<<< Updated upstream
                 row.refresh_token_hash = None
                 row.refresh_token_expires_at = None
+=======
+>>>>>>> Stashed changes
     user.updated_at = models.utcnow()
     _audit_log(session, org.id, payload.actor, "auth.user_updated", "user",
                user.id, f"role={user.role} status={user.status}")
@@ -451,8 +479,11 @@ def set_password(user_id: str, payload: PasswordIn = None,
     user.updated_at = models.utcnow()
     for row in session.query(models.UserSession).filter_by(user_id=user.id).all():
         row.revoked_at = models.utcnow()
+<<<<<<< Updated upstream
         row.refresh_token_hash = None
         row.refresh_token_expires_at = None
+=======
+>>>>>>> Stashed changes
     session.commit()
     return {"data": {"id": user.id, "sessions_revoked": True}}
 
@@ -461,6 +492,7 @@ def set_password(user_id: str, payload: PasswordIn = None,
 
 @router.get("/oidc/status")
 def oidc_status():
+<<<<<<< Updated upstream
     issuer = (auth_local.oidc_settings().get("issuer") or "").lower()
     # The label is cosmetic; SSO carries the identity, not the branding.
     if "accounts.google.com" in issuer:
@@ -476,6 +508,10 @@ def oidc_status():
                      "provider": provider, "issuer": issuer,
                      "auto_provision": (os.environ.get("OIDC_AUTO_PROVISION") or "").lower()
                      in {"1", "true", "yes"}}}
+=======
+    return {"data": {"configured": auth_local.oidc_configured(),
+                     "crypto_available": auth_local._crypto_available()}}
+>>>>>>> Stashed changes
 
 
 @router.get("/oidc/start")
@@ -526,6 +562,7 @@ def oidc_callback(code: str = Query(...), state: str = Query(...),
     user = (session.query(models.User)
             .filter_by(org_id=row.org_id, email=email).one_or_none())
     if user is None:
+<<<<<<< Updated upstream
         # SSO signs in people who already belong here. Auto-provisioning is an
         # explicit deployment decision, never the default: an IdP that vouches
         # for an address must not invent a member.
@@ -533,6 +570,8 @@ def oidc_callback(code: str = Query(...), state: str = Query(...),
         if not auto:
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                                 "no account for this identity; ask an administrator")
+=======
+>>>>>>> Stashed changes
         user = models.User(org_id=row.org_id, email=email,
                            display_name=claims.get("name") or email,
                            role="viewer", password_hash=None, status="active",
@@ -541,6 +580,7 @@ def oidc_callback(code: str = Query(...), state: str = Query(...),
         session.flush()
     if user.status != "active":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "user disabled")
+<<<<<<< Updated upstream
     if user.totp_enabled_at is not None:
         from backend.app.routers import mfa as mfa_router
 
@@ -549,6 +589,8 @@ def oidc_callback(code: str = Query(...), state: str = Query(...),
                    "sso accepted, code required")
         session.commit()
         return {"data": {"mfa_required": True, **_user_data(user), **challenge}}
+=======
+>>>>>>> Stashed changes
     _audit_log(session, row.org_id, email, "auth.oidc_login", "user", user.id, "")
     session.commit()
     return {"data": _user_data(user), "session": _issue_session(session, user)}

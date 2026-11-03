@@ -28,6 +28,8 @@ readonly DT_ROLE=${POSTGRES_USER:-dtrack}
 readonly DT_DB=${POSTGRES_DB:-dtrack}
 readonly DOJO_ROLE=defectdojo
 readonly DOJO_DB=defectdojo
+readonly BARAD_ROLE=barad
+readonly BARAD_DB=barad_platform
 readonly MARKER=/var/lib/postgresql/.migration-restore-complete
 
 log() { printf 'init-restore: %s\n' "$*"; }
@@ -41,6 +43,8 @@ is_custom_archive() { [ "$(head -c 5 "$1")" = 'PGDMP' ]; }
 # ── 1. Fail closed, before anything is created ──────────────────────────────
 [ -n "${DD_DB_PASSWORD:-}" ] ||
 	die 'DD_DB_PASSWORD is empty; refusing to create the DefectDojo role'
+[ -n "${BARAD_DB_PASSWORD:-}" ] ||
+	die 'BARAD_DB_PASSWORD is empty; refusing to create the Platform role'
 
 for dump in "$DT_DUMP" "$DOJO_DUMP"; do
 	[ -f "$dump" ] ||
@@ -62,12 +66,20 @@ done
 log "ensuring role and database \"$DOJO_ROLE\" (separate from \"$DT_ROLE\")"
 psql --username "$POSTGRES_USER" --dbname postgres -v ON_ERROR_STOP=1 <<'SQL'
 \getenv dojo_password DD_DB_PASSWORD
+\getenv barad_password BARAD_DB_PASSWORD
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', 'defectdojo', :'dojo_password')
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'defectdojo')
 \gexec
 ALTER ROLE defectdojo WITH LOGIN PASSWORD :'dojo_password';
 SELECT 'CREATE DATABASE defectdojo OWNER defectdojo'
  WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'defectdojo')
+\gexec
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', 'barad', :'barad_password')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'barad')
+\gexec
+ALTER ROLE barad WITH LOGIN PASSWORD :'barad_password';
+SELECT 'CREATE DATABASE barad_platform OWNER barad'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'barad_platform')
 \gexec
 SQL
 

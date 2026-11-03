@@ -1,16 +1,27 @@
 """BL-110: dashboard aggregates over real data (no fabricated values)."""
 import datetime
 
+<<<<<<< Updated upstream
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.app import auth, gates, licenses, models, projects as projects_ref, severity as severity_mod
+=======
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
+
+from backend.app import auth, gates, licenses, models
+>>>>>>> Stashed changes
 from backend.app.db import get_session
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
 NON_OPEN = {"resolved", "false_positive", "accepted_risk"}
+<<<<<<< Updated upstream
 SEVERITIES = list(severity_mod.SEVERITIES)
+=======
+SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+>>>>>>> Stashed changes
 
 
 def _aware(value):
@@ -28,10 +39,17 @@ def summary(project: str | None = Query(default=None),
     week_ago = now - datetime.timedelta(days=7)
     week_soon = now + datetime.timedelta(days=2)
 
+<<<<<<< Updated upstream
     proj = projects_ref.by_ref(session, org.id, project)
     if project is not None and proj is None:
         # An unknown project must not answer with the whole organization.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+=======
+    proj = None
+    if project is not None:
+        proj = (session.query(models.Project)
+                .filter_by(org_id=org.id, slug=project).one_or_none())
+>>>>>>> Stashed changes
     pv = None
     if proj is not None and version is not None:
         pv = (session.query(models.ProjectVersion)
@@ -47,7 +65,13 @@ def summary(project: str | None = Query(default=None),
     open_findings = [f for f in findings if f.status not in NON_OPEN]
     severity_counts = {sev: 0 for sev in SEVERITIES}
     for finding in open_findings:
+<<<<<<< Updated upstream
         severity_counts[severity_mod.canonical(finding.severity)] += 1
+=======
+        severity_counts[(finding.severity or "UNKNOWN").upper()
+                        if (finding.severity or "").upper() in severity_counts
+                        else "UNKNOWN"] += 1
+>>>>>>> Stashed changes
 
     kev_open = 0
     for finding in open_findings:
@@ -181,6 +205,7 @@ def summary(project: str | None = Query(default=None),
     }}
 
 
+<<<<<<< Updated upstream
 @router.get("/dashboard/findings/severity/time-series")
 def findings_severity_time_series(
         window: int = Query(30, ge=1, le=90),
@@ -267,6 +292,8 @@ def findings_occurrences_line_chart(
     return {"data": [{"date": k, "count": v} for k, v in sorted(counts.items())]}
 
 
+=======
+>>>>>>> Stashed changes
 @router.get("/dashboard/projects")
 def projects_posture(org: models.Organization = Depends(auth.require_org),
                      session: Session = Depends(get_session)):
@@ -278,14 +305,20 @@ def projects_posture(org: models.Organization = Depends(auth.require_org),
                     .filter_by(org_id=org.id, project_id=project.id).all())
         open_rows = [f for f in findings if f.status not in NON_OPEN]
         critical = sum(1 for f in open_rows
+<<<<<<< Updated upstream
                        if severity_mod.canonical(f.severity) == "CRITICAL")
         high = sum(1 for f in open_rows if severity_mod.canonical(f.severity) == "HIGH")
+=======
+                       if (f.severity or "").upper() == "CRITICAL")
+        high = sum(1 for f in open_rows if (f.severity or "").upper() == "HIGH")
+>>>>>>> Stashed changes
         data.append({"project": project.slug, "open": len(open_rows),
                      "critical": critical, "high": high,
                      "total": len(findings)})
     data.sort(key=lambda row: row["critical"] * 10 + row["high"],
               reverse=True)
     return {"data": data, "total": len(data)}
+<<<<<<< Updated upstream
 
 
 @router.get("/dashboard/exposure-flow")
@@ -461,3 +494,5 @@ def v0_overview(org: models.Organization = Depends(auth.require_org),
                      "observed or evaluated there, not that it is clean"),
         },
     }}
+=======
+>>>>>>> Stashed changes

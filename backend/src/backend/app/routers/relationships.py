@@ -128,10 +128,13 @@ class DeploymentIn(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     environment: str = Field(default="production", max_length=64)
     service_id: str | None = None
+<<<<<<< Updated upstream
     artifact_id: str | None = None
     application_component_id: str | None = None
     status: str = "active"
     deployed_at: str | None = None
+=======
+>>>>>>> Stashed changes
     actor: str | None = None
 
 
@@ -139,6 +142,7 @@ class DeploymentIn(BaseModel):
 def list_deployments(org: models.Organization = Depends(auth.require_org),
                      session: Session = Depends(get_session)):
     rows = session.query(models.Deployment).filter_by(org_id=org.id).all()
+<<<<<<< Updated upstream
     data = []
     for d in rows:
         artifact = session.get(models.Artifact, d.artifact_id) if d.artifact_id else None
@@ -150,6 +154,10 @@ def list_deployments(org: models.Organization = Depends(auth.require_org),
                                    "digest": artifact.digest} if artifact else None),
                      "version": version.version if version else None})
     return {"data": data, "total": len(data)}
+=======
+    return {"data": [{"id": d.id, "name": d.name, "environment": d.environment,
+                      "service_id": d.service_id} for d in rows], "total": len(rows)}
+>>>>>>> Stashed changes
 
 
 @router.post("/deployments")
@@ -162,6 +170,7 @@ def create_deployment(payload: DeploymentIn = None,
         service = session.get(models.Service, payload.service_id)
         if service is None or service.org_id != org.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "service not found")
+<<<<<<< Updated upstream
     if payload.artifact_id is not None:
         artifact = session.get(models.Artifact, payload.artifact_id)
         if artifact is None or artifact.org_id != org.id:
@@ -188,16 +197,26 @@ def create_deployment(payload: DeploymentIn = None,
                             artifact_id=payload.artifact_id,
                             application_component_id=payload.application_component_id,
                             status=payload.status, deployed_at=deployed_at,
+=======
+    dep = models.Deployment(org_id=org.id, service_id=payload.service_id,
+                            name=payload.name, environment=payload.environment,
+>>>>>>> Stashed changes
                             created_at=_now(), updated_at=_now())
     session.add(dep)
     session.flush()
     _audit_log(session, org.id, payload.actor or "system", "deployment.added",
+<<<<<<< Updated upstream
                "deployment", dep.id,
                f"{payload.name} ({payload.environment})"
                + (f" artifact {payload.artifact_id}" if payload.artifact_id else ""))
     session.commit()
     return {"data": {"id": dep.id, "environment": dep.environment,
                      "status": dep.status, "artifact_id": dep.artifact_id}}
+=======
+               "deployment", dep.id, f"{payload.name} ({payload.environment})")
+    session.commit()
+    return {"data": {"id": dep.id}}
+>>>>>>> Stashed changes
 
 
 # ─────────────────────── generic typed links ───────────────────────

@@ -1,4 +1,5 @@
 """Inventory and project listing endpoints."""
+<<<<<<< Updated upstream
 from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -6,10 +7,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app import auth, models, severity as severity_mod
+=======
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
+
+from backend.app import auth, models
+>>>>>>> Stashed changes
 from backend.app.db import get_session
 
 router = APIRouter(prefix="/api/v1", tags=["inventory"])
 
+<<<<<<< Updated upstream
 SEVERITIES = severity_mod.SEVERITIES
 CLOSED_STATUSES = {"resolved", "suppressed", "false_positive"}
 
@@ -181,6 +189,8 @@ def version_profile(project: str = Query(...), version: str = Query(...),
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
     return {"data": _serialize_version_profile(session, org.id, project_row, version_row)}
 
+=======
+>>>>>>> Stashed changes
 
 @router.get("/projects")
 def list_projects(org: models.Organization = Depends(auth.require_org),
@@ -193,11 +203,15 @@ def list_projects(org: models.Organization = Depends(auth.require_org),
                     .filter_by(project_id=project.id)
                     .order_by(models.ProjectVersion.created_at).all())
         data.append({"id": project.id, "name": project.name, "slug": project.slug,
+<<<<<<< Updated upstream
                      "group": project.group_name,
+=======
+>>>>>>> Stashed changes
                      "versions": [v.version for v in versions]})
     return {"data": data}
 
 
+<<<<<<< Updated upstream
 class VersionRenameIn(BaseModel):
     version: str = Field(min_length=1, max_length=255,
                          description="New label for this project version")
@@ -258,6 +272,8 @@ def set_project_group(slug: str, payload: ProjectGroupIn,
     return {"data": {"slug": project.slug, "group": project.group_name}}
 
 
+=======
+>>>>>>> Stashed changes
 @router.get("/components")
 def list_components(
     project: str | None = Query(default=None),

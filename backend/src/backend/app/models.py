@@ -65,11 +65,14 @@ class Project(Base, TimestampMixin):
     org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
     name: Mapped[str] = mapped_column(String(255))
     slug: Mapped[str] = mapped_column(String(255))
+<<<<<<< Updated upstream
     # A product or account that owns several repositories ("Aurea" holds the
     # frontend, backend, fx and document services). Free text on purpose: the
     # grouping is whatever the organization calls it, and it can be re-assigned
     # without a migration.
     group_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+=======
+>>>>>>> Stashed changes
 
 
 class ProjectVersion(Base, TimestampMixin):
@@ -91,9 +94,12 @@ class SbomImport(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
     project_version_id: Mapped[str] = mapped_column(String(36), ForeignKey("project_versions.id"))
+<<<<<<< Updated upstream
     # The exact build this document describes, when the caller declares it.
     artifact_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("artifacts.id"), nullable=True, index=True)
+=======
+>>>>>>> Stashed changes
     content_sha256: Mapped[str] = mapped_column(String(64))
     source: Mapped[str] = mapped_column(String(32), default="api")
     filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -193,6 +199,7 @@ class Finding(Base, TimestampMixin):
     rule_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+<<<<<<< Updated upstream
     # Owner and narrative fields the detail screen owes the reader. `assignee`
     # is a free identity (email or principal name) so API-key and human actors
     # share one column; My work resolves it against the caller.
@@ -204,6 +211,8 @@ class Finding(Base, TimestampMixin):
     # Last run that actually evaluated this finding; closure requires it.
     last_evaluated_run_id: Mapped[str | None] = mapped_column(
         String(36), nullable=True, index=True)
+=======
+>>>>>>> Stashed changes
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -421,6 +430,7 @@ class Asset(Base):
     value: Mapped[str] = mapped_column(String(1024))
     source: Mapped[str] = mapped_column(String(64))
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+<<<<<<< Updated upstream
     # Inventory ownership. `classification_status` is deliberately separate from
     # scope authorization: confirming an asset is ours never grants a scan.
     project_id: Mapped[str | None] = mapped_column(
@@ -431,6 +441,8 @@ class Asset(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+=======
+>>>>>>> Stashed changes
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -495,6 +507,7 @@ class CiRunFinding(Base, TimestampMixin):
 
 
 class ScopeTarget(Base, TimestampMixin):
+<<<<<<< Updated upstream
     """What the organization may audit or analyze: static positive list.
 
     A target is a *declaration*, not a running job: `capabilities` records what
@@ -502,6 +515,10 @@ class ScopeTarget(Base, TimestampMixin):
     checks before touching anything. Wildcards are rules — they never create a
     host; a concrete target links the canonical asset with source `scope`.
     """
+=======
+    """What the organization may audit or analyze: static positive list."""
+
+>>>>>>> Stashed changes
 
     __tablename__ = "scope_targets"
     __table_args__ = (
@@ -514,6 +531,7 @@ class ScopeTarget(Base, TimestampMixin):
     value: Mapped[str] = mapped_column(String(1024))
     status: Mapped[str] = mapped_column(String(32), default="active")
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+<<<<<<< Updated upstream
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     source: Mapped[str] = mapped_column(String(32), default="manual")
@@ -526,17 +544,23 @@ class ScopeTarget(Base, TimestampMixin):
     include_apex: Mapped[bool] = mapped_column(Boolean, default=False)
     asset_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("assets.id"), nullable=True, index=True)
+=======
+>>>>>>> Stashed changes
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ScopeExclusion(Base, TimestampMixin):
+<<<<<<< Updated upstream
     """Negative scope entries; resolved view subtracts these from targets.
 
     An effective exclusion always wins, including over a wildcard target that
     covers it. Excluding a resource never deletes its inventory and never
     resolves its findings.
     """
+=======
+    """Negative scope entries; resolved view subtracts these from targets."""
+>>>>>>> Stashed changes
 
     __tablename__ = "scope_exclusions"
     __table_args__ = (
@@ -548,11 +572,14 @@ class ScopeExclusion(Base, TimestampMixin):
     target_type: Mapped[str] = mapped_column(String(32))
     value: Mapped[str] = mapped_column(String(1024))
     reason: Mapped[str] = mapped_column(Text)
+<<<<<<< Updated upstream
     owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source: Mapped[str] = mapped_column(String(32), default="manual")
     status: Mapped[str] = mapped_column(String(32), default="active")
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+=======
+>>>>>>> Stashed changes
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -648,6 +675,7 @@ class Deployment(Base, TimestampMixin):
         String(36), ForeignKey("services.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(255))
     environment: Mapped[str] = mapped_column(String(64), default="production")
+<<<<<<< Updated upstream
     # What exactly is running here. A deployment points at an artifact (and
     # through it at a version); "in production" is read from these rows, never
     # from a flag on the version.
@@ -660,6 +688,8 @@ class Deployment(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True)
     retired_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+=======
+>>>>>>> Stashed changes
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1220,16 +1250,20 @@ class User(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(16), default="active")
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+<<<<<<< Updated upstream
     # Optional second factor. A secret exists from enrolment, but only
     # `totp_enabled_at` makes it required at login — that is what separates an
     # abandoned enrolment from an active one.
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     totp_enabled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+=======
+>>>>>>> Stashed changes
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+<<<<<<< Updated upstream
 class MfaChallenge(Base):
     """Short-lived half-session between "password ok" and "code ok"."""
 
@@ -1261,6 +1295,8 @@ class MfaRecoveryCode(Base):
         DateTime(timezone=True), nullable=True)
 
 
+=======
+>>>>>>> Stashed changes
 class UserSession(Base):
     __tablename__ = "user_sessions"
 
@@ -1273,10 +1309,13 @@ class UserSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+<<<<<<< Updated upstream
     refresh_token_hash: Mapped[str | None] = mapped_column(
         String(64), nullable=True)
     refresh_token_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+=======
+>>>>>>> Stashed changes
 
 
 class OidcState(Base):
@@ -1355,6 +1394,7 @@ class NotificationChannel(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+<<<<<<< Updated upstream
 
 
 class Notification(Base, TimestampMixin):
@@ -1388,6 +1428,9 @@ class NotificationPreference(Base, TimestampMixin):
     jira_sync_error: Mapped[bool] = mapped_column(Boolean, default=True)
 
 class NotificationDelivery(Base, TimestampMixin):
+=======
+class NotificationDelivery(Base):
+>>>>>>> Stashed changes
     __tablename__ = "notification_deliveries"
     __table_args__ = (UniqueConstraint("org_id", "dedupe_key", name="uq_delivery_dedupe"),)
 
@@ -1420,6 +1463,7 @@ class SbomBaseline(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+<<<<<<< Updated upstream
 class TrivyDbUpdate(Base, TimestampMixin):
     """Record of Trivy DB fetch/update; called by the offline updater."""
 
@@ -1959,3 +2003,5 @@ class WorkItem(Base, TimestampMixin):
     finding_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("findings.id"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+=======
+>>>>>>> Stashed changes

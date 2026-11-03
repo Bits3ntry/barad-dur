@@ -19,7 +19,10 @@ class ReceiptResponse(BaseModel):
     status: str
     import_id: str
     receipt: dict
+<<<<<<< Updated upstream
     artifact: dict | None = None
+=======
+>>>>>>> Stashed changes
 
 
 @router.post("/sbom", response_model=ReceiptResponse)
@@ -29,10 +32,13 @@ def upload_sbom(
     version: str | None = Query(default=None, description="project version override"),
     source: str = Query(default="api"),
     filename: str | None = Query(default=None),
+<<<<<<< Updated upstream
     artifact_digest: str | None = Query(default=None, max_length=128,
                                         description="digest of the exact build"),
     artifact_name: str | None = Query(default=None, max_length=255),
     artifact_provenance: str | None = Query(default=None, max_length=255),
+=======
+>>>>>>> Stashed changes
     org: models.Organization = Depends(auth.require_org),
     session: Session = Depends(get_session),
 ):
@@ -54,6 +60,7 @@ def upload_sbom(
             project_override=project, version_override=version)
     except (ingest.SbomDocumentError, ValueError, json.JSONDecodeError) as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(error)) from None
+<<<<<<< Updated upstream
     receipt = session.get(models.SbomImport, result["import_id"])
     version = session.get(models.ProjectVersion, receipt.project_version_id)
     artifact = None
@@ -81,6 +88,12 @@ def upload_sbom(
                             "project_version_id": artifact.project_version_id}
                            if artifact else None)
     return JSONResponse(status_code=status_code, content=payload)
+=======
+    session.commit()
+    status_code = 201 if result["status"] == "created" else 200
+    return JSONResponse(status_code=status_code, content=ReceiptResponse.model_validate(
+        result, from_attributes=True).model_dump())
+>>>>>>> Stashed changes
 
 
 @router.get("/imports/{import_id}")

@@ -7,7 +7,11 @@ default policy per-day buckets.
 """
 import datetime
 
+<<<<<<< Updated upstream
 from backend.app import models, severity as severity_mod
+=======
+from backend.app import models
+>>>>>>> Stashed changes
 
 SEVERITY_FALLBACK = {
     "CRITICAL": "P0",
@@ -38,7 +42,11 @@ def classify(session, org_id: str, finding: models.Finding) -> tuple[str, str]:
             continue
         if rule.match_severities:
             wanted = {s.strip().upper() for s in rule.match_severities.split(",")}
+<<<<<<< Updated upstream
             mine = severity_mod.canonical(finding.severity)
+=======
+            mine = (finding.severity or "UNKNOWN").upper()
+>>>>>>> Stashed changes
             if mine not in wanted:
                 continue
         if rule.match_intel:
@@ -54,8 +62,13 @@ def classify(session, org_id: str, finding: models.Finding) -> tuple[str, str]:
                              or rule.match_severities or rule.match_intel)
         if has_criterion:
             return rule.priority, rule.reason
+<<<<<<< Updated upstream
     fallback = SEVERITY_FALLBACK.get(severity_mod.canonical(finding.severity), "P3")
     return fallback, f"severity {severity_mod.canonical(finding.severity)} fallback"
+=======
+    fallback = SEVERITY_FALLBACK.get((finding.severity or "UNKNOWN").upper(), "P3")
+    return fallback, f"severity {finding.severity or 'UNKNOWN'} fallback"
+>>>>>>> Stashed changes
 
 
 def default_policy(session, org_id: str):

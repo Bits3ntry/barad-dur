@@ -8,7 +8,11 @@ from backend.app.db import get_session, run_migrations
 from backend.app import models
 from backend.app.routers import authorization as authorization_router
 
+<<<<<<< Updated upstream
 from backend.app.routers import accounts, analysis, artifacts, attack_surface, ci, code_baselines, code_review, ctem, cycles, dashboard, easm, easm_trivy, exposures, findings, gates as gates_router, identity, impact, intelligence, inventory, inventory_groups, jira, lifecycle, licenses as licenses_router, mfa as mfa_router, notifications, orchestration, organization, pentest, regression, relationships, schedules, sarif, scope, sbom, spdx, vulnerabilities, work
+=======
+from backend.app.routers import accounts, ci, code_baselines, code_review, dashboard, easm, findings, gates as gates_router, identity, intelligence, inventory, jira, lifecycle, licenses as licenses_router, notifications, orchestration, organization, pentest, regression, relationships, schedules, sarif, scope, sbom, spdx
+>>>>>>> Stashed changes
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -18,6 +22,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Barad-dûr platform", version="0.1.0")
     app.include_router(sbom.router)
     app.include_router(inventory.router)
+<<<<<<< Updated upstream
     app.include_router(inventory_groups.router)
     app.include_router(vulnerabilities.router)
     app.include_router(analysis.router)
@@ -28,6 +33,8 @@ def create_app() -> FastAPI:
     app.include_router(mfa_router.router)
     app.include_router(impact.router)
     app.include_router(work.router)
+=======
+>>>>>>> Stashed changes
     app.include_router(findings.router)
     app.include_router(ci.router)
     app.include_router(scope.router)
@@ -35,13 +42,19 @@ def create_app() -> FastAPI:
     app.include_router(identity.router)
     app.include_router(intelligence.router)
     app.include_router(easm.router)
+<<<<<<< Updated upstream
     app.include_router(easm_trivy.router)
+=======
+>>>>>>> Stashed changes
     app.include_router(relationships.router)
     app.include_router(authorization_router.router)
     app.include_router(licenses_router.router)
     app.include_router(gates_router.router)
     app.include_router(sarif.router)
+<<<<<<< Updated upstream
     app.include_router(ctem.router)
+=======
+>>>>>>> Stashed changes
     app.include_router(dashboard.router)
     app.include_router(spdx.router)
     app.include_router(pentest.router)
