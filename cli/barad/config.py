@@ -19,7 +19,7 @@ from .core.config import build_config
 from .core.errors import ConfigError
 
 CONFIG_FILENAME = ".barad.yml"
-INTEGRATIONS = ("dependency_track", "defectdojo")
+INTEGRATIONS = ("dependency_track", "defectdojo", "platform_api")
 
 DEFAULT_EXCLUDES = [".git", ".venv", "node_modules", ".barad", ".barad-dur", "dist",
                     "build", ".secrets"]
@@ -53,6 +53,10 @@ DEFAULTS = {
         "defectdojo": {
             "enabled": False, "endpoint_env": "DOJO_URL", "token_env": "DOJO_TOKEN",
             "auto_create_context": False, "reimport": True,
+        },
+        "platform_api": {
+            "enabled": False, "endpoint_env": "PLATFORM_API_URL", "token_env": "PLATFORM_API_KEY",
+            "timeout_seconds": 15, "max_attempts": 2,
         },
     },
 }

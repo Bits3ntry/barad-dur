@@ -2,10 +2,10 @@
 from dataclasses import dataclass
 
 from .commands.scan import resolve
-from .scan import SANITIZED_REPORT, SBOM, run_scan
+from .scan import SANITIZED_REPORT, SBOM, SAST_REPORT, run_scan
 from .store import ScanStore
 from .core.versioning import branch_version, resolve_version
-from integrations import dependency_track, defectdojo
+from integrations import dependency_track, defectdojo, platform_api
 
 EXIT_PARTIAL = 4
 
@@ -26,22 +26,25 @@ def run_workflow(args):
     manifest = scan.manifest
     if scan.exit_code:
         manifest['sync'] = {'dependency_track': {'status': 'SKIPPED', 'reason': 'scan_failed'},
-                            'defectdojo': {'status': 'SKIPPED', 'reason': 'scan_failed'}}
+                            'defectdojo': {'status': 'SKIPPED', 'reason': 'scan_failed'},
+                            'platform_api': {'status': 'SKIPPED', 'reason': 'scan_failed'}}
         return _finish(scan, settings, manifest, scan.exit_code, scan.error)
     sbom = scan.run_dir / SBOM
     sanitized = scan.run_dir / SANITIZED_REPORT
+    sast = scan.run_dir / SAST_REPORT
     results = {}
     store = ScanStore(settings.workspace or settings.root,
                       settings.document['output']['directory'], manifest['run_id'],
                       project=manifest['project']['name'],
                       version=manifest['application_version']['value'])
     sync_key = f"{manifest['project']['name']}:{manifest['application_version']['value']}:{target_type}:{target}"
-    for key, action, path in (
-        ('dependency_track', dependency_track.synchronize, sbom),
-        ('defectdojo', defectdojo.synchronize, sanitized),
+    for key, action, path, uses_pending in (
+        ('dependency_track', dependency_track.synchronize, sbom, True),
+        ('platform_api', platform_api.synchronize, sbom, False),
+        ('defectdojo', defectdojo.synchronize, sanitized, False),
     ):
         try:
-            if key == 'dependency_track':
+            if uses_pending:
                 pending = store.sync_record(sync_key)
                 results[key] = action(settings, manifest, path, pending=pending)
                 if results[key]['status'] == 'PENDING' and results[key].get('processing_token'):
@@ -52,6 +55,14 @@ def run_workflow(args):
                 results[key] = action(settings, manifest, path)
         except Exception:  # unexpected failures are bounded and never erase scan evidence
             results[key] = {'status': 'FAILED', 'reason': 'internal_integration_error'}
+        if (key == 'platform_api'
+                and results.get('platform_api', {}).get('status') == 'PUBLISHED'):
+            try:
+                results[key]['findings'] = platform_api.synchronize_findings(
+                    settings, manifest, sanitized, sast)
+            except Exception:  # same bound: evidence survives, sync reports failure
+                results[key]['findings'] = {'status': 'FAILED',
+                                            'reason': 'internal_integration_error'}
     manifest['sync'] = results
     failed = any(result['status'] in ('FAILED', 'PENDING') for result in results.values())
     manifest['status'] = 'partial' if failed else 'completed'

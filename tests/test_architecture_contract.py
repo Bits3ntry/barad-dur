@@ -24,10 +24,11 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertNotIn("install-opengrep.sh", action)
         self.assertNotIn("barad_security", action)
 
-    def test_cli_configuration_has_only_the_two_supported_remote_adapters(self):
+    def test_cli_configuration_has_only_the_three_supported_remote_adapters(self):
         from barad.config import INTEGRATIONS
 
-        self.assertEqual(INTEGRATIONS, ("dependency_track", "defectdojo"))
+        self.assertEqual(
+            INTEGRATIONS, ("dependency_track", "defectdojo", "platform_api"))
 
     def test_cli_core_has_one_evidence_implementation(self):
         import barad.core.evidence as evidence

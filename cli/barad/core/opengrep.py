@@ -102,9 +102,12 @@ class OpenGrepRunner:
         return self._version
 
     def _command(self, output_path):
+        # OpenGrep 1.33.1 full-CLI argv: no `--no-progress-bar` (semgrep-only);
+        # `--disable-version-check` keeps the credential-free scan boundary
+        # (an update check would be an unexplained outbound call).
         argv = [
             str(self.executable()), "scan", "--json-output", str(output_path),
-            "--no-progress-bar", "--config", str(self.rule_path()),
+            "--disable-version-check", "--config", str(self.rule_path()),
         ]
         for path in self.exclude_paths:
             argv += ["--exclude", path]

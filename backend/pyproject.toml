@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "barad-platform"
+version = "0.1.0"
+description = "BARAD-DUR platform API: SBOM ingestion, inventory and findings management."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+barad-platform = "backend.app.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["backend*"]
+namespaces = false
