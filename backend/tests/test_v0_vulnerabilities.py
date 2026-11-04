@@ -1,9 +1,14 @@
-"""v0 vulnerabilities: aggregation over visible findings, not the catalog.
+"""Vulnerabilities: one row per PROBLEM, grouped from findings, never the catalog.
 
-The spec's sharpest sentence here is that a global advisory catalog is not a
-list of CVEs affecting the inventory. These tests hold that line: a CVE with no
-finding never appears, a manual IDOR never appears, and enrichment says
-"unknown" instead of inventing a number.
+Two readings of the same data, and the difference matters:
+
+* findings are occurrences (the same SQL injection in two endpoints is two),
+* vulnerabilities are the problem (one row, two places, one fix).
+
+The spec's other sharp line is that a global advisory catalog is not a list of
+CVEs affecting the inventory: a CVE with no finding never appears here. These
+tests hold both lines, plus the honesty rule — enrichment says "unknown" with a
+reason instead of inventing a number.
 """
 import sys
 from pathlib import Path
@@ -71,20 +76,41 @@ def seeded(tmp_path, monkeypatch):
 
     findings = [
         models.Finding(org_id=org.id, project_id=project.id, kind="vulnerability",
+                       vector="dependency-cve",
                        fingerprint="fp-1", source="osv", title="Django 3.2 issue",
-                       severity="HIGH", vulnerability_id=advisory.id,
+                       severity="HIGH", vulnerability_id=advisory.id, rule_id="CVE-2026-0001",
                        component_id=component.id, last_seen_version_id=version.id,
-                       priority="P1", status="open"),
+                       priority="P1", status="open",
+                       detail='{"cvss_score": 7.5, "fixed_version": "3.2.24"}'),
         models.Finding(org_id=org.id, project_id=project_b.id, kind="vulnerability",
+                       vector="dependency-cve",
                        fingerprint="fp-2", source="osv", title="Django 3.2 issue",
-                       severity="CRITICAL", vulnerability_id=advisory.id,
+                       severity="CRITICAL", vulnerability_id=advisory.id, rule_id="CVE-2026-0001",
+                       component_id=component.id,
                        priority="P0", status="acknowledged"),
         models.Finding(org_id=org.id, project_id=project.id, kind="code-weakness",
-                       fingerprint="fp-manual", source="manual",
+                       vector="sast",
+                       fingerprint="fp-manual", source="manual", rule_id="manual.idor",
                        title="IDOR on invoices", severity="HIGH", status="open"),
+        models.Finding(org_id=org.id, project_id=project.id, kind="code-weakness",
+                       vector="sast",
+                       fingerprint="fp-manual-2", source="scan", rule_id="manual.idor",
+                       title="IDOR on invoices", severity="HIGH", status="open",
+                       path="app/invoices.py", line=42),
+        models.Finding(org_id=org.id, project_id=project.id, kind="vulnerability",
+                       vector="credential",
+                       fingerprint="fp-secret", source="scan", rule_id="generic-api-key",
+                       title="Exposed credential", severity="CRITICAL", status="open",
+                       path="config/settings.py", line=17),
+        models.Finding(org_id=org.id, project_id=project.id, kind="vulnerability",
+                       vector="credential",
+                       fingerprint="fp-secret-2", source="scan", rule_id="generic-api-key",
+                       title="Exposed credential", severity="CRITICAL", status="open",
+                       path="scripts/deploy.sh", line=9),
         models.Finding(org_id=org.id, project_id=project.id, kind="vulnerability",
                        fingerprint="fp-3", source="osv", title="suppressed row",
                        severity="LOW", vulnerability_id=advisory.id,
+                       component_id=component.id,
                        priority="P3", status="suppressed"),
     ]
     session.add_all(findings)
@@ -95,44 +121,68 @@ def seeded(tmp_path, monkeypatch):
 
     from fastapi.testclient import TestClient
     return (TestClient(app), {"X-API-Key": org_key}, {"X-API-Key": other_key},
-            session_factory, advisory.id, findings[0].id, findings[1].id, findings[3].id)
+            session_factory, advisory.id, findings[0].id, findings[1].id, findings[6].id)
 
 
-def test_aggregates_only_cves_with_visible_findings(seeded):
+def _by_signature(body, signature):
+    return next(row for row in body["data"] if row["signature"] == signature)
+
+
+def test_a_cve_aggregates_its_findings_and_nothing_from_the_catalog(seeded):
     test_client, headers, _other, _sf, _adv, _f1, _f2, _suppressed = seeded
     body = test_client.get("/api/v1/vulnerabilities", headers=headers).json()
-    assert body["total"] == 1
-    row = body["data"][0]
-    assert row["cve_id"] == "CVE-2026-0001"
+
+    row = _by_signature(body, "CVE-2026-0001")
+    assert row["vector"] == "dependency-cve"
     assert row["findings"] == 2, "the suppressed finding is out of the default view"
     assert row["open_findings"] == 2
     assert row["severity"] == "CRITICAL", "aggregate severity is the worst finding"
     assert row["priority"] == "P0"
     assert {p["slug"] for p in row["projects"]} == {"aurea", "aurea-web"}
     assert row["assets"]["count"] == 2, "one direct + one through a typed link"
+    assert row["components"][0]["name"] == "django"
+
     assert row["enrichment"]["kev"]["listed"] is True
     assert row["enrichment"]["kev"]["source"] == "cisa.gov"
     assert row["enrichment"]["kev"]["fetched_at"]
     assert row["enrichment"]["epss"]["score"] == "0.42"
-    assert row["enrichment"]["exploit"] == {"known": False, "available": None,
-                                            "reason": "no exploit feed connected"}
-    assert row["versions_known"] is False
-    assert row["affected_versions"] == [] and row["fixed_versions"] == []
-    assert "unknown, not empty" in row["versions_reason"]
+    assert row["enrichment"]["exploit"]["available"] is True
+    assert row["cvss"]["score"] == 7.5
+    assert row["fix"]["available"] is True and row["fix"]["versions"] == ["3.2.24"]
 
     ids = {item["cve_id"] for item in body["data"]}
     assert "CVE-2026-9999" not in ids, "the catalog is not the inventory"
+    assert body["counters"]["vulnerabilities"] == len(body["data"])
+    assert body["counters"]["findings"] >= sum(r["findings"] for r in body["data"])
 
 
-def test_manual_findings_and_suppressed_only_cves_stay_out(seeded):
+def test_the_same_problem_in_two_places_is_one_row(seeded):
+    """The rule the console depends on: 1 problem, N findings."""
     test_client, headers, _other, _sf, _adv, _f1, _f2, _suppressed = seeded
-    listing = test_client.get("/api/v1/vulnerabilities?include_suppressed=true",
-                              headers=headers).json()
-    assert listing["data"][0]["findings"] == 3
+    body = test_client.get("/api/v1/vulnerabilities", headers=headers).json()
 
-    findings = test_client.get("/api/v1/findings?q=IDOR", headers=headers).json()
-    assert findings["total"] == 1
-    assert findings["data"][0]["cve_id"] is None
+    idor = _by_signature(body, "manual.idor")
+    assert idor["vector"] == "sast"
+    assert idor["cve_id"] is None
+    assert idor["findings"] == 2, "two occurrences, one problem"
+    assert {loc["path"] for loc in idor["locations"]} == {None, "app/invoices.py"}
+
+    secret = _by_signature(body, "generic-api-key")
+    assert secret["vector"] == "credential"
+    assert secret["findings"] == 2
+    assert secret["remediation"] == "Rotate the credential"
+    assert {loc["path"] for loc in secret["locations"]} == {"config/settings.py",
+                                                           "scripts/deploy.sh"}
+
+
+def test_suppressed_findings_are_out_of_the_default_view(seeded):
+    test_client, headers, _other, _sf, _adv, _f1, _f2, _suppressed = seeded
+    default = test_client.get("/api/v1/vulnerabilities", headers=headers).json()
+    assert _by_signature(default, "CVE-2026-0001")["findings"] == 2
+
+    expanded = test_client.get("/api/v1/vulnerabilities?include_suppressed=true",
+                               headers=headers).json()
+    assert _by_signature(expanded, "CVE-2026-0001")["findings"] == 3
 
 
 def test_detail_lists_the_concrete_findings(seeded):
@@ -140,15 +190,15 @@ def test_detail_lists_the_concrete_findings(seeded):
     detail = test_client.get("/api/v1/vulnerabilities/CVE-2026-0001",
                              headers=headers).json()["data"]
     assert detail["cve_id"] == "CVE-2026-0001"
-    rows = detail["findings_detail"]
-    assert {row["id"] for row in rows} == {_f1, _f2}
+    rows = detail["locations"]
+    assert {row["finding_id"] for row in rows} == {_f1, _f2}
     assert rows[0]["severity"] == "CRITICAL", "worst first"
-    by_id = {row["id"]: row for row in rows}
-    assert by_id[_f1]["component"] == "pkg:pypi/django@3.2.0"
-    assert by_id[_f1]["version"] == "v3"
-    assert by_id[_f2]["component"] is None
-    assert "CVE-2026-9999" not in test_client.get(
-        "/api/v1/vulnerabilities/CVE-2026-9999", headers=headers).text
+    by_id = {row["finding_id"]: row for row in rows}
+    assert by_id[_f1]["component"] == "django"
+    assert by_id[_f1]["component_version"] == "3.2.0"
+    assert by_id[_f2]["component"] == "django", "same package, different project"
+    assert test_client.get("/api/v1/vulnerabilities/CVE-2026-9999",
+                           headers=headers).status_code == 404
 
 
 def test_bulk_preview_then_apply_is_bounded_and_audited(seeded):
@@ -187,9 +237,21 @@ def test_bulk_preview_then_apply_is_bounded_and_audited(seeded):
         "/api/v1/activity?resource_type=finding", headers=headers).json()["data"]}
     assert "finding.status_changed" in actions
 
-    listing = test_client.get("/api/v1/vulnerabilities", headers=headers).json()
-    assert listing["total"] == 1
-    assert listing["data"][0]["open_findings"] == 0
+
+def test_one_status_change_moves_every_finding_of_the_problem(seeded):
+    """A vulnerability has one lifecycle even with two occurrences."""
+    test_client, headers, _other, sf, _adv, _f1, _f2, _suppressed = seeded
+    result = test_client.patch("/api/v1/vulnerabilities/manual.idor/status",
+                               json={"status": "acknowledged",
+                                     "reason": "triaged in the console"},
+                               headers=headers).json()["data"]
+    assert result["findings"] == 2
+    session = sf()()
+    owners = (session.query(models.Finding)
+              .filter_by(rule_id="manual.idor").all())
+    assert {row.status for row in owners} == {"acknowledged"}
+    assert {row.status_reason for row in owners} == {"triaged in the console"}
+    session.close()
 
 
 def test_vulnerabilities_are_isolated(seeded):
@@ -198,6 +260,7 @@ def test_vulnerabilities_are_isolated(seeded):
                            headers=other_headers).json()["total"] == 0
     assert test_client.get("/api/v1/vulnerabilities/CVE-2026-0001",
                            headers=other_headers).status_code == 404
-    assert test_client.get("/api/v1/vulnerabilities/meta/summary",
-                           headers=other_headers).json()["data"] == {
-        "cves": 0, "kev": 0, "findings": 0, "unknown_enrichment": 0}
+    summary = test_client.get("/api/v1/vulnerabilities/meta/summary",
+                              headers=other_headers).json()["data"]
+    assert summary["vulnerabilities"] == 0
+    assert summary["findings"] == 0

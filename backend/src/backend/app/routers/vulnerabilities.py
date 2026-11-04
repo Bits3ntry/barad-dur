@@ -1,13 +1,27 @@
-"""Vulnerabilities: the CVEs that actually affect this organization's inventory.
+"""Vulnerabilities: one row per PROBLEM, with every finding behind it.
 
-This is an aggregate over visible findings, never the global advisory catalog.
-A CVE with no finding behind it is not "affecting the organization", and a
-finding without a CVE (a manual IDOR) never appears here.
+The console needs two readings of the same data, and conflating them is what
+makes security panels unusable:
 
-Honest fields: `affected_versions`/`fixed_versions` are reported as unknown
-because v0 stores no advisory version ranges; enrichment says `known: false`
-with the reason instead of showing a blank that reads like zero.
+* **Findings** — occurrences. The same SQL injection in two endpoints is two
+  findings, because the fix is two changes in two files.
+* **Vulnerabilities** — the problem itself. One row, with how many places it
+  appears in, who is exposed, whether an exploit exists and what the fix is.
+  This is the row you triage, ticket and close.
+
+Grouping is by *signature*, not by row: a rule id for SAST and configuration
+findings, a CVE id for dependency advisories. A secret groups by rule too — five
+leaked keys in five files are one policy problem with five places to rotate.
+
+Exposure is reported as inputs, never as a verdict without its evidence: CVSS
+and severity come from the artifact, KEV/EPSS from the enrichment tables when a
+feed has been imported, reachability from whether the affected project has
+assets attached. When something is unknown the API says `known: false` with the
+reason, because a blank reads like zero.
 """
+import hashlib
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -22,11 +36,27 @@ OPEN_STATUSES = {"open", "acknowledged"}
 CLOSED_STATUSES = {"resolved", "false_positive", "accepted_risk", "suppressed"}
 PRIORITY_ORDER = ["P0", "P1", "P2", "P3", "P4", None]
 
+VECTOR_LABELS = {
+    "dependency-cve": "Dependency CVE",
+    "credential": "Exposed credential",
+    "sast": "Code weakness",
+    "misconfig": "Insecure configuration",
+}
+
+# A secret is closed by rotating it, not by committing: this drives what the
+# console tells the operator to do.
+REMEDIATION = {
+    "dependency-cve": "Upgrade the package",
+    "credential": "Rotate the credential",
+    "sast": "Change the code",
+    "misconfig": "Change the configuration",
+}
+
 
 def _worst_severity(values) -> str:
     best = "UNKNOWN"
     for value in values:
-        if severity_vocab.rank(value) < severity_vocab.rank(best):
+        if value and severity_vocab.rank(value) < severity_vocab.rank(best):
             best = severity_vocab.canonical(value)
     return best
 
@@ -48,7 +78,23 @@ def _asset_ids_for_project(session: Session, org_id: str, project_id: str) -> se
     return direct | linked
 
 
-def _enrichment(session: Session, cve_id: str) -> dict:
+def _detail_of(finding: models.Finding) -> dict:
+    """The per-finding evidence blob written by the ingest, when it is JSON."""
+    if not finding.detail or not finding.detail.strip().startswith("{"):
+        return {}
+    try:
+        parsed = json.loads(finding.detail)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _enrichment(session: Session, cve_id: str | None) -> dict:
+    if not cve_id:
+        return {"kev": {"known": False, "listed": False, "reason": "no advisory id"},
+                "epss": {"known": False, "score": None, "reason": "no advisory id"},
+                "exploit": {"known": False, "available": None,
+                            "reason": "not a CVE: no exploit feed applies"}}
     kev = session.get(models.KevEntry, cve_id)
     epss = session.get(models.EpssScore, cve_id)
     return {
@@ -62,170 +108,340 @@ def _enrichment(session: Session, cve_id: str) -> dict:
                  "percentile": epss.percentile if epss else None,
                  "source": "first.org/epss" if epss else None,
                  "fetched_at": epss.fetched_at.isoformat() if epss else None},
-        # No exploit feed is wired in v0; saying so is the honest answer.
-        "exploit": {"known": False, "available": None,
-                    "reason": "no exploit feed connected"},
+        "exploit": {"known": kev is not None,
+                    "available": True if kev is not None else None,
+                    "reason": ("listed in CISA KEV" if kev is not None
+                               else "no exploit feed connected")},
     }
 
 
-def _group_rows(session: Session, org: models.Organization,
-                include_suppressed: bool) -> list[dict]:
-    query = (session.query(models.Finding)
-             .filter(models.Finding.org_id == org.id,
-                     models.Finding.vulnerability_id.is_not(None)))
+def _signature_of(session: Session, finding: models.Finding) -> tuple[str, str | None, dict]:
+    """(signature, cve_id, advisory) — what makes two findings the same problem."""
+    if finding.vulnerability_id:
+        advisory = session.get(models.Vulnerability, finding.vulnerability_id)
+        if advisory is not None:
+            cve_id = advisory.cve_id or advisory.source_id
+            return cve_id, cve_id, {"title": advisory.title,
+                                    "cvss_vector": advisory.cvss_vector,
+                                    "url": advisory.url}
+    return (finding.rule_id or finding.title or "unnamed"), None, {}
+
+
+def _risk_of(severity: str, enrichment: dict, reachable: bool) -> dict:
+    """One verdict with its reasons, never a number without an explanation.
+
+    Deliberately simple and auditable: known-exploited beats everything, then
+    severity, then whether anything outside can actually reach it.
+    """
+    reasons: list[str] = []
+    if enrichment["kev"]["listed"]:
+        reasons.append("known exploited (KEV)")
+    if severity in {"CRITICAL", "HIGH"}:
+        reasons.append(f"severity {severity}")
+    if reachable:
+        reasons.append("reachable from an inventoried asset")
+    else:
+        reasons.append("no asset is attached to the affected project")
+    if enrichment["kev"]["listed"] or severity == "CRITICAL":
+        label = "critical"
+    elif severity == "HIGH" and reachable:
+        label = "high"
+    elif severity in {"HIGH", "MEDIUM"}:
+        label = "medium"
+    else:
+        label = "low"
+    return {"label": label, "reasons": reasons}
+
+
+def _groups(session: Session, org: models.Organization,
+            include_suppressed: bool) -> list[dict]:
+    query = session.query(models.Finding).filter(models.Finding.org_id == org.id)
     if not include_suppressed:
         query = query.filter(models.Finding.status != "suppressed")
     findings = query.all()
-    by_cve: dict[str, dict] = {}
+
+    assets_by_project: dict[str, set[str]] = {}
+    projects_cache: dict[str, models.Project] = {}
+    components_cache: dict[str, models.Component] = {}
+    buckets: dict[str, dict] = {}
+
     for finding in findings:
-        vulnerability = session.get(models.Vulnerability, finding.vulnerability_id)
-        if vulnerability is None:
-            continue
-        cve_id = vulnerability.cve_id or vulnerability.source_id
-        group = by_cve.setdefault(cve_id, {"cve_id": cve_id,
-                                           "source_ids": set(),
-                                           "titles": set(),
-                                           "findings": []})
-        group["source_ids"].add(vulnerability.source_id)
-        if vulnerability.title:
-            group["titles"].add(vulnerability.title)
-        group["findings"].append(finding)
+        signature, cve_id, advisory = _signature_of(session, finding)
+        vector = finding.vector or ("dependency-cve" if cve_id else "sast")
+        component = None
+        if finding.component_id:
+            component = components_cache.get(finding.component_id)
+            if component is None:
+                component = session.get(models.Component, finding.component_id)
+                if component is not None:
+                    components_cache[component.id] = component
+        # A CVE against two different packages is two problems, not one.
+        component_key = ""
+        if cve_id and component is not None:
+            component_key = component.name or component.purl or component.identity_key
+        key = f"{vector}|{signature}|{component_key}"
+        bucket = buckets.get(key)
+        if bucket is None:
+            bucket = buckets[key] = {
+                "key": key, "vector": vector, "signature": signature,
+                "cve_id": cve_id, "advisory": advisory, "findings": [],
+                "components": {}, "projects": {}, "titles": set(),
+            }
+        if finding.title:
+            bucket["titles"].add(finding.title)
+        bucket["findings"].append(finding)
+        if component is not None:
+            bucket["components"][component.id] = {
+                "id": component.id, "name": component.name,
+                "version": component.version, "purl": component.purl,
+                "license": component.license,
+                "manifest_path": component.manifest_path}
+        if finding.project_id not in assets_by_project:
+            assets_by_project[finding.project_id] = _asset_ids_for_project(
+                session, org.id, finding.project_id)
+        project = projects_cache.get(finding.project_id)
+        if project is None:
+            project = session.get(models.Project, finding.project_id)
+            if project is not None:
+                projects_cache[project.id] = project
+        if project is not None:
+            bucket["projects"][project.id] = {
+                "id": project.id, "slug": project.slug, "name": project.name,
+                "assets": len(assets_by_project[finding.project_id])}
 
     rows = []
-    for cve_id, group in by_cve.items():
-        findings = group["findings"]
+    for bucket in buckets.values():
+        findings = bucket["findings"]
+        vector = bucket["vector"]
         asset_ids: set[str] = set()
-        projects: list[dict] = []
         for finding in findings:
-            asset_ids |= _asset_ids_for_project(session, org.id, finding.project_id)
-            project = session.get(models.Project, finding.project_id)
-            if project is not None and project.slug not in {p["slug"] for p in projects}:
-                projects.append({"slug": project.slug, "name": project.name})
-        assets = [session.get(models.Asset, asset_id) for asset_id in asset_ids]
+            asset_ids |= assets_by_project.get(finding.project_id, set())
+        assets = [session.get(models.Asset, asset_id) for asset_id in sorted(asset_ids)]
         assets = [asset for asset in assets if asset is not None]
-        details = [finding for finding in findings]
+
+        details = [_detail_of(finding) for finding in findings]
+        cvss_scores = [d.get("cvss_score") for d in details
+                       if isinstance(d.get("cvss_score"), (int, float))]
+        fixed = sorted({d["fixed_version"] for d in details
+                        if isinstance(d.get("fixed_version"), str)})
+        severity = _worst_severity([finding.severity for finding in findings])
+        enrichment = _enrichment(session, bucket["cve_id"])
+        reachable = bool(assets)
+        first_seen = min((f.first_seen_at for f in findings if f.first_seen_at), default=None)
+        last_seen = max((f.last_seen_at for f in findings if f.last_seen_at), default=None)
+
+        locations = []
+        for finding in sorted(findings, key=lambda f: (severity_vocab.rank(f.severity),
+                                                       f.path or "")):
+            project = projects_cache.get(finding.project_id)
+            component = (components_cache.get(finding.component_id)
+                         if finding.component_id else None)
+            locations.append({
+                "finding_id": finding.id,
+                "project": project.slug if project else None,
+                "path": finding.path, "line": finding.line,
+                "component": component.name if component else None,
+                "component_version": component.version if component else None,
+                "tool": finding.tool, "status": finding.status,
+                "severity": finding.severity, "assignee": finding.assignee,
+                "first_seen_at": (finding.first_seen_at.isoformat()
+                                  if finding.first_seen_at else None),
+                "last_seen_at": (finding.last_seen_at.isoformat()
+                                 if finding.last_seen_at else None),
+            })
+
         rows.append({
-            "cve_id": cve_id,
-            "source_ids": sorted(group["source_ids"]),
-            "title": next(iter(group["titles"]), None),
-            "severity": _worst_severity([row.severity for row in details]),
-            "priority": _worst_priority([row.priority for row in details]),
+            "id": hashlib.sha1(bucket["key"].encode("utf-8")).hexdigest()[:16],
+            "key": bucket["key"],
+            "vector": vector,
+            "vector_label": VECTOR_LABELS.get(vector, vector),
+            "kind": findings[0].kind,
+            "signature": bucket["signature"],
+            "cve_id": bucket["cve_id"],
+            "title": (bucket["advisory"].get("title")
+                      or (sorted(bucket["titles"])[0] if bucket["titles"]
+                          else bucket["signature"])),
+            "severity": severity,
+            "priority": _worst_priority([finding.priority for finding in findings]),
+            "cvss": {"known": bool(cvss_scores),
+                     "score": max(cvss_scores) if cvss_scores else None,
+                     "vector": bucket["advisory"].get("cvss_vector")},
+            "fix": {"available": bool(fixed), "versions": fixed,
+                    "reason": None if fixed else "no fixed version stated by the scanner"},
+            "remediation": REMEDIATION.get(vector),
+            "enrichment": enrichment,
+            "exposure": _risk_of(severity, enrichment, reachable),
+            "reachable": reachable,
             "findings": len(findings),
-            "open_findings": sum(1 for row in findings if row.status in OPEN_STATUSES),
-            "statuses": sorted({row.status for row in findings}),
-            "projects": projects,
-            "assets": {
-                "count": len(assets),
-                "sample": [{"id": asset.id, "type": asset.type,
-                            "value": asset.value} for asset in assets[:5]],
-                "coverage": ("complete" if assets else
-                             "no asset is linked to the affected projects"),
-            },
-            "affected_versions": [],
-            "fixed_versions": [],
-            "versions_known": False,
-            "versions_reason": ("v0 stores no advisory version ranges; "
-                                "affected/fixed versions are unknown, not empty"),
-            "enrichment": _enrichment(session, cve_id),
+            "open_findings": sum(1 for f in findings if f.status in OPEN_STATUSES),
+            "statuses": sorted({f.status for f in findings}),
+            "components": sorted(bucket["components"].values(),
+                                 key=lambda row: (row["name"] or "", row["version"] or "")),
+            "projects": sorted(bucket["projects"].values(), key=lambda row: row["slug"]),
+            "assets": {"count": len(assets),
+                       "sample": [{"id": asset.id, "type": asset.type,
+                                   "value": asset.value} for asset in assets[:8]],
+                       "coverage": ("complete" if assets else
+                                    "no asset is attached to the affected projects")},
+            "locations": locations,
+            "first_seen_at": first_seen.isoformat() if first_seen else None,
+            "last_seen_at": last_seen.isoformat() if last_seen else None,
+            "assignee": next((f.assignee for f in findings if f.assignee), None),
+            "url": bucket["advisory"].get("url"),
         })
+
     rows.sort(key=lambda row: (severity_vocab.rank(row["severity"]),
-                               -row["findings"], row["cve_id"]))
+                               -int(row["enrichment"]["kev"]["listed"]),
+                               -row["findings"], row["signature"]))
     return rows
+
+
+def _match(rows: list[dict], ref: str) -> dict | None:
+    lowered = ref.lower()
+    return next((item for item in rows
+                 if item["id"] == ref
+                 or (item["cve_id"] or "").lower() == lowered
+                 or item["signature"].lower() == lowered), None)
 
 
 @router.get("/vulnerabilities")
 def list_vulnerabilities(project: str | None = Query(default=None),
+                         vector: str | None = Query(default=None),
                          severity: str | None = Query(default=None),
+                         status_filter: str | None = Query(default=None, alias="status"),
                          kev_only: bool = Query(default=False),
                          q: str | None = Query(default=None),
                          include_suppressed: bool = Query(default=False),
-                         limit: int = Query(default=100, ge=1, le=500),
+                         limit: int = Query(default=200, ge=1, le=1000),
                          offset: int = Query(default=0, ge=0),
                          org: models.Organization = Depends(auth.require_org),
                          session: Session = Depends(get_session)):
-    """CVEs grouped over the visible findings of this organization."""
-    rows = _group_rows(session, org, include_suppressed)
+    """Every problem once, with the occurrences behind it."""
+    rows = _groups(session, org, include_suppressed)
     if project:
         project_row = projects_ref.by_ref(session, org.id, project)
         if project_row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
         rows = [row for row in rows
-                if project_row.slug in {p["slug"] for p in row["projects"]}]
+                if project_row.id in {p["id"] for p in row["projects"]}]
+    if vector:
+        rows = [row for row in rows if row["vector"] == vector]
     if severity:
         wanted = severity_vocab.canonical(severity)
         rows = [row for row in rows if row["severity"] == wanted]
+    if status_filter:
+        rows = [row for row in rows if status_filter in row["statuses"]]
     if kev_only:
         rows = [row for row in rows if row["enrichment"]["kev"]["listed"]]
     if q:
-        needle = q.strip().upper()
-        rows = [row for row in rows if needle in row["cve_id"].upper()]
+        needle = q.strip().lower()
+        rows = [row for row in rows
+                if needle in (row["signature"] or "").lower()
+                or needle in (row["title"] or "").lower()
+                or needle in (row["vector_label"] or "").lower()]
+
+    by_vector: dict[str, int] = {}
+    by_severity: dict[str, int] = {}
+    by_risk: dict[str, int] = {}
+    for row in rows:
+        by_vector[row["vector"]] = by_vector.get(row["vector"], 0) + 1
+        by_severity[row["severity"]] = by_severity.get(row["severity"], 0) + 1
+        by_risk[row["exposure"]["label"]] = by_risk.get(row["exposure"]["label"], 0) + 1
     total = len(rows)
-    page = rows[offset:offset + limit]
-    return {"data": page, "total": total, "limit": limit, "offset": offset,
-            "coverage": {
-                "advisory_catalog": "global catalog is not exposed here",
-                "findings_with_cve": sum(row["findings"] for row in rows),
-                "versions_known": False,
-                "exploit_feed": "not connected",
-            }}
+    return {
+        "data": rows[offset:offset + limit],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "counters": {
+            "vulnerabilities": total,
+            "findings": sum(row["findings"] for row in rows),
+            "by_vector": by_vector,
+            "by_severity": by_severity,
+            "by_risk": by_risk,
+            "fixable": sum(1 for row in rows if row["fix"]["available"]),
+            "kev": sum(1 for row in rows if row["enrichment"]["kev"]["listed"]),
+            "reachable": sum(1 for row in rows if row["reachable"]),
+        },
+        "coverage": {
+            "vectors": list(VECTOR_LABELS.keys()),
+            "exploit_feed": ("connected" if any(row["enrichment"]["kev"]["known"]
+                                                for row in rows)
+                             else "not connected (KEV/EPSS empty)"),
+            "grouping": "one row per (vector, signature, component)",
+        },
+    }
 
 
 @router.get("/vulnerabilities/meta/summary")
+@router.get("/vulnerabilities/summary")
 def summary(org: models.Organization = Depends(auth.require_org),
             session: Session = Depends(get_session)):
-    """Counters for the dashboard card: distinct CVEs and the KEV subset."""
-    rows = _group_rows(session, org, include_suppressed=False)
-    return {"data": {"cves": len(rows),
-                     "kev": sum(1 for row in rows if row["enrichment"]["kev"]["listed"]),
-                     "findings": sum(row["findings"] for row in rows),
-                     "unknown_enrichment": sum(
-                         1 for row in rows
-                         if not row["enrichment"]["kev"]["known"]
-                         and not row["enrichment"]["epss"]["known"])}}
+    """Counters for the dashboard and the projects list."""
+    rows = _groups(session, org, include_suppressed=False)
+    return {"data": {
+        "vulnerabilities": len(rows),
+        "findings": sum(row["findings"] for row in rows),
+        "kev": sum(1 for row in rows if row["enrichment"]["kev"]["listed"]),
+        "fixable": sum(1 for row in rows if row["fix"]["available"]),
+        "by_vector": {vector: sum(1 for row in rows if row["vector"] == vector)
+                      for vector in VECTOR_LABELS},
+        "by_severity": {level: sum(1 for row in rows if row["severity"] == level)
+                        for level in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")},
+        "by_risk": {label: sum(1 for row in rows if row["exposure"]["label"] == label)
+                    for label in ("critical", "high", "medium", "low")},
+    }}
 
 
-@router.get("/vulnerabilities/{cve_id}")
-def get_vulnerability(cve_id: str,
+@router.get("/vulnerabilities/{ref}")
+def get_vulnerability(ref: str,
                       include_suppressed: bool = Query(default=False),
                       org: models.Organization = Depends(auth.require_org),
                       session: Session = Depends(get_session)):
-    """The concrete findings behind one CVE; 404 when it affects nothing here."""
-    rows = _group_rows(session, org, include_suppressed)
-    row = next((item for item in rows if item["cve_id"].upper() == cve_id.upper()), None)
+    """One problem with every occurrence, or 404 when it affects nothing here."""
+    row = _match(_groups(session, org, include_suppressed), ref)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
-                            "no finding in this organization references that advisory")
-    query = (session.query(models.Finding)
-             .filter(models.Finding.org_id == org.id,
-                     models.Finding.vulnerability_id.is_not(None)))
-    if not include_suppressed:
-        query = query.filter(models.Finding.status != "suppressed")
-    findings = []
-    for finding in query.all():
-        vulnerability = session.get(models.Vulnerability, finding.vulnerability_id)
-        if vulnerability is None:
+                            "no finding in this organization matches that vulnerability")
+    return {"data": row}
+
+
+class StatusIn(BaseModel):
+    status: str = Field(min_length=1, max_length=32)
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+@router.patch("/vulnerabilities/{ref}/status")
+def set_status(ref: str, payload: StatusIn,
+               org: models.Organization = Depends(auth.require_org),
+               session: Session = Depends(get_session)):
+    """Move every finding of this problem at once.
+
+    A vulnerability has one lifecycle even when it has twelve occurrences; making
+    the operator click twelve times is how a queue stops being worked.
+    """
+    allowed = {"open", "acknowledged", "resolved", "false_positive", "accepted_risk"}
+    if payload.status not in allowed:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"status must be one of {sorted(allowed)}")
+    row = _match(_groups(session, org, include_suppressed=True), ref)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "vulnerability not found")
+    now = models.utcnow()
+    touched = 0
+    for location in row["locations"]:
+        finding = session.get(models.Finding, location["finding_id"])
+        if finding is None or finding.status == "suppressed":
             continue
-        if (vulnerability.cve_id or vulnerability.source_id).upper() != cve_id.upper():
-            continue
-        project = session.get(models.Project, finding.project_id)
-        component = (session.get(models.Component, finding.component_id)
-                     if finding.component_id else None)
-        version = (session.get(models.ProjectVersion, finding.last_seen_version_id)
-                   if finding.last_seen_version_id else None)
-        findings.append({
-            "id": finding.id, "status": finding.status,
-            "severity": finding.severity, "priority": finding.priority,
-            "assignee": finding.assignee,
-            "project": project.slug if project else None,
-            "version": version.version if version else None,
-            "component": (component.purl or component.identity_key) if component else None,
-            "title": finding.title,
-            "first_seen_at": finding.first_seen_at.isoformat(),
-            "last_seen_at": finding.last_seen_at.isoformat(),
-        })
-    findings.sort(key=lambda item: (severity_vocab.rank(item["severity"]),
-                                    item["project"] or "", item["id"]))
-    return {"data": {**row, "findings_detail": findings}}
+        finding.status = payload.status
+        finding.status_reason = payload.reason
+        finding.status_changed_at = now
+        finding.updated_at = now
+        touched += 1
+    _audit_log(session, org.id, "operator", f"vulnerability.{payload.status}",
+               "vulnerability", row["id"], payload.reason)
+    session.commit()
+    return {"data": {"id": row["id"], "status": payload.status, "findings": touched}}
 
 
 class BulkPreviewIn(BaseModel):
@@ -233,15 +449,15 @@ class BulkPreviewIn(BaseModel):
     status: str
 
 
-@router.post("/vulnerabilities/{cve_id}/bulk-preview")
-def bulk_preview(cve_id: str, payload: BulkPreviewIn = None,
+@router.post("/vulnerabilities/{ref}/bulk-preview")
+def bulk_preview(ref: str, payload: BulkPreviewIn = None,
                  org: models.Organization = Depends(auth.require_org),
                  session: Session = Depends(get_session)):
     """Preview a grouped status change without writing anything.
 
-    The preview and the future apply path share this selection logic, so the
-    numbers a reader approves are the numbers that would change. Suppressed
-    findings are skipped: their disposition belongs to the suppression rule.
+    The preview and the apply path share the selection logic, so the numbers a
+    reader approves are the numbers that would change. Suppressed findings are
+    skipped: their disposition belongs to the suppression rule.
     """
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
@@ -253,13 +469,8 @@ def bulk_preview(cve_id: str, payload: BulkPreviewIn = None,
     for finding_id in payload.finding_ids:
         finding = session.get(models.Finding, finding_id)
         if finding is None or finding.org_id != org.id:
-            skipped.append({"finding_id": finding_id, "reason": "not found in this organization"})
-            continue
-        vulnerability = (session.get(models.Vulnerability, finding.vulnerability_id)
-                         if finding.vulnerability_id else None)
-        if vulnerability is None or (vulnerability.cve_id or "").upper() != cve_id.upper():
             skipped.append({"finding_id": finding_id,
-                            "reason": "finding does not belong to this CVE"})
+                            "reason": "not found in this organization"})
             continue
         if finding.status == "suppressed":
             skipped.append({"finding_id": finding_id,
@@ -270,14 +481,14 @@ def bulk_preview(cve_id: str, payload: BulkPreviewIn = None,
             continue
         will_change.append({"id": finding.id, "from": finding.status,
                             "to": payload.status, "project": finding.project_id})
-    return {"data": {"cve_id": cve_id, "target_status": payload.status,
+    return {"data": {"ref": ref, "target_status": payload.status,
                      "would_change": len(will_change), "unchanged": len(already),
                      "skipped": skipped, "findings": will_change,
                      "requires": "write role (viewer cannot change status)"}}
 
 
-@router.post("/vulnerabilities/{cve_id}/bulk-status")
-def bulk_status(cve_id: str, payload: BulkPreviewIn = None,
+@router.post("/vulnerabilities/{ref}/bulk-status")
+def bulk_status(ref: str, payload: BulkPreviewIn = None,
                 actor: str = Query(default="api"),
                 org: models.Organization = Depends(auth.require_org),
                 session: Session = Depends(get_session)):
@@ -294,23 +505,16 @@ def bulk_status(cve_id: str, payload: BulkPreviewIn = None,
         if finding is None or finding.org_id != org.id:
             skipped.append(finding_id)
             continue
-        vulnerability = (session.get(models.Vulnerability, finding.vulnerability_id)
-                         if finding.vulnerability_id else None)
-        if vulnerability is None or (vulnerability.cve_id or "").upper() != cve_id.upper():
+        if finding.status in {"suppressed", payload.status}:
             skipped.append(finding_id)
-            continue
-        if finding.status == "suppressed":
-            skipped.append(finding_id)
-            continue
-        if finding.status == payload.status:
             continue
         finding.status = payload.status
         finding.status_changed_at = models.utcnow()
         finding.updated_at = finding.status_changed_at
         _audit_log(session, org.id, actor, "finding.status_changed", "finding",
-                   finding.id, f"{cve_id}: {finding.status}")
+                   finding.id, f"{ref}: {payload.status}")
         changed.append(finding.id)
     session.commit()
-    return {"data": {"cve_id": cve_id, "status": payload.status,
+    return {"data": {"ref": ref, "status": payload.status,
                      "changed": len(changed), "finding_ids": changed,
                      "skipped": skipped}}

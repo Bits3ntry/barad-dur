@@ -130,6 +130,12 @@ class SbomImport(Base, TimestampMixin):
     components_updated: Mapped[int] = mapped_column(Integer, default=0)
     components_skipped: Mapped[int] = mapped_column(Integer, default=0)
     links_created: Mapped[int] = mapped_column(Integer, default=0)
+    # An SBOM is also an advisory list. Counting only components is what let a
+    # 67-CVE document read as "imported successfully, nothing found".
+    vulnerabilities_received: Mapped[int] = mapped_column(Integer, default=0)
+    vulnerabilities_created: Mapped[int] = mapped_column(Integer, default=0)
+    vulnerabilities_refreshed: Mapped[int] = mapped_column(Integer, default=0)
+    vulnerabilities_unresolved: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Component(Base, TimestampMixin):
@@ -197,6 +203,11 @@ class Finding(Base, TimestampMixin):
     org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
     project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"))
     kind: Mapped[str] = mapped_column(String(32), index=True)
+    # The class says WHAT it is; the vector says HOW it must be closed. A CVE is
+    # closed by upgrading the package, a credential by rotating it, a code defect
+    # by changing the code — and putting them in one bucket without this makes
+    # remediation right for a third of the rows.
+    vector: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     fingerprint: Mapped[str] = mapped_column(String(128), index=True)
     source: Mapped[str] = mapped_column(String(32))
     title: Mapped[str | None] = mapped_column(String(1024), nullable=True)

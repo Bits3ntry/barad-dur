@@ -180,8 +180,13 @@ def test_dashboard_counters_equal_their_destinations(seeded):
     assert block["findings"]["by_severity"] == {**block["findings"]["by_severity"]}
     assert sum(block["findings"]["by_severity"].values()) == block["findings"]["open"]
 
-    cves = test_client.get("/api/v1/vulnerabilities", headers=headers).json()["total"]
-    assert block["vulnerabilities"]["cves"] == cves
+    problems = test_client.get("/api/v1/vulnerabilities", headers=headers).json()
+    # The list is every problem (code, credentials, configuration, dependencies);
+    # `cves` is the dependency subset, and it must match the filtered list.
+    assert block["vulnerabilities"]["problems"] == problems["total"]
+    cves_only = test_client.get("/api/v1/vulnerabilities?vector=dependency-cve",
+                                headers=headers).json()["total"]
+    assert block["vulnerabilities"]["cves"] == cves_only
 
     exposures = test_client.get("/api/v1/exposures?state=open",
                                 headers=headers).json()["total"]

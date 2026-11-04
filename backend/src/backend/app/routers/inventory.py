@@ -333,6 +333,32 @@ def project_runtime_graph(project_ref: str,
         else:
             edge(project_node["id"], node["id"], "has_finding", evidence="project")
 
+    # Risk is not a new relationship: it is an attribute of the node it was
+    # observed on. A version carries the findings last seen in it, and the
+    # project carries all of them — that is what lets the graph colour a node
+    # without inventing an edge.
+    by_version: dict[str, list] = {}
+    for row in findings:
+        if row.last_seen_version_id:
+            by_version.setdefault(row.last_seen_version_id, []).append(row)
+
+    def risk_of(rows: list) -> dict:
+        worst = "UNKNOWN"
+        by_vector: dict[str, int] = {}
+        for row in rows:
+            label = severity_mod.canonical(row.severity)
+            if severity_mod.rank(label) < severity_mod.rank(worst):
+                worst = label
+            by_vector[row.vector or "sast"] = by_vector.get(row.vector or "sast", 0) + 1
+        return {"findings": len(rows), "worst": worst, "by_vector": by_vector}
+
+    project_risk = risk_of(findings)
+    for node in nodes:
+        if node["type"] == "project":
+            node["risk"] = project_risk
+        elif node["type"] == "version":
+            node["risk"] = risk_of(by_version.get(node["id"].split(":", 1)[1], []))
+
     active_deployments = sum(1 for row in deployments if row.status == "active")
     coverage = []
     if not components:
@@ -349,7 +375,8 @@ def project_runtime_graph(project_ref: str,
                     "versions": len(versions), "artifacts": len(artifacts),
                     "deployments": len(deployments), "active_deployments": active_deployments,
                     "assets": len(asset_ids), "registered_endpoints": len(endpoints),
-                    "open_findings": len(findings), "coverage": coverage},
+                    "open_findings": len(findings),
+                    "risk": project_risk, "coverage": coverage},
         "nodes": nodes, "edges": edges,
     }}
 

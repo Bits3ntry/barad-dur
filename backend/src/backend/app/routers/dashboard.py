@@ -380,7 +380,7 @@ def v0_overview(org: models.Organization = Depends(auth.require_org),
     """The v0 dashboard block: every number comes from a query, and each one
     declares where it links. Blocks that depend on coverage say so."""
     from backend.app import severity as severity_vocab
-    from backend.app.routers.vulnerabilities import _group_rows
+    from backend.app.routers.vulnerabilities import _groups
 
     now = models.utcnow()
     findings = (session.query(models.Finding)
@@ -399,7 +399,8 @@ def v0_overview(org: models.Organization = Depends(auth.require_org),
               .filter_by(org_id=org.id)
               .filter(models.Asset.archived_at.is_(None)).count())
     projects = (session.query(models.Project).filter_by(org_id=org.id).count())
-    cves = _group_rows(session, org, include_suppressed=False)
+    problems = _groups(session, org, include_suppressed=False)
+    cves = [row for row in problems if row["cve_id"]]
     cycles_active = (session.query(models.Cycle)
                      .filter_by(org_id=org.id, state="active").count())
     cycles_review = (session.query(models.Cycle)
@@ -435,9 +436,15 @@ def v0_overview(org: models.Organization = Depends(auth.require_org),
                      "by_priority": by_priority, "link": "findings",
                      "filters": {"status": ["open", "acknowledged"],
                                  "include_suppressed": False}},
-        "vulnerabilities": {"cves": len(cves),
+        "vulnerabilities": {"problems": len(problems),
+                            "cves": len(cves),
                             "kev": sum(1 for row in cves
                                        if row["enrichment"]["kev"]["listed"]),
+                            "findings_behind": sum(row["findings"] for row in problems),
+                            "by_vector": {vector: sum(1 for row in problems
+                                                      if row["vector"] == vector)
+                                          for vector in ("dependency-cve", "credential",
+                                                         "sast", "misconfig")},
                             "link": "vulnerabilities",
                             "filters": {"include_suppressed": False}},
         "recent_changes": {"last_7d": recent["total"],

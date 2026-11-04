@@ -609,7 +609,11 @@ def _ingest_evidence(session: Session, job: models.ScanJob,
             receipt.scan_job_id = job.id
         return {"kind": "sbom", "import_id": result["import_id"],
                 "status": result["status"],
-                "components": receipt.components_created if receipt else None}
+                "components": receipt.components_created if receipt else None,
+                # The advisories the artifact carried are findings too; reporting
+                # only components is what made a 67-CVE run look like an empty one.
+                "vulnerabilities_created": receipt.vulnerabilities_created if receipt else None,
+                "vulnerabilities_received": receipt.vulnerabilities_received if receipt else None}
 
     if payload.kind in {"sast", "misconfig", "secrets"} \
             and payload.format == "sarif-2.1.0":
@@ -658,7 +662,10 @@ def _ingest_evidence(session: Session, job: models.ScanJob,
         for run in runs:
             result = sarif_router.ingest_run(
                 session, job.org_id, project, pv, run, source="scan", commit=False,
-                analysis_run_id=analysis_run.id)
+                analysis_run_id=analysis_run.id,
+                # The task decides the class: `secrets` produces vulnerabilities,
+                # not code weaknesses, whatever binary happened to find them.
+                task=payload.kind)
             if result["tool"]:
                 tools.add(str(result["tool"]))
             for key in counters:

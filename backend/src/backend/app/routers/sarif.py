@@ -55,10 +55,25 @@ class SarifIngestIn(BaseModel):
     actor: str | None = None
 
 
+# A task decides the class of what it produces. It is not inferred from the
+# tool: Trivy serves three different tasks and produces three different things.
+TASK_CLASS = {
+    "sast": ("code-weakness", "sast"),
+    "misconfig": ("code-weakness", "misconfig"),
+    "secrets": ("vulnerability", "credential"),
+    "sbom": ("vulnerability", "dependency-cve"),
+}
+
+# Policy, not tool output: gitleaks rates a live key MEDIUM because it cannot
+# know what the key opens. An exposed credential is an incident either way.
+CREDENTIAL_SEVERITY = "CRITICAL"
+
+
 def ingest_run(session, org_id: str, proj, pv, run: dict, *,
                source: str = "api", tool_hint: str | None = None,
                actor: str | None = None, commit: bool = True,
-               analysis_run_id: str | None = None) -> dict:
+               analysis_run_id: str | None = None,
+               task: str | None = None) -> dict:
     """Ingest ONE SARIF run into the findings pipeline (idempotent by recipe).
 
     Extracted from the route so the scan-flow evidence sink uses the same code:
@@ -73,6 +88,7 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
         if isinstance(rule, dict) and rule.get("id"):
             rules_index[rule["id"]] = rule
 
+    kind, vector = TASK_CLASS.get((task or "").lower(), ("code-weakness", "sast"))
     counters = {"received": 0, "created": 0, "existing": 0, "skipped": 0}
     now = models.utcnow()
     for result in run.get("results") or []:
@@ -85,17 +101,18 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
             counters["skipped"] += 1
             continue
         counters["received"] += 1
-        severity = _severity_of(result, rules_index)
+        severity = (_severity_of(result, rules_index)
+                    if vector != "credential" else CREDENTIAL_SEVERITY)
         message = ((result.get("message") or {}).get("text")
                    or (rules_index.get(rule_id, {}).get("shortDescription") or {}).get("text")
                    or rule_id)
         fingerprint = incidents.recipe_fingerprint(
-            "code-weakness", org_id, proj.id, rule_id, path)
+            kind, org_id, proj.id, rule_id, path)
         finding = (session.query(models.Finding)
                    .filter_by(org_id=org_id, fingerprint=fingerprint).one_or_none())
         if finding is None:
             finding = models.Finding(
-                org_id=org_id, project_id=proj.id, kind="code-weakness",
+                org_id=org_id, project_id=proj.id, kind=kind, vector=vector,
                 fingerprint=fingerprint, source=source,
                 title=message[:512], severity=severity, url=None,
                 detail=f"SARIF {tool_name} {rule_id}", tool=tool_name,
@@ -114,16 +131,21 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
             if analysis_run_id:
                 finding.last_evaluated_run_id = analysis_run_id
             finding.severity = severity
+            # A finding ingested before vectors existed is reclassified on the
+            # next sighting instead of staying wrong forever.
+            finding.kind = kind
+            finding.vector = vector
             finding.line = line
             finding.updated_at = now
             counters["existing"] += 1
         incidents.record_occurrence(
             session, org_id, finding, pv.id, tool_name, source,
-            kind="code-weakness", rule_id=rule_id, path=path, line=line,
+            kind=kind, rule_id=rule_id, path=path, line=line,
             detail=(result.get("message") or {}).get("text"), now=now)
     if commit:
         session.commit()
-    return {"status": "ingested", "tool": tool_name, "counts": counters}
+    return {"status": "ingested", "tool": tool_name, "counts": counters,
+            "kind": kind, "vector": vector}
 
 
 @router.post("/sarif")

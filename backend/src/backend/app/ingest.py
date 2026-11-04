@@ -8,8 +8,9 @@ manifest provenance is picked up from any property whose name contains
 """
 import hashlib
 import json
+import re
 
-from backend.app import models
+from backend.app import incidents, lifecycle, models, severity as severity_mod, vulns
 
 
 class SbomDocumentError(ValueError):
@@ -152,7 +153,120 @@ def parse(document: dict) -> dict:
         "project_name": root["name"],
         "project_version": version if isinstance(version, str) and version else None,
         "components": rows,
+        "vulnerabilities": parse_vulnerabilities(document, rows),
     }
+
+
+# ---------------------------------------------------------------- vulnerabilities
+# A CycloneDX document produced by a vulnerability scanner already carries the
+# advisories it resolved. Parsing them here is why the platform does not need to
+# query a CVE feed again: the artifact is the evidence, and re-resolving it in
+# the platform would be a second opinion nobody asked for.
+
+_VERSION_TAIL = re.compile(r"(\d+(?:\.\d+)+[A-Za-z0-9.\-]*)\s*$")
+
+
+def _rating(vulnerability: dict) -> tuple[str | None, float | None, str | None]:
+    """Worst severity, highest score, and the vector that score belongs to."""
+    labels: list[str] = []
+    scored: list[tuple[float, str]] = []
+    for rating in vulnerability.get("ratings") or []:
+        if not isinstance(rating, dict):
+            continue
+        label = rating.get("severity")
+        if isinstance(label, str) and label.strip():
+            labels.append(severity_mod.canonical(label))
+        raw_score = rating.get("score")
+        if raw_score is None or isinstance(raw_score, bool):
+            continue
+        try:
+            score = float(raw_score)
+        except (TypeError, ValueError):
+            continue
+        vector = rating.get("vector")
+        if isinstance(vector, str) and vector:
+            scored.append((score, vector))
+    severity = min(labels, key=severity_mod.rank) if labels else None
+    score = max((value for value, _ in scored), default=None)
+    vector = next((v for s, v in scored if s == score), None) if scored else None
+    return severity, score, vector
+
+
+def _fixed_version(vulnerability: dict) -> str | None:
+    """The upgrade target, when the scanner states one."""
+    for prop in vulnerability.get("properties") or []:
+        if isinstance(prop, dict) and "fixed" in str(prop.get("name", "")).lower():
+            value = prop.get("value")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    recommendation = vulnerability.get("recommendation")
+    if isinstance(recommendation, str):
+        match = _VERSION_TAIL.search(recommendation.strip())
+        if match:
+            return match.group(1)
+    return None
+
+
+def _advisory_url(vulnerability: dict) -> str | None:
+    for advisory in vulnerability.get("advisories") or []:
+        if isinstance(advisory, dict) and isinstance(advisory.get("url"), str):
+            return advisory["url"]
+    source = vulnerability.get("source")
+    if isinstance(source, dict) and isinstance(source.get("url"), str):
+        return source["url"]
+    for reference in vulnerability.get("references") or []:
+        if isinstance(reference, dict) and isinstance(reference.get("url"), str):
+            return reference["url"]
+    return None
+
+
+def parse_vulnerabilities(document: dict, components: list[dict]) -> list[dict]:
+    """Normalize `vulnerabilities[]` and resolve each one to a component identity.
+
+    A CycloneDX vulnerability points at components through `affects[].ref`, which
+    is a bom-ref. Trivy uses the purl as bom-ref, but the spec does not require
+    it, so both maps are built. An advisory that points at nothing resolvable is
+    dropped, not attached to a guess.
+    """
+    by_ref: dict[str, str] = {}
+    for row in components:
+        for key in (row.get("bom_ref"), row.get("purl")):
+            if key:
+                by_ref[key] = row["identity_key"]
+
+    out: list[dict] = []
+    for entry in document.get("vulnerabilities") or []:
+        if not isinstance(entry, dict):
+            continue
+        source_id = entry.get("id")
+        if not isinstance(source_id, str) or not source_id:
+            continue
+        severity, score, vector = _rating(entry)
+        cve_id = source_id if source_id.upper().startswith("CVE-") else next(
+            (alias for alias in (entry.get("references") or [])
+             if isinstance(alias, str) and alias.upper().startswith("CVE-")), None)
+        identities: list[str] = []
+        for affect in entry.get("affects") or []:
+            if not isinstance(affect, dict):
+                continue
+            ref = affect.get("ref")
+            identity = by_ref.get(ref) if isinstance(ref, str) else None
+            if identity and identity not in identities:
+                identities.append(identity)
+        description = entry.get("description")
+        out.append({
+            "source_id": source_id,
+            "cve_id": cve_id,
+            "title": (description or source_id)[:512],
+            "detail": description[:4000] if isinstance(description, str) else None,
+            "severity": severity,
+            "cvss_score": score,
+            "cvss_vector": vector,
+            "url": _advisory_url(entry),
+            "fixed_version": _fixed_version(entry),
+            "identities": identities,
+        })
+    return out
 
 
 def content_sha256(raw: bytes) -> str:
@@ -195,12 +309,16 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
 
     counters = {"components_received": len(parsed["components"]),
                 "components_created": 0, "components_updated": 0,
-                "components_skipped": 0, "links_created": 0}
+                "components_skipped": 0, "links_created": 0,
+                "vulnerabilities_received": len(parsed["vulnerabilities"]),
+                "vulnerabilities_created": 0, "vulnerabilities_refreshed": 0,
+                "vulnerabilities_unresolved": 0}
     # A real SBOM repeats the same component when several manifests pull it in.
     # The session runs with autoflush=False, so a query cannot see rows added
     # earlier in this loop: track them here or the unique constraints
     # (version, component) and (component, license) fail on the second sighting.
     linked: dict[str, models.VersionComponent] = {}
+    by_identity: dict[str, models.Component] = {}
     seen_licenses: set[tuple[str, str]] = set()
     for row in parsed["components"]:
         component = session.query(models.Component).filter_by(
@@ -251,6 +369,10 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
             # The same component seen both directly and transitively is direct.
             link.is_direct = True
         linked[component.id] = link
+        by_identity[row["identity_key"]] = component
+
+    _ingest_vulnerabilities(session, org_id, project, project_version, parsed["vulnerabilities"],
+                            by_identity, counters)
 
     receipt = models.SbomImport(
         project_version_id=project_version.id, content_sha256=digest, source=source,
@@ -294,6 +416,97 @@ def _project_version(session, project: models.Project, version: str,
         session.add(row)
         session.flush()
     return row
+
+
+def _ingest_vulnerabilities(session, org_id: str, project: models.Project,
+                            project_version: models.ProjectVersion, entries: list[dict],
+                            by_identity: dict[str, models.Component],
+                            counters: dict) -> None:
+    """Advisories become deduped findings, one per (component, advisory).
+
+    The identity is the same one the OSV engine uses, so an artifact-resolved
+    CVE and a feed-resolved CVE are the same finding instead of two rows with
+    different sources.
+    """
+    now = models.utcnow()
+    for entry in entries:
+        identities = [identity for identity in entry["identities"] if identity in by_identity]
+        if not identities:
+            # The advisory names a package the document does not contain.
+            # Attaching it to a guess would invent an affected asset.
+            counters["vulnerabilities_unresolved"] += 1
+            continue
+        advisory = _advisory(session, entry, now)
+        detail = json.dumps({
+            "source_id": advisory.source_id,
+            "cve_id": advisory.cve_id,
+            "cvss_score": entry["cvss_score"],
+            "cvss_vector": entry["cvss_vector"],
+            "fixed_version": entry["fixed_version"],
+            "advisory_url": entry["url"],
+        }, sort_keys=True)
+        recommendation = (f"Upgrade to {entry['fixed_version']}" if entry["fixed_version"]
+                          else "No fixed version published yet")
+        rule_id = advisory.cve_id or advisory.source_id
+        for identity in identities:
+            component = by_identity[identity]
+            fingerprint = vulns.vulnerability_fingerprint(
+                org_id, project.id, identity, advisory.source_id)
+            finding = (session.query(models.Finding)
+                       .filter_by(org_id=org_id, fingerprint=fingerprint).one_or_none())
+            if finding is None:
+                finding = models.Finding(
+                    org_id=org_id, project_id=project.id, kind="vulnerability",
+                    vector="dependency-cve", fingerprint=fingerprint, source="sbom",
+                    title=advisory.title, severity=advisory.severity, url=advisory.url,
+                    detail=detail, tool="trivy", rule_id=rule_id,
+                    component_id=component.id, vulnerability_id=advisory.id,
+                    last_seen_version_id=project_version.id,
+                    recommendation=recommendation,
+                    first_seen_at=now, last_seen_at=now, updated_at=now)
+                session.add(finding)
+                session.flush()
+                lifecycle.apply_lifecycle(session, org_id, finding)
+                counters["vulnerabilities_created"] += 1
+            else:
+                finding.last_seen_at = now
+                finding.last_seen_version_id = project_version.id
+                finding.kind = "vulnerability"
+                finding.vector = "dependency-cve"
+                finding.severity = advisory.severity
+                finding.title = advisory.title
+                finding.detail = detail
+                finding.recommendation = recommendation
+                finding.component_id = component.id
+                finding.vulnerability_id = advisory.id
+                finding.updated_at = now
+                counters["vulnerabilities_refreshed"] += 1
+            incidents.record_occurrence(
+                session, org_id, finding, project_version.id, "trivy", "sbom",
+                kind="vulnerability", rule_id=rule_id, path=None, line=None,
+                detail=advisory.title, now=now)
+
+
+def _advisory(session, entry: dict, now) -> models.Vulnerability:
+    """Upsert the global advisory catalog from the artifact's own statement."""
+    advisory = (session.query(models.Vulnerability)
+                .filter_by(source_id=entry["source_id"]).one_or_none())
+    if advisory is None:
+        advisory = models.Vulnerability(
+            source_id=entry["source_id"], source="sbom", cve_id=entry["cve_id"],
+            title=entry["title"], severity=entry["severity"],
+            cvss_vector=entry["cvss_vector"], url=entry["url"], fetched_at=now)
+        session.add(advisory)
+        session.flush()
+        return advisory
+    # The artifact is newer than the catalog row it matches.
+    advisory.cve_id = entry["cve_id"] or advisory.cve_id
+    advisory.title = entry["title"] or advisory.title
+    advisory.severity = entry["severity"] or advisory.severity
+    advisory.cvss_vector = entry["cvss_vector"] or advisory.cvss_vector
+    advisory.url = entry["url"] or advisory.url
+    advisory.fetched_at = now
+    return advisory
 
 
 def receipt_of(receipt: models.SbomImport, project, project_version) -> dict:

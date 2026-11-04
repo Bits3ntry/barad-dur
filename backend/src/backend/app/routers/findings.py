@@ -1,6 +1,7 @@
 """Finding endpoints: list, manual creation, ingest, lifecycle, comments,
 evidence, ownership."""
 import hashlib
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -319,6 +320,8 @@ def list_findings(
     priority: str | None = Query(default=None),
     assignee: str | None = Query(default=None),
     source: str | None = Query(default=None),
+    vector: str | None = Query(default=None,
+                               description="dependency-cve | credential | sast | misconfig"),
     include_suppressed: bool = Query(default=False,
                                      description="approved suppressions leave the default view"),
     status_filter: str | None = Query(default=None, alias="status"),
@@ -369,6 +372,8 @@ def list_findings(
             query = query.filter(models.Finding.last_seen_version_id == project_version.id)
     if kind:
         query = query.filter(models.Finding.kind == kind)
+    if vector:
+        query = query.filter(models.Finding.vector == vector)
     total = query.count()
     rows = (query.order_by(models.Finding.last_seen_at.desc())
             .offset(offset).limit(limit).all())
@@ -387,9 +392,19 @@ def finding_data(session, finding: models.Finding) -> dict:
         if finding.component_id else None
     vulnerability = session.get(models.Vulnerability, finding.vulnerability_id) \
         if finding.vulnerability_id else None
+    evidence: dict = {}
+    if finding.detail and finding.detail.strip().startswith("{"):
+        try:
+            parsed = json.loads(finding.detail)
+            if isinstance(parsed, dict):
+                evidence = parsed
+        except ValueError:
+            evidence = {}
     return {
             "id": finding.id,
             "kind": finding.kind,
+            # The class says what it is; the vector says how it is closed.
+            "vector": finding.vector,
             "status": finding.status,
             "status_reason": finding.status_reason,
             "severity": finding.severity,
@@ -404,6 +419,19 @@ def finding_data(session, finding: models.Finding) -> dict:
             "cve_id": vulnerability.cve_id if vulnerability else None,
             "source_url": vulnerability.url if vulnerability else None,
             "component_purl": (component.purl or component.identity_key) if component else None,
+            "component_name": component.name if component else None,
+            "component_version": component.version if component else None,
+            "recommendation": finding.recommendation,
+            "cwe": finding.cwe,
+            "impact": finding.impact,
+            "reproduction": finding.reproduction,
+            "url": finding.url or (vulnerability.url if vulnerability else None),
+            # Evidence the scanner stated about this occurrence (CVSS, fixed
+            # version, advisory). Parsed once here so no screen re-parses it.
+            "evidence": evidence,
+            "cvss_score": evidence.get("cvss_score"),
+            "cvss_vector": evidence.get("cvss_vector"),
+            "fixed_version": evidence.get("fixed_version"),
             "project_id": finding.project_id,
             "priority": finding.priority,
             "priority_reason": finding.priority_reason,
