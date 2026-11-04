@@ -593,14 +593,19 @@ def _ingest_evidence(session: Session, job: models.ScanJob,
         runs = document.get("runs") if isinstance(document, dict) else None
         if not runs:
             return {"skipped": "sarif carries no runs"}
-        tool_name = None
+        # A merged SARIF carries one run per provider (Trivy and gitleaks for
+        # `secrets`); the analysis record names all of them instead of pretending
+        # one engine produced both.
+        tools: set[str] = set()
         counters = {"received": 0, "created": 0, "existing": 0, "skipped": 0}
         for run in runs:
             result = sarif_router.ingest_run(
                 session, job.org_id, project, pv, run, source="scan", commit=False)
-            tool_name = tool_name or result["tool"]
+            if result["tool"]:
+                tools.add(str(result["tool"]))
             for key in counters:
                 counters[key] += result["counts"].get(key, 0)
+        tool_name = ",".join(sorted(tools)) if tools else None
         repository_id = None
         remote = subject.get("repository")
         if remote:
@@ -609,9 +614,13 @@ def _ingest_evidence(session: Session, job: models.ScanJob,
             repository_id = row.id if row else None
         session.add(models.AnalysisRun(
             org_id=job.org_id, project_id=project.id, project_version_id=pv.id,
-            tool=tool_name or "sarif", tool_version=(payload.tool or {}).get("version"),
+            tool=(tool_name or "sarif")[:64],
+            tool_version=(payload.tool or {}).get("version"),
             coverage=payload.coverage or "full", source="scan",
             revision=subject.get("commit"), branch=subject.get("branch"),
+            # A diff scan is only legible with its base: "new in this range" is a
+            # different claim from "present in this tree".
+            base_revision=subject.get("base_commit"),
             repository_id=repository_id, pull_request=subject.get("pull_request"),
             evaluated={"paths": (payload.evaluated or {}).get("paths") or []},
             findings_seen=counters["received"], scan_job_id=job.id,

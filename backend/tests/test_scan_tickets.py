@@ -330,8 +330,48 @@ def test_the_same_artifact_twice_is_not_two_findings(flow):
         session.close()
 
 
+def test_a_raw_sarif_body_reaches_the_findings_pipeline(flow):
+    """The transport the CLI actually uses for a real SARIF: artifact as body.
+
+    The JSON envelope is tested above; this pins the other half, because a
+    megabyte of rule metadata must not be the difference between a scan that
+    produces findings and one that does not.
+    """
+    minted = _mint(flow, version="0.4.2").json()
+    ticket = minted["ticket"]
+    job_id, token = ticket["ticket_id"], ticket["evidence"]["upload_token"]
+    body = _sarif(_result(uri="app/raw.py", line=9)).encode()
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    query = ("kind=sast&format=sarif-2.1.0&coverage=full"
+             f"&hash={digest}&tool=%7B%22name%22%3A%22opengrep%22%7D"
+             "&evaluated=%7B%22paths%22%3A%5B%22app%2F%22%5D%7D")
+    response = flow["client"].post(
+        f"/api/v1/scans/{job_id}/evidence?{query}",
+        content=body,
+        headers={"X-Ticket-Token": token,
+                 "Content-Type": "application/octet-stream"})
+    assert response.status_code == 201, response.text
+    assert response.json()["data"]["ingested"]["counters"]["created"] == 1
+
+    findings = flow["client"].get("/api/v1/findings?project=aurea",
+                                  headers=flow["headers"]).json()
+    rows = findings.get("data") or findings
+    assert [row["path"] for row in rows] == ["app/raw.py"]
+
+
+def test_a_raw_body_without_its_metadata_is_refused_by_name(flow):
+    ticket = _mint(flow).json()["ticket"]
+    response = flow["client"].post(
+        f"/api/v1/scans/{ticket['ticket_id']}/evidence?kind=sast",
+        content=b"{}",
+        headers={"X-Ticket-Token": ticket["evidence"]["upload_token"],
+                 "Content-Type": "application/octet-stream"})
+    assert response.status_code == 422
+    assert "format" in response.json()["detail"]
+
+
 def test_the_platform_contract_version_matches_shauron():
-    version_file = SHAURON_ROOT / "VERSION"
+    version_file = SHAURON_ROOT / "shauron" / "VERSION"
     if not version_file.exists():
         pytest.skip("shauron repo not checked out next to barad-dur")
     assert scans_router.SUPPORTED_CONTRACT == version_file.read_text().strip()
