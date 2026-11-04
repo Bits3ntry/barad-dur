@@ -37,6 +37,33 @@ function age(days) {
 /* A TLS failure is a finding, not a stack trace. The collector reports the
    underlying SSL error; the reader gets what it means, with the raw text kept
    in the tooltip. */
+/* What the table exists to answer: is this verified?
+   Grey is not a failure — "never observed" is unknown, and calling it red would
+   turn a missing fact into a finding the product never made. */
+export function verificationState(row) {
+  const passive = row.permissions?.passive_discovery || {}
+  if (passive.excluded) {
+    return { tone: 'unknown', label: 'excluded', detail: 'inventoried, never touched' }
+  }
+  const observation = row.observation
+  if (!observation) {
+    return { tone: 'unknown', label: 'not verified', detail: 'no observation yet' }
+  }
+  const addresses = (observation.ipv4 || 0) + (observation.ipv6 || 0)
+  if (!addresses) {
+    return { tone: 'bad', label: 'no answer', detail: 'DNS returned no address' }
+  }
+  if (observation.tls && observation.tls.error) {
+    return { tone: 'warn', label: 'TLS failed', detail: observation.tls.error }
+  }
+  if ((observation.age_days || 0) > 30) {
+    return { tone: 'warn', label: 'stale',
+      detail: `last confirmed ${observation.age_days} days ago` }
+  }
+  return { tone: 'good', label: 'verified',
+    detail: `${addresses} address${addresses === 1 ? '' : 'es'} on ${isoDate(observation.observed_at)}` }
+}
+
 export function describeTls(tls) {
   if (!tls) return null
   if (tls.error) {
@@ -209,6 +236,11 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
 
   const summary = data?.summary
   const rows = data?.assets || []
+  const counts = rows.reduce((acc, row) => {
+    const tone = verificationState(row).tone
+    acc[tone] = (acc[tone] || 0) + 1
+    return acc
+  }, { good: 0, warn: 0, bad: 0, unknown: 0 })
 
   return (
     <>
@@ -238,16 +270,32 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
 
         {rows.length > 0 && (
           <>
-            <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
-              {summary.assets} declared · {summary.authorized} allowed to collect DNS ·{' '}
-              {summary.observed} observed
-              {summary.never_observed ? ` · ${summary.never_observed} never observed` : ''}
-              {summary.stale ? ` · ${summary.stale} stale` : ''}
-              {summary.excluded ? ` · ${summary.excluded} excluded (inventoried, not touched)` : ''}
+            <p className="verify-summary">
+              <span className="state-pill good">
+                <i className="state-dot" />{counts.good} verified
+              </span>
+              {counts.warn > 0 && (
+                <span className="state-pill warn">
+                  <i className="state-dot" />{counts.warn} need attention
+                </span>
+              )}
+              {counts.bad > 0 && (
+                <span className="state-pill bad">
+                  <i className="state-dot" />{counts.bad} no answer
+                </span>
+              )}
+              <span className="state-pill unknown">
+                <i className="state-dot" />{counts.unknown} not verified
+              </span>
+              <span className="muted">
+                {summary.assets} declared · {summary.authorized} allowed to collect
+                {summary.excluded ? ` · ${summary.excluded} excluded` : ''}
+              </span>
             </p>
             <table className="verification-table">
               <thead>
                 <tr>
+                  <th className="state-col">state</th>
                   <th>value</th><th>environment</th>
                   <th>collection</th><th>last observed</th><th>action</th>
                 </tr>
@@ -257,8 +305,14 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
                   const passive = row.permissions.passive_discovery
                   const active = row.permissions.active_verification
                   const observation = row.observation
+                  const state = verificationState(row)
                   return (
-                    <tr key={row.id}>
+                    <tr key={row.id} className={`state-${state.tone}`}>
+                      <td className="state-cell">
+                        <span className={`state-pill ${state.tone}`} title={state.detail}>
+                          <i className="state-dot" />{state.label}
+                        </span>
+                      </td>
                       <td className="title mono">
                         {row.value}
                         {row.component && (

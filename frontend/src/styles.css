@@ -1994,3 +1994,31 @@ a:focus-visible,
 .grant-hours input { width: 78px; height: 30px; min-height: 30px; font-size: 12.5px; }
 .grant-summary { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--bg-soft);
   border: 1px solid var(--line); font-size: 12.5px; color: var(--text-dim); line-height: 1.55; }
+
+/* ── is it verified? ──────────────────────────────────────────────────────
+   The table answered this in prose inside four columns. A state cell answers it
+   first, with the tone carried by the row's left edge — green verified, amber
+   needs attention (TLS failed, stale), red no answer, grey unknown. Grey is a
+   deliberate non-verdict: never observed is not the same as broken. */
+.verify-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+  margin: 0 0 2px; font-size: 12px; }
+.verify-summary .muted { font-size: 12px; }
+.state-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;
+  font-weight: 600; letter-spacing: .01em; white-space: nowrap; color: var(--text-dim); }
+.state-dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af;
+  flex: none; }
+.state-pill.good, .state-pill.good .state-dot { color: var(--ok); background-color: transparent; }
+.state-pill.good .state-dot { background: var(--ok); }
+.state-pill.warn, .state-pill.warn .state-dot { color: var(--medium); background-color: transparent; }
+.state-pill.warn .state-dot { background: var(--medium); }
+.state-pill.bad, .state-pill.bad .state-dot { color: var(--critical); background-color: transparent; }
+.state-pill.bad .state-dot { background: var(--critical); }
+.state-pill.unknown { color: var(--muted); }
+.verification-table .state-col { width: 116px; }
+.verification-table td.state-cell { white-space: nowrap; padding-left: 12px; }
+.verification-table tbody tr.state-good td.state-cell { box-shadow: inset 2px 0 0 var(--ok); }
+.verification-table tbody tr.state-warn td.state-cell { box-shadow: inset 2px 0 0 var(--medium); }
+.verification-table tbody tr.state-bad td.state-cell { box-shadow: inset 2px 0 0 var(--critical); }
+/* Unknown keeps a bar too — a missing verdict is still a verdict the reader has
+   to see, it just is not a colour that competes with green, amber or red. */
+.verification-table tbody tr.state-unknown td.state-cell { box-shadow: inset 2px 0 0 #d4d7dd; }
