@@ -174,6 +174,193 @@ def portfolio(org: models.Organization = Depends(auth.require_org),
             "groups": sorted(groups.values(), key=lambda item: item["group"].lower())}
 
 
+def _project_by_ref(session: Session, org_id: str, ref: str) -> models.Project | None:
+    """Resolve the display name as well as the canonical slug for read views."""
+    return (session.query(models.Project).filter_by(org_id=org_id, slug=ref).one_or_none()
+            or session.query(models.Project).filter_by(org_id=org_id, name=ref).one_or_none())
+
+
+def _graph_node(node_type: str, row_id: str, label: str, **fields) -> dict:
+    return {"id": f"{node_type}:{row_id}", "type": node_type, "label": label, **fields}
+
+
+@router.get("/projects/{project_ref}/runtime-graph")
+def project_runtime_graph(project_ref: str,
+                          org: models.Organization = Depends(auth.require_org),
+                          session: Session = Depends(get_session)):
+    """A tenant-safe evidence graph for one application's running surface.
+
+    This deliberately joins only stored relationships. It does not infer an
+    artifact from a version, a deployment from a host name, or a vulnerability
+    from an endpoint response; those would make the visual plausible but false.
+    """
+    project = _project_by_ref(session, org.id, project_ref)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+
+    nodes, edges = [], []
+    project_node = _graph_node("project", project.id, project.name, slug=project.slug)
+    nodes.append(project_node)
+
+    def edge(source: str, target: str, relation: str, **fields):
+        edges.append({"from": source, "to": target, "relation": relation, **fields})
+
+    components = (session.query(models.ApplicationComponent)
+                  .filter_by(org_id=org.id, project_id=project.id)
+                  .order_by(models.ApplicationComponent.name).all())
+    component_ids = {row.id for row in components}
+    for row in components:
+        node = _graph_node("application_component", row.id, row.name,
+                           kind=row.kind, slug=row.slug)
+        nodes.append(node)
+        edge(project_node["id"], node["id"], "contains")
+
+    repositories = []
+    for link in (session.query(models.ProjectRepository)
+                 .filter_by(org_id=org.id, project_id=project.id, removed_at=None).all()):
+        row = session.get(models.Repository, link.repository_id)
+        if row is None or row.org_id != org.id:
+            continue
+        repositories.append(row)
+        node = _graph_node("repository", row.id, row.name, provider=row.provider,
+                           remote_url=row.remote_url)
+        nodes.append(node)
+        edge(project_node["id"], node["id"], "uses", evidence="declared")
+    repository_ids = {row.id for row in repositories}
+
+    versions = (session.query(models.ProjectVersion).filter_by(project_id=project.id)
+                .order_by(models.ProjectVersion.created_at.desc()).all())
+    version_ids = {row.id for row in versions}
+    for row in versions:
+        node = _graph_node("version", row.id, row.version,
+                           created_at=row.created_at.isoformat() if row.created_at else None)
+        nodes.append(node)
+        edge(project_node["id"], node["id"], "has_version")
+
+    artifacts = (session.query(models.Artifact).filter_by(org_id=org.id).all())
+    artifacts = [row for row in artifacts
+                 if row.project_version_id in version_ids
+                 or row.application_component_id in component_ids]
+    artifact_ids = {row.id for row in artifacts}
+    for row in artifacts:
+        node = _graph_node("artifact", row.id, row.name, digest=row.digest,
+                           provenance=row.provenance, source=row.source)
+        nodes.append(node)
+        if row.application_component_id in component_ids:
+            edge(f"application_component:{row.application_component_id}", node["id"],
+                 "builds", evidence="declared")
+        if row.project_version_id in version_ids:
+            edge(node["id"], f"version:{row.project_version_id}", "is_build_of",
+                 evidence="declared")
+
+    project_assets = (session.query(models.Asset)
+                      .filter_by(org_id=org.id, project_id=project.id).all())
+    asset_ids = {row.id for row in project_assets}
+    asset_links = (session.query(models.AssetLink)
+                   .filter_by(org_id=org.id, entity_type="deployment", removed_at=None).all())
+    linked_deployment_ids = {row.entity_id for row in asset_links if row.asset_id in asset_ids}
+    deployments = (session.query(models.Deployment).filter_by(org_id=org.id).all())
+    deployments = [row for row in deployments
+                   if row.artifact_id in artifact_ids
+                   or row.application_component_id in component_ids
+                   or row.id in linked_deployment_ids]
+    deployment_ids = {row.id for row in deployments}
+    for row in deployments:
+        node = _graph_node("deployment", row.id, row.name, environment=row.environment,
+                           status=row.status,
+                           deployed_at=row.deployed_at.isoformat() if row.deployed_at else None)
+        nodes.append(node)
+        if row.artifact_id in artifact_ids:
+            edge(f"artifact:{row.artifact_id}", node["id"], "runs_as", evidence="declared")
+        elif row.application_component_id in component_ids:
+            edge(f"application_component:{row.application_component_id}", node["id"],
+                 "runs_as", evidence="declared")
+
+    # Include assets reached from a deployment even if an older row had not yet
+    # been filed under the project. The association itself is the evidence.
+    for link in asset_links:
+        if link.entity_id in deployment_ids:
+            row = session.get(models.Asset, link.asset_id)
+            if row is not None and row.org_id == org.id:
+                asset_ids.add(row.id)
+                if row not in project_assets:
+                    project_assets.append(row)
+    for row in project_assets:
+        node = _graph_node("asset", row.id, row.value, asset_type=row.type,
+                           classification=row.classification_status)
+        nodes.append(node)
+        for link in asset_links:
+            if link.asset_id == row.id and link.entity_id in deployment_ids:
+                edge(f"deployment:{link.entity_id}", node["id"], "is_exposed_by",
+                     evidence="declared")
+
+    endpoints = (session.query(models.WebEndpoint)
+                 .filter(models.WebEndpoint.org_id == org.id,
+                         models.WebEndpoint.asset_id.in_(asset_ids)).all() if asset_ids else [])
+    for row in endpoints:
+        node = _graph_node("endpoint", row.id, f"{row.method} {row.path}", origin=row.origin,
+                           state=row.state, status_code=row.status_code,
+                           last_observed_at=row.last_observed_at.isoformat()
+                           if row.last_observed_at else None)
+        nodes.append(node)
+        edge(f"asset:{row.asset_id}", node["id"], "has_registered", evidence="observed")
+
+    analysis_runs = (session.query(models.AnalysisRun).filter_by(org_id=org.id,
+                     project_id=project.id).order_by(models.AnalysisRun.created_at.desc()).limit(20).all())
+    for row in analysis_runs:
+        node = _graph_node("analysis_run", row.id, row.tool,
+                           revision=row.revision, branch=row.branch, coverage=row.coverage,
+                           findings_seen=row.findings_seen)
+        nodes.append(node)
+        source = (f"repository:{row.repository_id}" if row.repository_id in repository_ids
+                  else project_node["id"])
+        edge(source, node["id"], "analysed_by", evidence="observed")
+        if row.project_version_id in version_ids:
+            edge(node["id"], f"version:{row.project_version_id}", "evaluates")
+
+    findings = (session.query(models.Finding).filter_by(org_id=org.id, project_id=project.id)
+                .filter(models.Finding.status.notin_(CLOSED_STATUSES)).all())
+    contexts = (session.query(models.FindingContext).filter_by(org_id=org.id)
+                .filter(models.FindingContext.finding_id.in_({row.id for row in findings})).all()
+                if findings else [])
+    known_contexts = {f"asset:{row.id}" for row in project_assets}
+    known_contexts |= {f"deployment:{row.id}" for row in deployments}
+    known_contexts |= {f"repository:{row.id}" for row in repositories}
+    known_contexts |= {f"endpoint:{row.id}" for row in endpoints}
+    for row in findings:
+        node = _graph_node("finding", row.id, row.title or row.kind, kind=row.kind,
+                           severity=severity_mod.canonical(row.severity), status=row.status)
+        nodes.append(node)
+        matches = [ctx for ctx in contexts
+                   if ctx.finding_id == row.id and f"{ctx.entity_type}:{ctx.entity_id}" in known_contexts]
+        if matches:
+            for ctx in matches:
+                edge(f"{ctx.entity_type}:{ctx.entity_id}", node["id"], "observed_in",
+                     evidence="observed")
+        else:
+            edge(project_node["id"], node["id"], "has_finding", evidence="project")
+
+    active_deployments = sum(1 for row in deployments if row.status == "active")
+    coverage = []
+    if not components:
+        coverage.append("no application components are recorded")
+    if not deployments:
+        coverage.append("no deployments are linked to this project")
+    if deployments and not asset_ids:
+        coverage.append("deployments have no linked assets")
+    if not endpoints:
+        coverage.append("no registered endpoints are linked to project assets")
+    return {"data": {
+        "project": {"id": project.id, "slug": project.slug, "name": project.name},
+        "summary": {"components": len(components), "repositories": len(repositories),
+                    "versions": len(versions), "artifacts": len(artifacts),
+                    "deployments": len(deployments), "active_deployments": active_deployments,
+                    "assets": len(asset_ids), "registered_endpoints": len(endpoints),
+                    "open_findings": len(findings), "coverage": coverage},
+        "nodes": nodes, "edges": edges,
+    }}
+
+
 @router.get("/inventory/profile")
 def version_profile(project: str = Query(...), version: str = Query(...),
                     org: models.Organization = Depends(auth.require_org),

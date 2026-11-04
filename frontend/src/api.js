@@ -26,6 +26,10 @@ const PUBLIC_PATHS = [
   '/api/v1/auth/refresh',
 ]
 
+// A single in-flight renewal prevents parallel screen loads from rotating the
+// same refresh token twice. It must be module state, not an implicit global.
+let refreshPromise = null
+
 function isPublic(path) {
   return PUBLIC_PATHS.some((prefix) => path.startsWith(prefix))
 }

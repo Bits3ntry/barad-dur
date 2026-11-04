@@ -37,6 +37,23 @@ def seeded(tmp_path, monkeypatch):
     session.flush()
     version = models.ProjectVersion(project_id=project.id, version="v3")
     session.add(version)
+    graph_version = models.ProjectVersion(project_id=project.id, version="v2")
+    session.add(graph_version)
+    session.flush()
+    component = models.ApplicationComponent(
+        org_id=org.id, project_id=project.id, name="AUREA backend",
+        slug="backend", kind="backend")
+    repository = models.Repository(org_id=org.id, provider="git", name="aurea-api",
+                                   remote_url="https://git.example.test/aurea-api.git")
+    session.add_all([component, repository])
+    session.flush()
+    session.add(models.ProjectRepository(org_id=org.id, project_id=project.id,
+                                         repository_id=repository.id, relation="builds"))
+    artifact = models.Artifact(org_id=org.id, project_version_id=graph_version.id,
+                               application_component_id=component.id,
+                               name="aurea-api-v3", digest="sha256:graph-v3",
+                               source="ci")
+    session.add(artifact)
     session.flush()
     asset_a = models.Asset(org_id=org.id, type="domain",
                            value="api-aurea.bitsentry.xyz", source="scope",
@@ -47,11 +64,12 @@ def seeded(tmp_path, monkeypatch):
     session.add_all([asset_a, asset_b])
     session.flush()
     deployment = models.Deployment(org_id=org.id, name="aurea-backend",
-                                   environment="production")
+                                   environment="production", artifact_id=artifact.id,
+                                   application_component_id=component.id)
     session.add(deployment)
     session.flush()
     staging = models.Deployment(org_id=org.id, name="aurea-backend-staging",
-                                environment="staging")
+                                environment="staging", status="planned")
     session.add(staging)
     session.flush()
     session.add_all([
@@ -60,6 +78,10 @@ def seeded(tmp_path, monkeypatch):
         models.AssetLink(org_id=org.id, asset_id=asset_b.id,
                          entity_type="deployment", entity_id=staging.id),
     ])
+    session.add(models.WebEndpoint(org_id=org.id, asset_id=asset_a.id,
+                                   origin="https://api-aurea.bitsentry.xyz", path="/health",
+                                   method="GET", state="observed", status_code=200,
+                                   discovery_source="test"))
 
     def finding(title, status, severity="HIGH", priority="P1", **extra):
         row = models.Finding(
@@ -119,6 +141,26 @@ def test_dashboard_rejects_an_unknown_project_instead_of_widening(seeded):
                       headers=headers).status_code == 404
     assert client.get("/api/v1/dashboard/exposure-flow?project=nope",
                       headers=headers).status_code == 404
+
+
+def test_project_runtime_graph_uses_only_the_project_evidence(seeded):
+    client, headers, other_headers, _ids = seeded
+    response = client.get("/api/v1/projects/aurea/runtime-graph", headers=headers)
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["project"]["slug"] == "aurea"
+    assert data["summary"]["components"] == 1
+    assert data["summary"]["active_deployments"] == 1
+    assert data["summary"]["assets"] == 2
+    assert data["summary"]["registered_endpoints"] == 1
+    kinds = {node["type"] for node in data["nodes"]}
+    assert {"project", "application_component", "repository", "version", "artifact",
+            "deployment", "asset", "endpoint", "finding"} <= kinds
+    relations = {(edge["relation"], edge.get("evidence")) for edge in data["edges"]}
+    assert ("runs_as", "declared") in relations
+    assert ("has_registered", "observed") in relations
+    assert client.get("/api/v1/projects/nope/runtime-graph", headers=headers).status_code == 404
+    assert client.get("/api/v1/projects/aurea/runtime-graph", headers=other_headers).status_code == 404
 
 
 def test_dashboard_counters_equal_their_destinations(seeded):

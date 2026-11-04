@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
 import { Card, Drawer, EmptyState, ErrorBanner, Loading, PageHeader, Stat } from './ui'
+import RuntimeGraph from './RuntimeGraph'
 
 /* Three levels, because a repository is not what anyone reports on:
      group (Aurea) -> project (backend) -> version (1923bba)
@@ -304,6 +305,8 @@ export default function Projects({ onNavigate }) {
   const [filter, setFilter] = useState('')
   const [selection, setSelection] = useState({})
   const [open, setOpen] = useState(null)
+  const [mode, setMode] = useState('portfolio')
+  const [graphProject, setGraphProject] = useState('')
   // Collapsing is a reading preference, so it survives a reload.
   const [scanning, setScanning] = useState('')
 
@@ -335,6 +338,11 @@ export default function Projects({ onNavigate }) {
   }
 
   useEffect(load, [])
+
+  useEffect(() => {
+    if (graphProject || !rows?.length) return
+    setGraphProject(rows[0].project)
+  }, [rows, graphProject])
 
   async function scanVersion(project, version) {
     setScanning(`${project}@${version}`)
@@ -384,9 +392,23 @@ export default function Projects({ onNavigate }) {
           : 'Portfolio'}
         actions={(
           <>
+            <div className="tabs" aria-label="Projects view">
+              <button className={`tab${mode === 'portfolio' ? ' active' : ''}`}
+                onClick={() => setMode('portfolio')}>portfolio</button>
+              <button className={`tab${mode === 'running' ? ' active' : ''}`}
+                onClick={() => setMode('running')}>running now</button>
+            </div>
+            {mode === 'running' && <select value={graphProject}
+              aria-label="Project runtime graph"
+              onChange={(event) => setGraphProject(event.target.value)}>
+              {[...new Map(rows.map((row) => [row.project, row])).values()].map((row) => (
+                <option key={row.project} value={row.project}>{row.project_name}</option>
+              ))}
+            </select>}
             <input placeholder="filter group or project" value={filter}
+              disabled={mode === 'running'}
               onChange={(event) => setFilter(event.target.value)} style={{ minWidth: 200 }} />
-            <button onClick={() => rememberCollapsed(
+            <button disabled={mode === 'running'} onClick={() => rememberCollapsed(
               collapsed.size === groups.length
                 ? new Set()
                 : new Set(groups.map(([group]) => group)))}>
@@ -399,12 +421,17 @@ export default function Projects({ onNavigate }) {
 
       {error && <ErrorBanner error={error} onRetry={load} />}
 
-      {!groups.length && (
+      {mode === 'running' && (graphProject
+        ? <RuntimeGraph project={graphProject} onBack={() => setMode('portfolio')} />
+        : <EmptyState title="No project versions yet"
+          hint="Create a project and component before opening its runtime graph." />)}
+
+      {mode === 'portfolio' && !groups.length && (
         <EmptyState title="No project versions yet"
           hint="Ingest an SBOM: the project and version are created from it." />
       )}
 
-      {groups.map(([group, groupRows]) => (
+      {mode === 'portfolio' && groups.map(([group, groupRows]) => (
         <GroupCard key={group} group={group} rows={groupRows}
           selection={selection}
           collapsed={collapsed.has(group)}

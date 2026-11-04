@@ -1319,3 +1319,35 @@ td .mono, .table-wrap td .mono { white-space: nowrap; }
   background: var(--bg-soft);
 }
 .signin-block .section { margin-top: 0; }
+
+/* Project runtime graph: a stable evidence flow, not a force-directed cloud. */
+.runtime-graph-stack { display: grid; gap: var(--gap-3); }
+.runtime-graph-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.runtime-graph-head p { margin: 3px 0 0; }
+.runtime-graph-metrics { margin: 0; }
+.runtime-graph-coverage { margin: 0; padding: 8px 10px; color: var(--muted); font-size: 12px;
+  border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); }
+.runtime-graph-wrap { overflow: auto; min-height: 390px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--bg-soft); }
+.runtime-graph { display: block; min-width: 980px; width: 100%; fill: none; }
+.runtime-graph-column { fill: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.runtime-graph-edge { stroke: var(--line-strong); stroke-width: 1.25; fill: none; }
+.runtime-graph-edge path { fill: var(--line-strong); }
+.runtime-graph-edge.dim { opacity: .12; }
+.runtime-graph-node { cursor: pointer; }
+.runtime-graph-node rect { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1; }
+.runtime-graph-node:hover rect, .runtime-graph-node.selected rect { fill: var(--panel-2); stroke: var(--text); stroke-width: 1.5; }
+.runtime-graph-node.dim { opacity: .16; }
+.runtime-graph-node-type { fill: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.runtime-graph-node-label { fill: var(--text); font-size: 11px; font-weight: 600; }
+.runtime-graph-list { display: grid; gap: 2px; }
+.runtime-graph-list-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 10px; width: 100%; justify-content: normal; text-align: left; padding: 7px 8px;
+  background: transparent; border: none; border-radius: var(--radius-sm); color: var(--text-dim); }
+.runtime-graph-list-row:hover { background: var(--panel-2); color: var(--text); }
+.runtime-graph-list-row b { color: var(--muted); font-size: 11px; font-weight: 500; }
+@media (max-width: 720px) {
+  .runtime-graph-wrap { display: none; }
+  .runtime-graph-head { align-items: stretch; flex-direction: column; }
+  .runtime-graph-list-row { grid-template-columns: 1fr; gap: 2px; }
+}
