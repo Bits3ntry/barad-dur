@@ -21,7 +21,8 @@ import secrets as pysecrets
 import urllib.error
 import urllib.request
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import (APIRouter, Depends, Header, HTTPException, Query, Request,
+                     status)
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -203,7 +204,16 @@ def create_scan(payload: ScanIn,
     version_row = pick_version(session, project.id, payload.version) \
         if payload.version else None
     if payload.version and version_row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
+        # A pipeline declares the version it just built, so it may introduce it.
+        # A human typing a label in the console may not: a typo would silently
+        # create a version that no evidence ever fills.
+        if payload.origin in {"ci", "cli"}:
+            version_row = models.ProjectVersion(
+                project_id=project.id, version=payload.version)
+            session.add(version_row)
+            session.flush()
+        else:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
 
     repository = _resolve_repository(session, org.id, payload.repository, project.id)
     if action["target"] == "repository" and repository is None:
@@ -452,6 +462,24 @@ def get_scan(job_id: str, org: models.Organization = Depends(require_org),
     return {"data": data}
 
 
+@router.get("/scans/{job_id}/state")
+def scan_state(job_id: str,
+               x_ticket_token: str = Header(default="", alias=TOKEN_HEADER),
+               session: Session = Depends(get_session)) -> dict:
+    """Executor-scoped read: the one thing a runner may ask about its own ticket.
+
+    It exists so a CLI can notice a cancellation between tasks without holding an
+    organization credential — and it answers nothing else: no finding, no target,
+    no project data.
+    """
+    job = _job_by_ticket(session, job_id, x_ticket_token)
+    return {"data": {"job_id": job.id, "status": job.status,
+                     "cancelled": job.status in {"cancelled", "cancel_requested"},
+                     "deadline_at": (scan_flow.aware(job.deadline_at).isoformat()
+                                     if job.deadline_at else None),
+                     "evidence": job.evidence_state}}
+
+
 @router.get("/scans/{job_id}/timeline")
 def scan_timeline(job_id: str, org: models.Organization = Depends(require_org),
                   session: Session = Depends(get_session)) -> dict:
@@ -494,6 +522,16 @@ def post_event(job_id: str, payload: EventIn,
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"event must be one of {sorted(EVENT_KINDS)}")
     at_client = _parse_ts(payload.at, "at")
+    # Idempotent on (kind, client timestamp): a retry after a dropped response
+    # must not double the timeline.
+    if at_client is not None:
+        for row in (session.query(models.ScanEvent).filter_by(
+                job_id=job.id, kind=payload.event).all()):
+            if row.at_client is not None and \
+                    scan_flow.aware(row.at_client) == at_client:
+                return {"data": {"job_id": job.id, "status": job.status,
+                                 "evidence": job.evidence_state,
+                                 "duplicate": True}}
     scan_flow.append(session, job, payload.event, source="executor",
                      actor=(payload.detail or {}).get("actor"),
                      host=(payload.detail or {}).get("host"),
@@ -504,6 +542,84 @@ def post_event(job_id: str, payload: EventIn,
     session.commit()
     return {"data": {"job_id": job.id, "status": job.status,
                      "evidence": job.evidence_state}}
+
+
+def _ingest_evidence(session: Session, job: models.ScanJob,
+                     payload: "EvidenceIn") -> dict:
+    """Hand one artifact to the ingest that already exists.
+
+    One implementation per format, always: a second parser is how the same
+    finding ends up with two identities and a count nobody can reconcile.
+    """
+    from backend.app import ingest as sbom_ingest
+    from backend.app.routers import sarif as sarif_router
+
+    subject = json.loads(job.subject or "{}")
+    project = by_ref(session, job.org_id, subject.get("project"))
+    if project is None:
+        return {"skipped": "the flow's project is not inventoried"}
+    label = subject.get("version")
+    if not label:
+        return {"skipped": "the flow carries no version label to attach to"}
+    pv = pick_version(session, project.id, label)
+    if pv is None:
+        return {"skipped": f"project version '{label}' does not exist"}
+
+    if payload.kind == "sbom" and payload.format == "cyclonedx-1.6":
+        if not payload.content:
+            return {"skipped": "no content to ingest"}
+        try:
+            result = sbom_ingest.ingest_document(
+                session, job.org_id, payload.content.encode(), source="cli",
+                filename="sbom.cyclonedx.json",
+                project_override=project.slug, version_override=label)
+        except Exception as exc:  # a bad SBOM must not swallow the flow
+            return {"error": f"sbom ingest failed: {type(exc).__name__}: {exc}"}
+        receipt = session.get(models.SbomImport, result["import_id"])
+        if receipt is not None:
+            receipt.scan_job_id = job.id
+        return {"kind": "sbom", "import_id": result["import_id"],
+                "status": result["status"],
+                "components": receipt.components_created if receipt else None}
+
+    if payload.kind in {"sast", "misconfig", "secrets"} \
+            and payload.format == "sarif-2.1.0":
+        if not payload.content:
+            return {"skipped": "no content to ingest"}
+        try:
+            document = json.loads(payload.content)
+        except json.JSONDecodeError as exc:
+            return {"error": f"sarif is not valid JSON: {exc}"}
+        runs = document.get("runs") if isinstance(document, dict) else None
+        if not runs:
+            return {"skipped": "sarif carries no runs"}
+        tool_name = None
+        counters = {"received": 0, "created": 0, "existing": 0, "skipped": 0}
+        for run in runs:
+            result = sarif_router.ingest_run(
+                session, job.org_id, project, pv, run, source="scan", commit=False)
+            tool_name = tool_name or result["tool"]
+            for key in counters:
+                counters[key] += result["counts"].get(key, 0)
+        repository_id = None
+        remote = subject.get("repository")
+        if remote:
+            row = (session.query(models.Repository)
+                   .filter_by(org_id=job.org_id, remote_url=remote).one_or_none())
+            repository_id = row.id if row else None
+        session.add(models.AnalysisRun(
+            org_id=job.org_id, project_id=project.id, project_version_id=pv.id,
+            tool=tool_name or "sarif", tool_version=(payload.tool or {}).get("version"),
+            coverage=payload.coverage or "full", source="scan",
+            revision=subject.get("commit"), branch=subject.get("branch"),
+            repository_id=repository_id, pull_request=subject.get("pull_request"),
+            evaluated={"paths": (payload.evaluated or {}).get("paths") or []},
+            findings_seen=counters["received"], scan_job_id=job.id,
+            actor=job.created_by, receipt={"source": "scan_flow"},
+            started_at=job.started_at, finished_at=_now()))
+        return {"kind": payload.kind, "counters": counters, "tool": tool_name}
+
+    return {"kind": payload.kind, "stored_only": True}
 
 
 class EvidenceIn(BaseModel):
@@ -519,13 +635,57 @@ class EvidenceIn(BaseModel):
     content: str | None = None
 
 
+MAX_EVIDENCE_BYTES = 4 * 1024 * 1024
+
+
 @router.post("/scans/{job_id}/evidence", status_code=status.HTTP_201_CREATED)
-def post_evidence(job_id: str, payload: EvidenceIn,
-                  x_ticket_token: str = Header(default="", alias=TOKEN_HEADER),
-                  session: Session = Depends(get_session)) -> dict:
-    """One call per artifact. Bound to the flow, hashed, and never a second
-    ingestion implementation: parsing happens in the existing ingest paths."""
+async def post_evidence(job_id: str, request: Request,
+                        x_ticket_token: str = Header(default="", alias=TOKEN_HEADER),
+                        session: Session = Depends(get_session)) -> dict:
+    """One call per artifact. Bound to the flow, hashed, never re-parsed.
+
+    Two transports, one meaning:
+
+    - `application/json` — a `barad-evidence-v1` envelope with the artifact
+      inline. Fine for logs, manifests and small reports.
+    - anything else — the artifact itself as the request body, with `kind`,
+      `format` and `hash` in the query string. A real SARIF from a full ruleset is
+      megabytes of rule metadata, and embedding that as a JSON string is how a
+      healthy scanner gets refused by its own platform.
+    """
     job = _job_by_ticket(session, job_id, x_ticket_token)
+    raw = await request.body()
+    if len(raw) > MAX_EVIDENCE_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            f"artifact exceeds {MAX_EVIDENCE_BYTES} bytes")
+    media = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if media == "application/json":
+        try:
+            payload = EvidenceIn(**json.loads(raw))
+        except Exception as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"invalid evidence envelope: {exc}") from None
+    else:
+        params = request.query_params
+        missing = [name for name in ("kind", "format", "hash") if not params.get(name)]
+        if missing:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"raw evidence needs {missing} in the query string")
+        try:
+            payload = EvidenceIn(
+                schema="barad-evidence-v1", ticket_id=job_id,
+                kind=params["kind"], format=params["format"],
+                content_hash=params["hash"], bytes=len(raw),
+                tool=json.loads(params["tool"]) if params.get("tool") else None,
+                coverage=params.get("coverage"),
+                evaluated=(json.loads(params["evaluated"])
+                           if params.get("evaluated") else None),
+                content=raw.decode("utf-8", errors="replace"))
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"invalid evidence metadata: {exc}") from None
+
     if payload.content is not None:
         actual = "sha256:" + hashlib.sha256(payload.content.encode()).hexdigest()
         if payload.content_hash and actual != payload.content_hash:
@@ -537,10 +697,23 @@ def post_evidence(job_id: str, payload: EvidenceIn,
                 status.HTTP_409_CONFLICT,
                 "evidence_corrupt: content_hash does not match the body")
     if payload.kind in scan_flow.EVIDENCE_KINDS and not payload.content:
-        # The F1 sink binds and stores; it does not parse. An artifact with no
+        # The sink binds and stores; it does not parse. An artifact with no
         # content is a claim, and a claim is not evidence.
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "content is required for an evidence artifact")
+
+    # A retried upload is the same evidence, not a second one: the artifact is
+    # keyed by (kind, content_hash) inside the flow.
+    for artifact in (session.query(models.JobArtifact).filter_by(
+            job_id=job.id, kind=payload.kind).all()):
+        try:
+            stored = json.loads(artifact.content or "{}")
+        except json.JSONDecodeError:
+            continue
+        if stored.get("content_hash") == payload.content_hash:
+            return {"data": {"job_id": job.id, "kind": payload.kind,
+                             "evidence": job.evidence_state, "revived": False,
+                             "status": job.status, "duplicate": True}}
 
     revived = scan_flow.revive(session, job, reason="late_evidence")
     session.add(models.JobArtifact(
@@ -550,21 +723,22 @@ def post_evidence(job_id: str, payload: EvidenceIn,
             "tool": payload.tool, "coverage": payload.coverage,
             "content_hash": payload.content_hash, "bytes": payload.bytes,
             "evaluated": payload.evaluated or {}, "content": payload.content,
-        }, sort_keys=True)[:800_000],
+        }, sort_keys=True)[:MAX_EVIDENCE_BYTES],
         created_at=_now()))
     session.flush()
+    ingested = _ingest_evidence(session, job, payload)
     state = scan_flow.recompute_evidence(session, job)
     scan_flow.append(session, job, "evidence_received", source="executor",
                      detail={"kind": payload.kind, "format": payload.format,
                              "content_hash": payload.content_hash,
-                             "revived": revived})
+                             "revived": revived, "ingested": ingested})
     if revived:
         _audit_log(session, job.org_id, "shauron", "scan.revived", "scan_job",
                    job.id, f"evidence after abandonment: {payload.kind}")
     session.commit()
     return {"data": {"job_id": job.id, "kind": payload.kind,
                      "evidence": state, "revived": revived,
-                     "status": job.status}}
+                     "status": job.status, "ingested": ingested}}
 
 
 # ── control ───────────────────────────────────────────────────────────────

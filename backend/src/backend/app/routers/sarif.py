@@ -55,26 +55,18 @@ class SarifIngestIn(BaseModel):
     actor: str | None = None
 
 
-@router.post("/sarif")
-def ingest_sarif(payload: SarifIngestIn = None,
-                 project: str = Query(...),
-                 version: str = Query(...),
-                 org: models.Organization = Depends(auth.require_org),
-                 session: Session = Depends(get_session)):
-    """Ingest one SARIF run into the findings pipeline (idempotent by recipe)."""
-    if payload is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
-    proj = (session.query(models.Project)
-            .filter_by(org_id=org.id, slug=project).one_or_none())
-    if proj is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
-    pv = (pick_version(session, proj.id, version))
-    if pv is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
+def ingest_run(session, org_id: str, proj, pv, run: dict, *,
+               source: str = "api", tool_hint: str | None = None,
+               actor: str | None = None, commit: bool = True) -> dict:
+    """Ingest ONE SARIF run into the findings pipeline (idempotent by recipe).
 
-    run = payload.run or {}
-    tool_name = (((run.get("tool") or {}).get("driver") or {}).get("name")
-                 or "sarif")
+    Extracted from the route so the scan-flow evidence sink uses the same code:
+    two parsers for one format is how the same finding starts having two
+    identities.
+    """
+    run = run or {}
+    tool_name = tool_hint or (
+        ((run.get("tool") or {}).get("driver") or {}).get("name") or "sarif")
     rules_index = {}
     for rule in ((run.get("tool") or {}).get("driver") or {}).get("rules") or []:
         if isinstance(rule, dict) and rule.get("id"):
@@ -97,13 +89,13 @@ def ingest_sarif(payload: SarifIngestIn = None,
                    or (rules_index.get(rule_id, {}).get("shortDescription") or {}).get("text")
                    or rule_id)
         fingerprint = incidents.recipe_fingerprint(
-            "code-weakness", org.id, proj.id, rule_id, path)
+            "code-weakness", org_id, proj.id, rule_id, path)
         finding = (session.query(models.Finding)
-                   .filter_by(org_id=org.id, fingerprint=fingerprint).one_or_none())
+                   .filter_by(org_id=org_id, fingerprint=fingerprint).one_or_none())
         if finding is None:
             finding = models.Finding(
-                org_id=org.id, project_id=proj.id, kind="code-weakness",
-                fingerprint=fingerprint, source="api",
+                org_id=org_id, project_id=proj.id, kind="code-weakness",
+                fingerprint=fingerprint, source=source,
                 title=message[:512], severity=severity, url=None,
                 detail=f"SARIF {tool_name} {rule_id}", tool=tool_name,
                 rule_id=rule_id, path=path, line=line,
@@ -120,11 +112,32 @@ def ingest_sarif(payload: SarifIngestIn = None,
             finding.updated_at = now
             counters["existing"] += 1
         incidents.record_occurrence(
-            session, org.id, finding, pv.id, tool_name, "api",
+            session, org_id, finding, pv.id, tool_name, source,
             kind="code-weakness", rule_id=rule_id, path=path, line=line,
             detail=(result.get("message") or {}).get("text"), now=now)
-    session.commit()
+    if commit:
+        session.commit()
     return {"status": "ingested", "tool": tool_name, "counts": counters}
+
+
+@router.post("/sarif")
+def ingest_sarif(payload: SarifIngestIn = None,
+                 project: str = Query(...),
+                 version: str = Query(...),
+                 org: models.Organization = Depends(auth.require_org),
+                 session: Session = Depends(get_session)):
+    """Ingest one SARIF run into the findings pipeline (idempotent by recipe)."""
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    proj = (session.query(models.Project)
+            .filter_by(org_id=org.id, slug=project).one_or_none())
+    if proj is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    pv = (pick_version(session, proj.id, version))
+    if pv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
+    return ingest_run(session, org.id, proj, pv, payload.run or {},
+                      source="api", actor=payload.actor)
 
 
 @router.get("/sarif/diff")

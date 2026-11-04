@@ -254,6 +254,82 @@ def test_a_corrupted_artifact_is_refused(flow):
     assert "evidence_corrupt" in response.json()["detail"]
 
 
+def _sarif(*results) -> str:
+    return json.dumps({"version": "2.1.0", "runs": [{
+        "tool": {"driver": {"name": "opengrep", "version": "1.33.1", "rules": [
+            {"id": "python.lang.security.audit.eval", "shortDescription":
+             {"text": "eval on user input"}}]}},
+        "results": list(results)}]})
+
+
+def _result(rule="python.lang.security.audit.eval", uri="app/server.py", line=42):
+    return {"ruleId": rule, "level": "error",
+            "message": {"text": "eval on user input"},
+            "locations": [{"physicalLocation": {
+                "artifactLocation": {"uri": uri},
+                "region": {"startLine": line}}}]}
+
+
+def test_a_sarif_artifact_becomes_findings_attributed_to_the_flow(flow):
+    """The scan's last mile: evidence in, findings out, one identity per finding."""
+    minted = _mint(flow, version="0.4.2").json()
+    ticket = minted["ticket"]
+    job_id, token = ticket["ticket_id"], ticket["evidence"]["upload_token"]
+    content = _sarif(_result(), _result(uri="app/models.py", line=7))
+    posted = flow["client"].post(
+        f"/api/v1/scans/{job_id}/evidence",
+        json={"schema": "barad-evidence-v1", "ticket_id": job_id, "kind": "sast",
+              "format": "sarif-2.1.0", "coverage": "full",
+              "content_hash": "sha256:" + hashlib.sha256(content.encode()).hexdigest(),
+              "content": content, "tool": {"name": "opengrep", "version": "1.33.1"},
+              "evaluated": {"paths": ["app/"]}},
+        headers={"X-Ticket-Token": token})
+    assert posted.status_code == 201, posted.text
+    ingested = posted.json()["data"]["ingested"]
+    assert ingested["kind"] == "sast"
+    assert ingested["counters"]["created"] == 2
+
+    findings = flow["client"].get("/api/v1/findings?project=aurea",
+                                  headers=flow["headers"]).json()
+    rows = findings.get("data") or findings
+    assert {row["path"] for row in rows} == {"app/server.py", "app/models.py"}
+    assert all(row["kind"] == "code-weakness" for row in rows)
+
+    # The analysis record points back at the flow, so the console can reopen it.
+    session = flow["db"]()
+    try:
+        runs = session.query(models.AnalysisRun).filter_by(scan_job_id=job_id).all()
+        assert len(runs) == 1
+        assert runs[0].tool == "opengrep"
+        assert runs[0].revision == COMMIT
+    finally:
+        session.close()
+
+
+def test_the_same_artifact_twice_is_not_two_findings(flow):
+    minted = _mint(flow, version="0.4.2").json()
+    ticket = minted["ticket"]
+    job_id, token = ticket["ticket_id"], ticket["evidence"]["upload_token"]
+    content = _sarif(_result())
+    body = {"schema": "barad-evidence-v1", "ticket_id": job_id, "kind": "sast",
+            "format": "sarif-2.1.0",
+            "content_hash": "sha256:" + hashlib.sha256(content.encode()).hexdigest(),
+            "content": content}
+    first = flow["client"].post(f"/api/v1/scans/{job_id}/evidence", json=body,
+                                headers={"X-Ticket-Token": token})
+    second = flow["client"].post(f"/api/v1/scans/{job_id}/evidence", json=body,
+                                 headers={"X-Ticket-Token": token})
+    assert first.status_code == 201 and second.status_code == 201
+    assert second.json()["data"].get("duplicate") is True
+
+    session = flow["db"]()
+    try:
+        assert session.query(models.Finding).filter_by(project_id=(
+            session.query(models.Project).filter_by(slug="aurea").one().id)).count() == 1
+    finally:
+        session.close()
+
+
 def test_the_platform_contract_version_matches_shauron():
     version_file = SHAURON_ROOT / "VERSION"
     if not version_file.exists():
