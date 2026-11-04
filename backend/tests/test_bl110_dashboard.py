@@ -98,6 +98,5 @@ def test_projects_posture_and_isolation(dash_client):
     assert foreign == []
     foreign_summary = test_client.get(
         "/api/v1/dashboard/summary?project=saria",
-        headers=other_headers).json()["data"]
-    assert foreign_summary["findings"]["total"] == 0
-    assert foreign_summary["scope"]["project"] is None
+        headers=other_headers)
+    assert foreign_summary.status_code == 404

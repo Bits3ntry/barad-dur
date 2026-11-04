@@ -120,15 +120,27 @@ def _target_allowed(session, grant: models.ScanGrant,
 
 
 def _denied_by_exclusion(session, org_id: str,
-                         target_type: str, target_value: str) -> str | None:
-    """Explicit exclusion wins over any grant. Wildcard exclusions subtract
-    whole subdomain families."""
+                         target_type: str, target_value: str):
+    """The exclusion row that blocks this target, if any.
+
+    Explicit exclusion wins over any grant. A **disabled** row is not an
+    exclusion any more (that is how one is undone without deleting the audit
+    trail), and an expired one has lapsed — both are skipped here and in
+    `scoping.decide`, or the console would show "restored" while collection
+    stays blocked.
+    """
+    now = _now()
     rows = (session.query(models.ScopeExclusion)
             .filter_by(org_id=org_id).all())
     for row in rows:
+        if getattr(row, "status", "active") != "active":
+            continue
+        expires = _aware(row.expires_at) if getattr(row, "expires_at", None) else None
+        if expires is not None and expires <= now:
+            continue
         if _exact_or_wildcard(row.target_type, row.value,
                               target_type, target_value):
-            return row.reason
+            return row
     return None
 
 
@@ -147,8 +159,8 @@ def authorize(session, org_id: str, principal: str, capability: str,
         checked.append({**item, "resolved": False})
         exclusion = _denied_by_exclusion(session, org_id, item["type"], item["value"])
         if exclusion is not None:
-            return decision(True, f"explicit exclusion: {exclusion}",
-                            matched_group=[item["type"], item["value"]], checked=checked)
+            return decision(True, f"explicit exclusion: {exclusion.reason}",
+                            matched_group=["exclusion", exclusion.id], checked=checked)
 
     # The earliest active grant that covers the full request wins; nothing
     # else lifts the default deny.
@@ -158,14 +170,29 @@ def authorize(session, org_id: str, principal: str, capability: str,
               .order_by(models.ScanGrant.created_at).all())
     capabilities_wanted = {c for c in capability.split(",") if c}
     conditional_skips: list[str] = []
+    environment_skips: list[str] = []
+    tool_skips: list[str] = []
     for grant in grants:
         granted_caps = {c.strip() for c in grant.capabilities.split(",") if c.strip()}
         if not capabilities_wanted <= granted_caps:
             continue
-        if grant.tools and tool and tool not in {t.strip() for t in grant.tools.split(",")}:
-            continue
-        if grant.environment and environment and grant.environment != environment:
-            continue
+        # A restriction the request cannot satisfy is not leniency: a grant
+        # narrowed to a tool or an environment applies only when the request
+        # names the same one. An unlabelled request matches nothing, because
+        # "we cannot prove this is the permitted case" is a deny.
+        if grant.tools:
+            allowed_tools = {t.strip() for t in grant.tools.split(",") if t.strip()}
+            if not tool:
+                tool_skips.append(f"{grant.id} ({', '.join(sorted(allowed_tools))})")
+                continue
+            if tool not in allowed_tools:
+                continue
+        if grant.environment:
+            if not environment:
+                environment_skips.append(f"{grant.id} ({grant.environment})")
+                continue
+            if grant.environment != environment:
+                continue
         if not (_aware(grant.valid_from) <= now <= _aware(grant.valid_until)):
             continue
         if grant.conditions is not None and grant.conditions.strip() not in ("", "{}", "null"):
@@ -189,6 +216,17 @@ def authorize(session, org_id: str, principal: str, capability: str,
             "evaluation the current policy does not support; denied until a "
             "supported evaluator exists",
             checked=checked)
+    if environment_skips:
+        return decision(
+            True,
+            f"grant(s) {environment_skips} are narrowed to an environment and "
+            "this request declares none; name the environment to use them",
+            checked=checked)
+    if tool_skips:
+        return decision(
+            True,
+            f"grant(s) {tool_skips} are narrowed to a tool and this request "
+            "names none; name the tool to use them", checked=checked)
     return decision(True, "no active grant covers the requested capability+targets",
                     checked=checked)
 

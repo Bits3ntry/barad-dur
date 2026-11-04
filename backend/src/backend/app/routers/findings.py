@@ -1,21 +1,14 @@
-<<<<<<< Updated upstream
 """Finding endpoints: list, manual creation, ingest, lifecycle, comments,
 evidence, ownership."""
 import hashlib
-=======
-"""Finding endpoints: list, multi-kind ingest, status lifecycle (F2)."""
->>>>>>> Stashed changes
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-<<<<<<< Updated upstream
+from backend.app.versions import pick_version
 from backend.app import auth, ci, incidents, models, projects as projects_ref, severity as severity_vocab, vulns
-=======
-from backend.app import auth, ci, incidents, models, vulns
->>>>>>> Stashed changes
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
@@ -30,8 +23,7 @@ def _resolve_or_404(session: Session, org_id: str, project: str, version: str):
                    .filter_by(org_id=org_id, slug=project).one_or_none())
     if project_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
-    version_row = (session.query(models.ProjectVersion)
-                   .filter_by(project_id=project_row.id, version=version).one_or_none())
+    version_row = (pick_version(session, project_row.id, version))
     if version_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
     return project_row, version_row
@@ -120,20 +112,16 @@ def get_finding(finding_id: str,
         if finding.component_id else None
     vulnerability = session.get(models.Vulnerability, finding.vulnerability_id) \
         if finding.vulnerability_id else None
-<<<<<<< Updated upstream
     # The run that last evaluated this finding is where a reviewer goes to see
     # the code and the diff; without it the viewer is a dead end.
     run = (session.get(models.AnalysisRun, finding.last_evaluated_run_id)
            if finding.last_evaluated_run_id else None)
-=======
->>>>>>> Stashed changes
     return {"data": {
         "id": finding.id, "kind": finding.kind, "status": finding.status,
         "status_reason": finding.status_reason, "severity": finding.severity,
         "title": finding.title, "detail": finding.detail,
         "tool": finding.tool, "rule_id": finding.rule_id,
         "path": finding.path, "line": finding.line,
-<<<<<<< Updated upstream
         "assignee": finding.assignee, "cwe": finding.cwe,
         "impact": finding.impact, "recommendation": finding.recommendation,
         "reproduction": finding.reproduction,
@@ -144,21 +132,15 @@ def get_finding(finding_id: str,
                      .filter_by(finding_id=finding.id).count()),
         "attachments": (session.query(models.FindingAttachment)
                         .filter_by(finding_id=finding.id).count()),
-=======
-        "fingerprint": finding.fingerprint, "first_seen_at": finding.first_seen_at.isoformat(),
->>>>>>> Stashed changes
         "component_purl": (component.purl or component.identity_key) if component else None,
         "source_id": vulnerability.source_id if vulnerability else None,
         "cve_id": vulnerability.cve_id if vulnerability else None,
         "source_url": vulnerability.url if vulnerability else None,
-<<<<<<< Updated upstream
         "analysis_run": ({
             "id": run.id, "revision": run.revision, "branch": run.branch,
             "pull_request": run.pull_request, "tool": run.tool,
             "coverage": run.coverage,
         } if run else None),
-=======
->>>>>>> Stashed changes
     }}
 
 
@@ -332,7 +314,6 @@ def list_findings(
     project: str | None = Query(default=None),
     version: str | None = Query(default=None),
     kind: str | None = Query(default=None),
-<<<<<<< Updated upstream
     q: str | None = Query(default=None, description="title / rule / path / cve text"),
     severity: str | None = Query(default=None),
     priority: str | None = Query(default=None),
@@ -343,11 +324,6 @@ def list_findings(
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
-=======
-    include_suppressed: bool = Query(default=False,
-                                     description="approved suppressions leave the default view"),
-    status_filter: str | None = Query(default=None, alias="status"),
->>>>>>> Stashed changes
     org: models.Organization = Depends(auth.require_org),
     session: Session = Depends(get_session),
 ):
@@ -358,7 +334,6 @@ def list_findings(
         query = query.filter(models.Finding.status != "suppressed")
     if status_filter:
         query = query.filter(models.Finding.status == status_filter)
-<<<<<<< Updated upstream
     if severity:
         query = query.filter(models.Finding.severity.in_(
             severity_vocab.raw_variants(severity)))
@@ -377,18 +352,11 @@ def list_findings(
                          | models.Finding.path.ilike(needle)
                          | models.Vulnerability.cve_id.ilike(needle)
                          | models.Vulnerability.source_id.ilike(needle)))
-=======
->>>>>>> Stashed changes
     if project or version:
         if not (project and version):
             # Project-only filter is a legitimate view: every version's
             # findings, no completeness requirement on the pair.
-<<<<<<< Updated upstream
             project_row = projects_ref.by_ref(session, org.id, project)
-=======
-            project_row = (session.query(models.Project)
-                           .filter_by(org_id=org.id, slug=project).one_or_none())
->>>>>>> Stashed changes
             if project_row is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
             query = query.filter(models.Finding.project_id == project_row.id)
@@ -401,13 +369,9 @@ def list_findings(
             query = query.filter(models.Finding.last_seen_version_id == project_version.id)
     if kind:
         query = query.filter(models.Finding.kind == kind)
-<<<<<<< Updated upstream
     total = query.count()
     rows = (query.order_by(models.Finding.last_seen_at.desc())
             .offset(offset).limit(limit).all())
-=======
-    rows = query.order_by(models.Finding.last_seen_at.desc()).all()
->>>>>>> Stashed changes
 
     data = []
     for finding in rows:
@@ -435,38 +399,23 @@ def list_findings(
             "project_id": finding.project_id,
             "priority": finding.priority,
             "priority_reason": finding.priority_reason,
-<<<<<<< Updated upstream
             "assignee": finding.assignee,
-=======
->>>>>>> Stashed changes
             "sla_deadline": finding.sla_deadline.isoformat() if finding.sla_deadline else None,
             "first_seen_at": finding.first_seen_at.isoformat(),
             "last_seen_at": finding.last_seen_at.isoformat(),
         })
-<<<<<<< Updated upstream
     return {"data": data, "total": total, "limit": limit, "offset": offset}
 
 
 def _resolve(session, org_id: str, project: str, version: str):
     project_row = projects_ref.by_ref(session, org_id, project)
-=======
-    return {"data": data, "total": len(data)}
-
-
-def _resolve(session, org_id: str, project: str, version: str):
-    project_row = (session.query(models.Project)
-                   .filter_by(org_id=org_id, slug=project).one_or_none())
->>>>>>> Stashed changes
     if project_row is None:
         return None
-    return (session.query(models.ProjectVersion)
-            .filter_by(project_id=project_row.id, version=version).one_or_none())
+    return (pick_version(session, project_row.id, version))
 
 
 def _version(session, project_row, version: str):
-    return (session.query(models.ProjectVersion)
-            .filter_by(project_id=project_row.id, version=version).one_or_none())
-<<<<<<< Updated upstream
+    return (pick_version(session, project_row.id, version))
 
 
 # ─────────────── v0: manual findings, ownership, comments, evidence ───────────────
@@ -721,5 +670,3 @@ def finding_history(finding_id: str,
             "first_seen_at": finding.first_seen_at.isoformat(),
             "last_seen_at": finding.last_seen_at.isoformat(),
             "last_evaluated_run_id": finding.last_evaluated_run_id}
-=======
->>>>>>> Stashed changes

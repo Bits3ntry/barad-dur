@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from backend.app.versions import pick_version
 from backend.app import analysis, auth, models, projects as projects_ref
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
@@ -147,9 +148,7 @@ def record_run(payload: RunIn = None,
     repository_id = _resolve_repository(session, org.id, payload.repository_id)
     version_row = None
     if payload.version:
-        version_row = (session.query(models.ProjectVersion)
-                       .filter_by(project_id=project_row.id,
-                                  version=payload.version).one_or_none())
+        version_row = (pick_version(session, project_row.id, payload.version))
         if version_row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
     run = models.AnalysisRun(
@@ -282,9 +281,7 @@ def import_report(payload: ImportIn = None,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     version_row = None
     if payload.version:
-        version_row = (session.query(models.ProjectVersion)
-                       .filter_by(project_id=project_row.id,
-                                  version=payload.version).one_or_none())
+        version_row = (pick_version(session, project_row.id, payload.version))
         if version_row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
 

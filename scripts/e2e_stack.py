@@ -75,8 +75,25 @@ def main() -> int:
     if not dist.is_dir():
         print("frontend/dist missing: run `npm run build --prefix frontend` first")
         return 2
+    # SPA fallback, like the nginx console: a deep link such as /startup or
+    # /invite must serve index.html, not 404 — otherwise the onboarding flow is
+    # only reachable from the root URL and this harness cannot exercise it.
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
-    app.mount("/", StaticFiles(directory=str(dist), html=True), name="console")
+
+    app.mount("/assets", StaticFiles(directory=str(dist / "assets")), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def console(path: str):
+        # An unknown API route stays a 404: the fallback exists for the SPA's
+        # own paths, and swallowing a typo in a data call would hide a real bug.
+        if path.startswith("api/") or path in {"healthz", "openapi.json"}:
+            raise HTTPException(status_code=404, detail="not found")
+        candidate = (dist / path).resolve()
+        if path and candidate.is_file() and dist.resolve() in candidate.parents:
+            return FileResponse(candidate)
+        return FileResponse(dist / "index.html")
 
     state = Path(tempfile.gettempdir()) / "barad_e2e_state.json"
     state.write_text(json.dumps({"api_key": key, "db": db_path,

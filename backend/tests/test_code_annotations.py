@@ -169,7 +169,7 @@ def test_annotation_cap_is_fifty(annot_client):
 
     original = scm_client._request
 
-    def fake(method, path, payload=None, timeout=10.0):
+    def fake(method, path, payload=None, timeout=10.0, creds=None):
         _Capture.payload = payload
         return {"id": 1}
 

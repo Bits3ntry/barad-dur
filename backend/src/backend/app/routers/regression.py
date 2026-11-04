@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from backend.app.versions import pick_version
 from backend.app import auth, authorization, models, redaction
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
@@ -109,9 +110,7 @@ def create_test(payload: TestIn = None,
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
         project_id = project.id
         if payload.version:
-            pv = (session.query(models.ProjectVersion)
-                  .filter_by(project_id=project.id, version=payload.version)
-                  .one_or_none())
+            pv = (pick_version(session, project.id, payload.version))
             if pv is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "version not found")
             pv_id = pv.id

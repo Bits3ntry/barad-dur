@@ -306,6 +306,8 @@ def decide(targets: list, exclusions: list, target_type: str, value: str,
         raise ScopeValueError(f"capability must be one of {sorted(CAPABILITIES)}")
     now = _utcnow()
     for row in exclusions:
+        if getattr(row, "status", "active") != "active":
+            continue
         if not _row_covers(row, target_type, value):
             continue
         expires = _aware(getattr(row, "expires_at", None))

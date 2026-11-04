@@ -58,11 +58,7 @@ def test_bootstrap_requires_token_and_is_single_use(auth_client):
     created = _bootstrap(test_client)
     assert created.status_code == 200, created.text
     assert created.json()["data"]["role"] == "owner"
-<<<<<<< Updated upstream
     assert created.json()["session"]["access_token"]
-=======
-    assert created.json()["session"]["token"]
->>>>>>> Stashed changes
 
     again = _bootstrap(test_client, email="second@example.dev")
     assert again.status_code == 409
@@ -74,6 +70,52 @@ def test_bootstrap_requires_token_and_is_single_use(auth_client):
     assert short.status_code == 422
 
 
+def test_bootstrap_rejects_a_unicode_setup_token_without_crashing(auth_client, monkeypatch):
+    test_client, _headers, _other = auth_client
+    monkeypatch.setenv("BOOTSTRAP_TOKEN", "instalación-segura")
+
+    response = test_client.post("/api/v1/auth/bootstrap", json={
+        "org_slug": "unicode", "email": "owner@unicode.dev", "password": "correct horse",
+    }, headers={"X-Bootstrap-Token": "wrong"})
+
+    assert response.status_code == 401
+
+
+def test_first_setup_creates_organization_and_owner(auth_client):
+    test_client, _headers, _other = auth_client
+
+    before = test_client.get("/api/v1/auth/bootstrap/status")
+    assert before.status_code == 200
+    assert before.json()["data"] == {
+        "available": True,
+        "organization_exists": True,
+        "setup_enabled": True,
+    }
+
+    created = test_client.post("/api/v1/auth/bootstrap", json={
+        "org_slug": "north-star",
+        "org_name": "North Star Security",
+        "email": "owner@northstar.dev",
+        "password": "correct horse",
+        "display_name": "North Star Owner",
+    }, headers={"X-Bootstrap-Token": BOOTSTRAP})
+
+    assert created.status_code == 200, created.text
+    assert created.json()["data"]["role"] == "owner"
+    assert created.json()["session"]["access_token"]
+
+    session = session_factory()()
+    try:
+        org = session.query(models.Organization).filter_by(slug="north-star").one()
+        assert org.name == "North Star Security"
+    finally:
+        session.close()
+
+    after = test_client.get("/api/v1/auth/bootstrap/status")
+    assert after.status_code == 200
+    assert after.json()["data"]["available"] is False
+
+
 def test_login_and_me(auth_client):
     test_client, _headers, _other = auth_client
     _bootstrap(test_client)
@@ -82,11 +124,7 @@ def test_login_and_me(auth_client):
     assert bad.json()["detail"] == "invalid credentials"
 
     session = _login(test_client).json()["session"]
-<<<<<<< Updated upstream
     bearer = {"Authorization": f"Bearer {session['access_token']}"}
-=======
-    bearer = {"Authorization": f"Bearer {session['token']}"}
->>>>>>> Stashed changes
     me = test_client.get("/api/v1/auth/me", headers=bearer).json()["data"]
     assert me["kind"] == "user"
     assert me["role"] == "owner"
@@ -109,11 +147,7 @@ def test_viewer_is_read_only_and_analyst_can_write(auth_client):
     test_client, headers, _other = auth_client
     _bootstrap(test_client)
     owner_session = _login(test_client).json()["session"]
-<<<<<<< Updated upstream
     owner = {"Authorization": f"Bearer {owner_session['access_token']}"}
-=======
-    owner = {"Authorization": f"Bearer {owner_session['token']}"}
->>>>>>> Stashed changes
 
     viewer = test_client.post("/api/v1/auth/users", json={
         "email": "viewer@example.dev", "password": "viewer-pass",
@@ -126,17 +160,10 @@ def test_viewer_is_read_only_and_analyst_can_write(auth_client):
 
     viewer_bearer = {"Authorization": "Bearer " +
                      _login(test_client, "viewer@example.dev", "viewer-pass")
-<<<<<<< Updated upstream
                      .json()["session"]["access_token"]}
     analyst_bearer = {"Authorization": "Bearer " +
                       _login(test_client, "analyst@example.dev", "analyst-pass")
                       .json()["session"]["access_token"]}
-=======
-                     .json()["session"]["token"]}
-    analyst_bearer = {"Authorization": "Bearer " +
-                      _login(test_client, "analyst@example.dev", "analyst-pass")
-                      .json()["session"]["token"]}
->>>>>>> Stashed changes
 
     # viewer reads but cannot write
     assert test_client.get("/api/v1/findings", headers=viewer_bearer).status_code == 200
@@ -167,21 +194,13 @@ def test_viewer_is_read_only_and_analyst_can_write(auth_client):
 def test_disable_user_revokes_sessions(auth_client):
     test_client, headers, _other = auth_client
     _bootstrap(test_client)
-<<<<<<< Updated upstream
     owner = {"Authorization": "Bearer " + _login(test_client).json()["session"]["access_token"]}
-=======
-    owner = {"Authorization": "Bearer " + _login(test_client).json()["session"]["token"]}
->>>>>>> Stashed changes
     created = test_client.post("/api/v1/auth/users", json={
         "email": "temp@example.dev", "password": "temp-pass-1",
         "role": "analyst", "actor": "owner@example.dev"}, headers=owner).json()["data"]
     temp_bearer = {"Authorization": "Bearer " +
                    _login(test_client, "temp@example.dev", "temp-pass-1")
-<<<<<<< Updated upstream
                    .json()["session"]["access_token"]}
-=======
-                   .json()["session"]["token"]}
->>>>>>> Stashed changes
     assert test_client.get("/api/v1/auth/me", headers=temp_bearer).status_code == 200
 
     disabled = test_client.patch(f"/api/v1/auth/users/{created['id']}", json={
@@ -197,11 +216,7 @@ def test_disable_user_revokes_sessions(auth_client):
 def test_tenant_isolation_of_users(auth_client):
     test_client, _headers, other_headers = auth_client
     _bootstrap(test_client)
-<<<<<<< Updated upstream
     owner = {"Authorization": "Bearer " + _login(test_client).json()["session"]["access_token"]}
-=======
-    owner = {"Authorization": "Bearer " + _login(test_client).json()["session"]["token"]}
->>>>>>> Stashed changes
     test_client.post("/api/v1/auth/users", json={
         "email": "member@example.dev", "password": "member-pass",
         "role": "analyst", "actor": "owner@example.dev"}, headers=owner)
@@ -212,7 +227,6 @@ def test_tenant_isolation_of_users(auth_client):
     # and a session token cannot read another org's audit trail
     bearer = owner
     assert test_client.get("/api/v1/audit", headers=bearer).status_code == 200
-<<<<<<< Updated upstream
 
 def test_refresh_token_renews_and_rotates(auth_client):
     test_client, _headers, _other = auth_client
@@ -239,5 +253,3 @@ def test_refresh_token_renews_and_rotates(auth_client):
     # the refresh token is single-use
     again = test_client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
     assert again.status_code == 401
-=======
->>>>>>> Stashed changes

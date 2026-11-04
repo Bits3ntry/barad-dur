@@ -44,6 +44,16 @@ class Organization(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
     slug: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(255))
+    # Profile captured during onboarding. Free text on purpose: the product the
+    # organization runs is whatever it calls it, and none of these fields feed
+    # analysis or authorization.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    website: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # `logo` holds either an https URL or a small inline data URL (the console
+    # downscales the file it uploads). Never fetched server-side.
+    logo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
 
 
 class ApiKey(Base, TimestampMixin):
@@ -65,24 +75,36 @@ class Project(Base, TimestampMixin):
     org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
     name: Mapped[str] = mapped_column(String(255))
     slug: Mapped[str] = mapped_column(String(255))
-<<<<<<< Updated upstream
+    # Inventory context: what this product is for, and who answers for it. Free
+    # text because a project is an organizational unit, not a schema.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # A product or account that owns several repositories ("Aurea" holds the
     # frontend, backend, fx and document services). Free text on purpose: the
     # grouping is whatever the organization calls it, and it can be re-assigned
     # without a migration.
     group_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
-=======
->>>>>>> Stashed changes
 
 
 class ProjectVersion(Base, TimestampMixin):
+    """A version of one code unit.
+
+    `component_id` NULL means a product-wide release (several components shipped
+    as one train). Scoping it to the component is what lets the backend's SBOM
+    and the web's SBOM carry the same label without colliding.
+    """
+
     __tablename__ = "project_versions"
     __table_args__ = (
-        UniqueConstraint("project_id", "version", name="uq_project_versions_pair"),
+        UniqueConstraint("project_id", "component_id", "version",
+                         name="uq_project_version_scope"),
+        Index("ix_project_versions_component_id", "component_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
     project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"))
+    component_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("application_components.id"), nullable=True)
     version: Mapped[str] = mapped_column(String(255))
 
 
@@ -94,12 +116,9 @@ class SbomImport(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
     project_version_id: Mapped[str] = mapped_column(String(36), ForeignKey("project_versions.id"))
-<<<<<<< Updated upstream
     # The exact build this document describes, when the caller declares it.
     artifact_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("artifacts.id"), nullable=True, index=True)
-=======
->>>>>>> Stashed changes
     content_sha256: Mapped[str] = mapped_column(String(64))
     source: Mapped[str] = mapped_column(String(32), default="api")
     filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -199,7 +218,6 @@ class Finding(Base, TimestampMixin):
     rule_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     line: Mapped[int | None] = mapped_column(Integer, nullable=True)
-<<<<<<< Updated upstream
     # Owner and narrative fields the detail screen owes the reader. `assignee`
     # is a free identity (email or principal name) so API-key and human actors
     # share one column; My work resolves it against the caller.
@@ -211,8 +229,6 @@ class Finding(Base, TimestampMixin):
     # Last run that actually evaluated this finding; closure requires it.
     last_evaluated_run_id: Mapped[str | None] = mapped_column(
         String(36), nullable=True, index=True)
-=======
->>>>>>> Stashed changes
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -430,7 +446,6 @@ class Asset(Base):
     value: Mapped[str] = mapped_column(String(1024))
     source: Mapped[str] = mapped_column(String(64))
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-<<<<<<< Updated upstream
     # Inventory ownership. `classification_status` is deliberately separate from
     # scope authorization: confirming an asset is ours never grants a scan.
     project_id: Mapped[str | None] = mapped_column(
@@ -441,8 +456,6 @@ class Asset(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
-=======
->>>>>>> Stashed changes
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -507,7 +520,6 @@ class CiRunFinding(Base, TimestampMixin):
 
 
 class ScopeTarget(Base, TimestampMixin):
-<<<<<<< Updated upstream
     """What the organization may audit or analyze: static positive list.
 
     A target is a *declaration*, not a running job: `capabilities` records what
@@ -515,10 +527,6 @@ class ScopeTarget(Base, TimestampMixin):
     checks before touching anything. Wildcards are rules — they never create a
     host; a concrete target links the canonical asset with source `scope`.
     """
-=======
-    """What the organization may audit or analyze: static positive list."""
-
->>>>>>> Stashed changes
 
     __tablename__ = "scope_targets"
     __table_args__ = (
@@ -531,7 +539,6 @@ class ScopeTarget(Base, TimestampMixin):
     value: Mapped[str] = mapped_column(String(1024))
     status: Mapped[str] = mapped_column(String(32), default="active")
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
-<<<<<<< Updated upstream
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     source: Mapped[str] = mapped_column(String(32), default="manual")
@@ -544,23 +551,17 @@ class ScopeTarget(Base, TimestampMixin):
     include_apex: Mapped[bool] = mapped_column(Boolean, default=False)
     asset_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("assets.id"), nullable=True, index=True)
-=======
->>>>>>> Stashed changes
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ScopeExclusion(Base, TimestampMixin):
-<<<<<<< Updated upstream
     """Negative scope entries; resolved view subtracts these from targets.
 
     An effective exclusion always wins, including over a wildcard target that
     covers it. Excluding a resource never deletes its inventory and never
     resolves its findings.
     """
-=======
-    """Negative scope entries; resolved view subtracts these from targets."""
->>>>>>> Stashed changes
 
     __tablename__ = "scope_exclusions"
     __table_args__ = (
@@ -572,14 +573,11 @@ class ScopeExclusion(Base, TimestampMixin):
     target_type: Mapped[str] = mapped_column(String(32))
     value: Mapped[str] = mapped_column(String(1024))
     reason: Mapped[str] = mapped_column(Text)
-<<<<<<< Updated upstream
     owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source: Mapped[str] = mapped_column(String(32), default="manual")
     status: Mapped[str] = mapped_column(String(32), default="active")
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
-=======
->>>>>>> Stashed changes
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -675,7 +673,6 @@ class Deployment(Base, TimestampMixin):
         String(36), ForeignKey("services.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(255))
     environment: Mapped[str] = mapped_column(String(64), default="production")
-<<<<<<< Updated upstream
     # What exactly is running here. A deployment points at an artifact (and
     # through it at a version); "in production" is read from these rows, never
     # from a flag on the version.
@@ -683,13 +680,26 @@ class Deployment(Base, TimestampMixin):
         String(36), ForeignKey("artifacts.id"), nullable=True, index=True)
     application_component_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("application_components.id"), nullable=True)
+    # Inventory layer (onboarding v2): what the team *declares* is running here,
+    # before any scan exists. `version_label` is the declared version; an import
+    # or a health probe may confirm or replace it, and `source` says which.
+    version_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The version row this deployment runs. `version_label` mirrors it for
+    # display; matching by string is what used to orphan a deployment on rename.
+    version_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_versions.id"), nullable=True, index=True)
+    exposure: Mapped[str] = mapped_column(String(16), default="unknown")
+    requires_auth: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[str] = mapped_column(String(24), default="manual")
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    last_check_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    last_check_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(24), default="active", index=True)
     deployed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
     retired_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
-=======
->>>>>>> Stashed changes
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1250,20 +1260,16 @@ class User(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(16), default="active")
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
-<<<<<<< Updated upstream
     # Optional second factor. A secret exists from enrolment, but only
     # `totp_enabled_at` makes it required at login — that is what separates an
     # abandoned enrolment from an active one.
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     totp_enabled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
-=======
->>>>>>> Stashed changes
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-<<<<<<< Updated upstream
 class MfaChallenge(Base):
     """Short-lived half-session between "password ok" and "code ok"."""
 
@@ -1295,8 +1301,6 @@ class MfaRecoveryCode(Base):
         DateTime(timezone=True), nullable=True)
 
 
-=======
->>>>>>> Stashed changes
 class UserSession(Base):
     __tablename__ = "user_sessions"
 
@@ -1309,13 +1313,10 @@ class UserSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
-<<<<<<< Updated upstream
     refresh_token_hash: Mapped[str | None] = mapped_column(
         String(64), nullable=True)
     refresh_token_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
-=======
->>>>>>> Stashed changes
 
 
 class OidcState(Base):
@@ -1394,7 +1395,6 @@ class NotificationChannel(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-<<<<<<< Updated upstream
 
 
 class Notification(Base, TimestampMixin):
@@ -1428,9 +1428,6 @@ class NotificationPreference(Base, TimestampMixin):
     jira_sync_error: Mapped[bool] = mapped_column(Boolean, default=True)
 
 class NotificationDelivery(Base, TimestampMixin):
-=======
-class NotificationDelivery(Base):
->>>>>>> Stashed changes
     __tablename__ = "notification_deliveries"
     __table_args__ = (UniqueConstraint("org_id", "dedupe_key", name="uq_delivery_dedupe"),)
 
@@ -1463,7 +1460,6 @@ class SbomBaseline(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-<<<<<<< Updated upstream
 class TrivyDbUpdate(Base, TimestampMixin):
     """Record of Trivy DB fetch/update; called by the offline updater."""
 
@@ -2003,5 +1999,196 @@ class WorkItem(Base, TimestampMixin):
     finding_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("findings.id"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-=======
->>>>>>> Stashed changes
+
+
+class OrganizationInvitation(Base, TimestampMixin):
+    """A pending seat: the email is the identity until the invite is accepted.
+
+    The raw token is shown once to whoever sent the invitation and stored only
+    as a SHA-256 hash, exactly like a session. Repeating an invitation for the
+    same address reuses the row and rotates the token, so the table never shows
+    two live links for one person.
+    """
+
+    __tablename__ = "org_invitations"
+    __table_args__ = (
+        UniqueConstraint("org_id", "email", name="uq_org_invitations_email"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    email: Mapped[str] = mapped_column(String(320))
+    # Same vocabulary as users.role (`viewer`/`analyst`/`admin`); the console
+    # renders those as Viewer / Member / Administrator.
+    role: Mapped[str] = mapped_column(String(16), default="analyst")
+    team_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("teams.id"), nullable=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    invited_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    last_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    last_delivery: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class Team(Base, TimestampMixin):
+    """Optional grouping that scopes what a member can see.
+
+    A team grants reach over its assets and findings; a member with no team and
+    no organization-wide visibility therefore sees nothing. Teams never widen a
+    role — a viewer in a team is still a viewer.
+    """
+
+    __tablename__ = "teams"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_teams_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+
+
+class TeamMember(Base):
+    """Team ↔ user N:M. A pending invitation joins the team on acceptance."""
+
+    __tablename__ = "team_members"
+    __table_args__ = (
+        UniqueConstraint("team_id", "user_id", name="uq_team_members_pair"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("teams.id"), index=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    added_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+
+
+class IntegrationConnection(Base, TimestampMixin):
+    """One outbound connection (code host or ticket tracker) owned by an org.
+
+    `kind` separates the two onboarding surfaces — "scm" (list/clone/analyse,
+    never push) and "tickets" (import/export). The credential is encrypted with
+    the platform key before it reaches this table and is never returned by the
+    API: `_connection_data` exposes only the account, provider and status.
+    """
+
+    __tablename__ = "integration_connections"
+    __table_args__ = (
+        UniqueConstraint("org_id", "kind", "provider", "base_url",
+                         name="uq_integration_connections_target"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    kind: Mapped[str] = mapped_column(String(16), default="scm")
+    provider: Mapped[str] = mapped_column(String(32), default="github")
+    label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    base_url: Mapped[str] = mapped_column(String(255), default="")
+    account: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    secret_cipher: Mapped[str] = mapped_column(Text)
+    # Provider-specific non-secret extras (Jira project key, default branch…).
+    config: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Declared by the operator and enforced by us: no connection is ever used
+    # to write. Kept as a column so a future read/write mode must be explicit.
+    access: Mapped[str] = mapped_column(String(16), default="read")
+    verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+
+
+class PlatformSecret(Base):
+    """Key material that has to live somewhere when the env does not provide it.
+
+    Production sets PLATFORM_SECRET_KEY so the key never shares storage with the
+    data it protects; a fresh installation without it gets a generated key here
+    and the onboarding mail status says so.
+    """
+
+    __tablename__ = "platform_secrets"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PlatformSetting(Base):
+    """Deployment-wide configuration that an operator can change at runtime.
+
+    Currently one row: `smtp`. The non-secret fields live as JSON in `value`;
+    a password, when there is one, is sealed with the platform key exactly like
+    an integration credential. Environment variables remain the fallback — a
+    stored row, once written, is explicit and wins.
+    """
+
+    __tablename__ = "platform_settings"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="{}")
+    secret_cipher: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+
+
+class ComponentRepository(Base):
+    """Component ↔ repository edge. A repository can back several components
+    (a monorepo), and a component can be built from several repositories."""
+
+    __tablename__ = "component_repositories"
+    __table_args__ = (
+        UniqueConstraint("component_id", "repository_id",
+                         name="uq_component_repository"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    component_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("application_components.id"), index=True)
+    repository_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("repositories.id"), index=True)
+    relation: Mapped[str] = mapped_column(String(32), default="code")
+    added_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+
+class HealthProbe(Base):
+    """Optional, read-only version check for one deployment.
+
+    The endpoint is a GET (never a write to the target), so a probe can run on a
+    schedule without any authorization grant. The token is sealed like every
+    other credential and never returned.
+    """
+
+    __tablename__ = "health_probes"
+    __table_args__ = (UniqueConstraint("deployment_id", name="uq_health_probe_deployment"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    deployment_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("deployments.id"), index=True)
+    url: Mapped[str] = mapped_column(String(1024))
+    token_cipher: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Dotted paths into the JSON body; "auto" searches the usual version keys.
+    version_path: Mapped[str] = mapped_column(String(128), default="auto")
+    status_path: Mapped[str] = mapped_column(String(128), default="status")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    last_ok_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

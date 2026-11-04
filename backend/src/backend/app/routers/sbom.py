@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.app.versions import pick_version
 from backend.app import auth, ingest, models
 from backend.app.db import get_session
 
@@ -19,10 +20,7 @@ class ReceiptResponse(BaseModel):
     status: str
     import_id: str
     receipt: dict
-<<<<<<< Updated upstream
     artifact: dict | None = None
-=======
->>>>>>> Stashed changes
 
 
 @router.post("/sbom", response_model=ReceiptResponse)
@@ -30,15 +28,15 @@ def upload_sbom(
     body: bytes = Body(...),
     project: str | None = Query(default=None, description="project name override"),
     version: str | None = Query(default=None, description="project version override"),
+    component: str | None = Query(
+        default=None,
+        description="component the version belongs to (name or slug); omit for a product-wide release"),
     source: str = Query(default="api"),
     filename: str | None = Query(default=None),
-<<<<<<< Updated upstream
     artifact_digest: str | None = Query(default=None, max_length=128,
                                         description="digest of the exact build"),
     artifact_name: str | None = Query(default=None, max_length=255),
     artifact_provenance: str | None = Query(default=None, max_length=255),
-=======
->>>>>>> Stashed changes
     org: models.Organization = Depends(auth.require_org),
     session: Session = Depends(get_session),
 ):
@@ -57,10 +55,10 @@ def upload_sbom(
     try:
         result = ingest.ingest_document(
             session, org.id, body, source=source, filename=filename,
-            project_override=project, version_override=version)
+            project_override=project, version_override=version,
+            component_override=component)
     except (ingest.SbomDocumentError, ValueError, json.JSONDecodeError) as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(error)) from None
-<<<<<<< Updated upstream
     receipt = session.get(models.SbomImport, result["import_id"])
     version = session.get(models.ProjectVersion, receipt.project_version_id)
     artifact = None
@@ -88,12 +86,6 @@ def upload_sbom(
                             "project_version_id": artifact.project_version_id}
                            if artifact else None)
     return JSONResponse(status_code=status_code, content=payload)
-=======
-    session.commit()
-    status_code = 201 if result["status"] == "created" else 200
-    return JSONResponse(status_code=status_code, content=ReceiptResponse.model_validate(
-        result, from_attributes=True).model_dump())
->>>>>>> Stashed changes
 
 
 @router.get("/imports/{import_id}")
@@ -125,8 +117,7 @@ def compare_versions(project: str = Query(...), from_version: str = Query(...),
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
 
     def load(version_label: str) -> dict:
-        pv = (session.query(models.ProjectVersion)
-              .filter_by(project_id=proj.id, version=version_label).one_or_none())
+        pv = (pick_version(session, proj.id, version_label))
         if pv is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 f"version not found: {version_label}")
@@ -164,8 +155,7 @@ def _version_of(session, org_id: str, project: str, version: str):
                    .filter_by(org_id=org_id, slug=project).one_or_none())
     if project_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
-    pv = (session.query(models.ProjectVersion)
-          .filter_by(project_id=project_row.id, version=version).one_or_none())
+    pv = (pick_version(session, project_row.id, version))
     if pv is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
     return project_row, pv

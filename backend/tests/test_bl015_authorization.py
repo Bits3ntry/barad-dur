@@ -188,6 +188,21 @@ def test_env_tool_conditions_mismatch(client):
                          environment="staging", tool="nuclei")
     assert matched.json()["decision"] == "allow"
 
+    # A narrowed grant applies only to the named axis. A request that names
+    # neither is not "close enough" — it is denied, and the reason says why.
+    env_unlabelled = _authorize(test_client, headers, "runner-01",
+                                "active_verification",
+                                [("domain", "staging.empresa.com")], tool="nuclei")
+    assert env_unlabelled.json()["decision"] == "deny"
+    assert "environment" in env_unlabelled.json()["reason"]
+
+    tool_unlabelled = _authorize(test_client, headers, "runner-01",
+                                 "active_verification",
+                                 [("domain", "staging.empresa.com")],
+                                 environment="staging")
+    assert tool_unlabelled.json()["decision"] == "deny"
+    assert "tool" in tool_unlabelled.json()["reason"]
+
 
 def test_expiry_and_revocation_midrun(client):
     test_client, headers, _other, session, _org = client

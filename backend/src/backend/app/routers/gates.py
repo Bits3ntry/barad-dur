@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from backend.app.versions import pick_version
 from backend.app import auth, gates, models
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
@@ -100,9 +101,7 @@ def evaluate_gate(payload: EvaluateIn = None,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     version = None
     if payload.version is not None:
-        version = (session.query(models.ProjectVersion)
-                   .filter_by(project_id=project.id, version=payload.version)
-                   .one_or_none())
+        version = (pick_version(session, project.id, payload.version))
         if version is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
     result = gates.evaluate(session, org.id, project, version)

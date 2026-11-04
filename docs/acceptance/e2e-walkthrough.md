@@ -8,7 +8,7 @@ Two scripts back it:
 
 | Script | What it is for |
 |---|---|
-| `scripts/e2e_stack.py` | Empty organization (`bitsentry`) + the built console on `127.0.0.1:8099`. Prints the API key and writes `barad_e2e_state.json`. |
+| `scripts/e2e_stack.py` | Empty organization (`bitsentry`) + the built console on `127.0.0.1:8099`. Prints the API key and writes `barad_e2e_state.json`. It serves the SPA with a fallback (deep links such as `/startup` and `/invite` return `index.html`, unknown `/api/*` still 404). |
 | `scripts/demo_v0.py` | The same stack with a **labelled fixture set** already loaded, for API-level checks and for a five-minute look at a populated console. |
 
 ```bash
@@ -51,6 +51,48 @@ be walked:
 | 15 | Settings shows *sign-in and security* | with an API key: "second factor needs a signed-in user"; the SSO line names the provider when `OIDC_*` is set, otherwise the four variables to set |
 | 16 | Sign in with email+password → Administration → *My security* → start enrolment → scan the QR/manual secret → confirm a code | factor becomes `enabled`, eight recovery codes appear **once**, and the next login asks for a code before issuing a session (wrong code rejected, recovery code accepted once) |
 | 17 | Notifications → *Delivery channels* → kind `slack` → paste a webhook URL → **test** | `test delivered … HTTP 200`; the receiver gets `{text, blocks}`, not the signed generic envelope |
+
+## First run: onboarding (`/startup`)
+
+With zero human users the console opens a single setup form (workspace + first
+owner + setup code). Everything after that lives in one six-step walk-through,
+reachable as `/startup#step=2…6` until it is finished. Each step saves
+immediately, so moving back and forth (or reloading) never loses work.
+
+| # | Step | Expected |
+|---|---|---|
+| 18 | Organization details: name, logo, description, website | Logo is downscaled to 128 px and stored with the organization (data URL); the sidebar shows it. A partial save changes only what differs — the audit row lists the fields that actually moved |
+| 19 | Invite your team: pick a role in the table, enter an email, choose a team | Seat appears as `pending` with role label Viewer / Member / Administrator and the team name. Teammates can be invited later from Members |
+| 20 | Delivery of an invitation | With a relay configured (Settings → *deployment email*, or the inline panel on the invitation step): `email` delivery and a `last_sent_at`. **Without a relay**: `manual_link`, the single-use link is shown once (`/invite#token=…`) and the copy says so instead of claiming a mail was sent. `new link` rotates the token and kills the previous one. When the mail was delivered the link is not displayed — it is a fallback, not a receipt |
+| 20b | Settings → *deployment email*: save host/port/from, send a test | Status reads `Delivery: host:port · saved here (wins over the environment) · last changed by …`; the test answers `Test delivered to … via the saved configuration`; the password is never returned. *use environment instead* drops the row and `SMTP_*` takes over again. Email notification channels use the same relay |
+| 21 | Open the invite link in a clean session, set a name and password | Public `/invite` screen shows organization, role and the invited email; accepting creates the account with that role, joins the team, mints a session and lands on the dashboard. A revoked/expired/accepted token is refused |
+| 22 | Connect code: GitHub / GitLab / Gitea | The credential is verified by a **GET** of the token owner's identity, sealed with the platform key, stored `access=read`, and never returned by the API. Nothing is stored when the probe fails |
+| 23 | Connect tickets: Jira base URL, token owner email, API token, project key | `GET /rest/api/2/myself` (+ `/project/{key}` when given) proves the connection; the row shows the project. Export/import stays on the Jira screen |
+| 24 | Enter Barad-dûr | `onboarding.completed_at` is stamped once (idempotent), the audit chain carries `onboarding.*`, and the dashboard opens with its honest empty state |
+
+Invariants this pass pins: invitations and connections are admin/owner-only
+(a viewer gets 403), the owner role is never invited, and no code in the
+onboarding module issues a provider write — the read-only probe log for a full
+run contains GETs and nothing else.
+
+## Inventory: projects, code, environments (`#projects`)
+
+The declarative half of the cycle. Nothing on this screen needs a scan; the SBOM
+portfolio keeps its own tab so the supply-chain view did not disappear.
+
+| # | Step | Expected |
+|---|---|---|
+| 25 | Inventory → Projects → *new project* | Project created with a slug; the screen opens on its detail |
+| 26 | Components → *add component* | `Backend` (kind `backend`) listed once; a second one with the same name answers 409 |
+| 27 | Code and versions → *attach repository* (+ component) | Repository stored org-wide, the project↔repo edge and the component↔repo edge exist; the same URL re-attached revives the link instead of duplicating |
+| 28 | Environments → *add deployment* with environment `PRO`, version `1.7.4` | Row shows `1.7.4 · manual`, exposure and auth as recorded; a second deployment for the same component+environment answers 409 |
+| 29 | *probe* → health URL + bearer token, then *check now* | `GET` to the endpoint (no write), version replaced by what the endpoint declares (`2.3.0 · health check`), `last_checked_at` set and audited. A failing endpoint keeps the last version and shows the error |
+| 30 | Assets → *To catalogue* → pick a project → *file* | Asset classified `owned` and linked; it leaves the pending list. Filing grants no scope and creates no grant |
+| 31 | Edit a deployment's version by hand | `source` returns to `manual`; the probe's last check stays in the history |
+
+Invariants: a probe is a **GET** (tests assert the target never receives a
+POST); version labels are free text so inventory works before the first import;
+`version_label` never claims an analysis ran.
 
 ## What the pass checks under the surface
 

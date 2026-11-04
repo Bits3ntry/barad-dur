@@ -271,6 +271,39 @@ services:
     mem_limit: 128m
     restart: unless-stopped
 
+  # ──────────────── Scheduler: the clock the API deliberately lacks ─────────────
+  # The platform never runs a background thread: a tick endpoint advances due
+  # work and is idempotent, so a missed or doubled tick costs nothing. This is
+  # the containerized crontab — every minute it POSTs the three ticks. It needs
+  # an API key; without one the calls come back 401 and the log says so, instead
+  # of the stack pretending to be automatic.
+  #   docker compose --profile ops up -d scheduler
+  scheduler:
+    image: curlimages/curl:8.10.1
+    profiles: [ops]
+    depends_on:
+      platform-api:
+        condition: service_started
+    environment:
+      BARAD_API_KEY: ${BARAD_API_KEY:-}
+      TICK_INTERVAL: ${TICK_INTERVAL:-60}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while true; do
+          for path in orchestration/schedules/tick notifications/tick projects/probes/tick; do
+            curl -s -o /dev/null -w "$${path} %{http_code}\n" \
+              -X POST "http://platform-api:8090/api/v1/$${path}" \
+              -H "X-API-Key: $${BARAD_API_KEY}" \
+              -H 'Content-Type: application/json' -d '{"actor":"scheduler"}'
+          done
+          sleep "$${TICK_INTERVAL}"
+        done
+    networks: [edge]
+    mem_limit: 64m
+    restart: unless-stopped
+
   # ──────────────── Scanners: no UI, on-demand only ───────────────────
   # Not started by `up`. Invoke with:
   #   docker compose --profile tools run --rm trivy fs /scan

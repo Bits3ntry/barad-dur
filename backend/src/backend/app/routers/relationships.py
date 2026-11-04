@@ -128,13 +128,10 @@ class DeploymentIn(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     environment: str = Field(default="production", max_length=64)
     service_id: str | None = None
-<<<<<<< Updated upstream
     artifact_id: str | None = None
     application_component_id: str | None = None
     status: str = "active"
     deployed_at: str | None = None
-=======
->>>>>>> Stashed changes
     actor: str | None = None
 
 
@@ -142,7 +139,6 @@ class DeploymentIn(BaseModel):
 def list_deployments(org: models.Organization = Depends(auth.require_org),
                      session: Session = Depends(get_session)):
     rows = session.query(models.Deployment).filter_by(org_id=org.id).all()
-<<<<<<< Updated upstream
     data = []
     for d in rows:
         artifact = session.get(models.Artifact, d.artifact_id) if d.artifact_id else None
@@ -154,10 +150,6 @@ def list_deployments(org: models.Organization = Depends(auth.require_org),
                                    "digest": artifact.digest} if artifact else None),
                      "version": version.version if version else None})
     return {"data": data, "total": len(data)}
-=======
-    return {"data": [{"id": d.id, "name": d.name, "environment": d.environment,
-                      "service_id": d.service_id} for d in rows], "total": len(rows)}
->>>>>>> Stashed changes
 
 
 @router.post("/deployments")
@@ -170,7 +162,6 @@ def create_deployment(payload: DeploymentIn = None,
         service = session.get(models.Service, payload.service_id)
         if service is None or service.org_id != org.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "service not found")
-<<<<<<< Updated upstream
     if payload.artifact_id is not None:
         artifact = session.get(models.Artifact, payload.artifact_id)
         if artifact is None or artifact.org_id != org.id:
@@ -197,26 +188,16 @@ def create_deployment(payload: DeploymentIn = None,
                             artifact_id=payload.artifact_id,
                             application_component_id=payload.application_component_id,
                             status=payload.status, deployed_at=deployed_at,
-=======
-    dep = models.Deployment(org_id=org.id, service_id=payload.service_id,
-                            name=payload.name, environment=payload.environment,
->>>>>>> Stashed changes
                             created_at=_now(), updated_at=_now())
     session.add(dep)
     session.flush()
     _audit_log(session, org.id, payload.actor or "system", "deployment.added",
-<<<<<<< Updated upstream
                "deployment", dep.id,
                f"{payload.name} ({payload.environment})"
                + (f" artifact {payload.artifact_id}" if payload.artifact_id else ""))
     session.commit()
     return {"data": {"id": dep.id, "environment": dep.environment,
                      "status": dep.status, "artifact_id": dep.artifact_id}}
-=======
-               "deployment", dep.id, f"{payload.name} ({payload.environment})")
-    session.commit()
-    return {"data": {"id": dep.id}}
->>>>>>> Stashed changes
 
 
 # ─────────────────────── generic typed links ───────────────────────
@@ -246,6 +227,9 @@ class ProjectLinkIn(LinkIn):
     remote_url: str | None = None
     provider: str = "git"
     name: str | None = None
+    # When the code belongs to one part of the product (AUREA → backend), name
+    # that component: the repository stays project-level and gains the edge.
+    component_id: str | None = None
 
 
 @router.post("/projects/{project_id}/repositories")
@@ -257,25 +241,59 @@ def link_repository(project_id: str, payload: ProjectLinkIn = None,
                             "repository_id or remote_url required")
     project = session.get(models.Project, project_id)
     if project is None or project.org_id != org.id:
+        # The inventory screen addresses projects by slug or name.
+        from backend.app.projects import by_ref
+
+        project = by_ref(session, org.id, project_id)
+    if project is None or project.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     if payload.repository_id:
         repo = session.get(models.Repository, payload.repository_id)
     else:
+        remote_url = (payload.remote_url or "").strip()
         repo = (session.query(models.Repository)
-                .filter_by(org_id=org.id, remote_url=payload.remote_url).one_or_none())
+                .filter_by(org_id=org.id, remote_url=remote_url).one_or_none())
         if repo is None:
+            from backend.app import scm_client
+
+            provider = payload.provider
+            name = payload.name
+            try:
+                provider = scm_client.provider_for(remote_url)
+            except scm_client.ScmError:
+                provider = payload.provider if payload.provider != "git" else "git"
+            try:
+                name = name or scm_client.repo_slug(remote_url)
+            except scm_client.ScmError:
+                name = name or remote_url.rsplit("/", 1)[-1]
             repo = models.Repository(
-                org_id=org.id, provider=payload.provider,
-                name=payload.name or payload.remote_url.rsplit("/", 1)[-1],
-                remote_url=payload.remote_url)
+                org_id=org.id, provider=provider, name=name[:255],
+                remote_url=remote_url)
             session.add(repo)
             session.flush()
     if repo is None or repo.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "repository not found")
+
+    component = None
+    if payload.component_id:
+        component = session.get(models.ApplicationComponent, payload.component_id)
+        if component is None or component.project_id != project.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "component not found")
+        edge = (session.query(models.ComponentRepository)
+                .filter_by(component_id=component.id, repository_id=repo.id)
+                .one_or_none())
+        if edge is None:
+            session.add(models.ComponentRepository(
+                org_id=org.id, component_id=component.id, repository_id=repo.id,
+                added_by=payload.actor, added_at=models.utcnow()))
+        else:
+            edge.removed_at = None
+
     existing = _existing_active_link(
         models.ProjectRepository, session, org.id,
         project_id=project.id, repository_id=repo.id, relation=payload.relation)
     if existing is not None:
+        session.commit()
         return {"data": _link_data(existing), "already_linked": True}
     link = models.ProjectRepository(
         org_id=org.id, project_id=project.id, repository_id=repo.id,
@@ -283,7 +301,9 @@ def link_repository(project_id: str, payload: ProjectLinkIn = None,
     session.add(link)
     session.flush()
     _audit_log(session, org.id, payload.actor or "system", "project_repo.linked",
-               "repository", repo.id, f"{project.slug}:{payload.relation}")
+               "repository", repo.id,
+               f"{project.slug}:{payload.relation}"
+               + (f" component={component.slug}" if component else ""))
     session.commit()
     return {"data": _link_data(link)}
 

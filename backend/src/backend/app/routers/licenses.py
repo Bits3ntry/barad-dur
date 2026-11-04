@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from backend.app.versions import pick_version
 from backend.app import auth, licenses, models
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
@@ -114,8 +115,7 @@ def evaluate(payload: EvaluateIn = None,
                .filter_by(org_id=org.id, slug=payload.project).one_or_none())
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
-    version = (session.query(models.ProjectVersion)
-               .filter_by(project_id=project.id, version=payload.version).one_or_none())
+    version = (pick_version(session, project.id, payload.version))
     if version is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
     return {"data": licenses.evaluate_project_version(session, org.id, project, version)}
@@ -136,8 +136,7 @@ def inventory(project: str = Query(...), version: str | None = Query(default=Non
              .filter(models.ComponentLicense.org_id == org.id,
                      models.Component.org_id == org.id))
     if version is not None:
-        pv = (session.query(models.ProjectVersion)
-              .filter_by(project_id=proj.id, version=version).one_or_none())
+        pv = (pick_version(session, proj.id, version))
         if pv is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
         query = query.join(

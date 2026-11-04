@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app import auth, auth_local, models
+from backend.app import auth, auth_local, mail, models
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
@@ -48,7 +48,6 @@ def create_channel(payload: ChannelIn = None,
                    session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
-<<<<<<< Updated upstream
     if payload.kind not in {"webhook", "email", "slack"}:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "kind must be webhook | email | slack")
@@ -64,14 +63,6 @@ def create_channel(payload: ChannelIn = None,
         if not url.startswith("https://") and not local:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 "slack webhooks must be https (localhost excepted)")
-=======
-    if payload.kind not in {"webhook", "email"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            "kind must be webhook | email")
-    if payload.kind == "webhook" and not payload.url.lower().startswith(
-            ("http://", "https://")):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "url must be http(s)")
->>>>>>> Stashed changes
     if payload.kind == "email" and "@" not in payload.url:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "email channels need an address")
@@ -133,27 +124,20 @@ def patch_channel(channel_id: str, payload: ChannelPatch = None,
     return {"data": _channel_data(row)}
 
 
-def _email_settings() -> dict:
-    import os
-
-    return {"host": os.environ.get("SMTP_HOST") or "",
-            "port": int(os.environ.get("SMTP_PORT") or 25),
-            "sender": os.environ.get("SMTP_FROM") or "barad-dur@localhost",
-            "user": os.environ.get("SMTP_USER") or "",
-            "password": os.environ.get("SMTP_PASSWORD") or "",
-            "starttls": (os.environ.get("SMTP_STARTTLS") or "").lower() in
-                        {"1", "true", "yes"}}
+def _email_settings(session: Session | None = None) -> dict:
+    """Resolve the relay the same way invitations do: saved row, then env."""
+    return mail.resolve(session)
 
 
 def _deliver_email(channel: models.NotificationChannel, event: str,
-                   payload: dict) -> tuple[int | None, str | None]:
+                   payload: dict, session: Session | None = None) -> tuple[int | None, str | None]:
     """Send one plain-text email; SMTP is deployment-configured, never guessed."""
     import smtplib
     from email.message import EmailMessage
 
-    settings = _email_settings()
+    settings = _email_settings(session)
     if not settings["host"]:
-        return None, "smtp_not_configured: set SMTP_HOST"
+        return None, "smtp_not_configured: save a mail server in Settings or set SMTP_HOST"
     message = EmailMessage()
     message["From"] = settings["sender"]
     message["To"] = channel.url
@@ -177,7 +161,6 @@ def _deliver_email(channel: models.NotificationChannel, event: str,
         return None, f"smtp_error: {type(exc).__name__}: {exc}"[:400]
 
 
-<<<<<<< Updated upstream
 def _slack_text(event: str, payload: dict) -> str:
     """One readable line: Slack shows `text` in notifications and as fallback."""
     parts = [f"*{event}*"]
@@ -222,17 +205,12 @@ def _deliver_slack(channel: models.NotificationChannel, event: str,
         return None, f"unreachable: {exc.reason}"
 
 
-=======
->>>>>>> Stashed changes
 def deliver(channel: models.NotificationChannel, event: str,
-            payload: dict) -> tuple[int | None, str | None]:
+            payload: dict, session: Session | None = None) -> tuple[int | None, str | None]:
     if channel.kind == "email":
-        return _deliver_email(channel, event, payload)
-<<<<<<< Updated upstream
+        return _deliver_email(channel, event, payload, session)
     if channel.kind == "slack":
         return _deliver_slack(channel, event, payload)
-=======
->>>>>>> Stashed changes
     body = json.dumps({"event": event, "channel": channel.name,
                        "payload": payload}, sort_keys=True).encode()
     signature = hmac.new(channel.secret.encode(), body, hashlib.sha256).hexdigest()
@@ -262,7 +240,7 @@ def test_channel(channel_id: str, payload: TestIn = None,
     row = session.get(models.NotificationChannel, channel_id)
     if row is None or row.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "channel not found")
-    code, error = deliver(row, "test", {"message": "Barad-dûr webhook test"})
+    code, error = deliver(row, "test", {"message": "Barad-dûr webhook test"}, session)
     delivery = models.NotificationDelivery(
         org_id=org.id, channel_id=row.id, event="test",
         dedupe_key=f"test:{row.id}:{models.utcnow().isoformat()}",
@@ -312,7 +290,7 @@ def tick(payload: TickIn = None,
                           "sla_deadline": row.sla_deadline.isoformat()}
                          for row in breached[:50]],
         }
-        code, error = deliver(channel, "sla.breached", summary)
+        code, error = deliver(channel, "sla.breached", summary, session)
         session.add(models.NotificationDelivery(
             org_id=org.id, channel_id=channel.id, event="sla.breached",
             dedupe_key=dedupe, payload=json.dumps(summary),
@@ -340,7 +318,6 @@ def list_deliveries(limit: int = Query(default=50, ge=1, le=200),
                       "error": r.error,
                       "created_at": r.created_at.isoformat()} for r in rows],
             "total": len(rows)}
-<<<<<<< Updated upstream
 
 
 
@@ -435,5 +412,3 @@ def mark_notification_read(notification_id: str,
     row.read = True
     session.commit()
     return {"data": {"read": row.read}}
-=======
->>>>>>> Stashed changes

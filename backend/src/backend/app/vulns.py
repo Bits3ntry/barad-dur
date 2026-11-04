@@ -17,11 +17,7 @@ import urllib.parse
 import urllib.request
 from urllib.parse import urlparse
 
-<<<<<<< Updated upstream
 from backend.app import lifecycle, models, severity as severity_mod
-=======
-from backend.app import lifecycle, models
->>>>>>> Stashed changes
 
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_DETAIL_URL = "https://api.osv.dev/v1/vulns"
@@ -76,11 +72,7 @@ def severity_of(vuln: dict) -> tuple[str | None, str | None]:
         if isinstance(entry, dict) and entry.get("type", "").startswith("CVSS"):
             vector = entry.get("score")
             break
-<<<<<<< Updated upstream
     return (severity_mod.canonical(label) if label else None, vector)
-=======
-    return (label.upper() if isinstance(label, str) and label else None, vector)
->>>>>>> Stashed changes
 
 
 def parse_timestamp(value) -> datetime.datetime | None:

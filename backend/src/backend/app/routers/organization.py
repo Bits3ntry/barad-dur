@@ -12,6 +12,10 @@ router = APIRouter(prefix="/api/v1/org", tags=["organization"])
 
 def _org_data(row: models.Organization) -> dict:
     return {"id": row.id, "slug": row.slug, "name": row.name,
+            "description": row.description, "website": row.website,
+            "logo": row.logo,
+            "onboarding_completed_at": (row.onboarding_completed_at.isoformat()
+                                        if row.onboarding_completed_at else None),
             "created_at": row.created_at.isoformat() if row.created_at else None}
 
 
@@ -28,7 +32,12 @@ def get_org(org: models.Organization = Depends(auth.require_org),
 
 
 class OrgPatch(BaseModel):
-    name: str = Field(min_length=2, max_length=255)
+    # Every field is optional so the onboarding form can save one block at a
+    # time; `name` stays here because Settings edits it in place.
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    website: str | None = Field(default=None, max_length=255)
+    logo: str | None = Field(default=None, max_length=200_000)
     actor: str = Field(min_length=2, max_length=255)
 
 
@@ -38,11 +47,34 @@ def patch_org(payload: OrgPatch = None,
               session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
-    previous = org.name
-    org.name = payload.name
-    _audit_log(session, org.id, payload.actor, "org.renamed", "organization",
-               org.id, f"{previous} -> {payload.name}")
-    session.commit()
+    if all(value is None for value in
+           (payload.name, payload.description, payload.website, payload.logo)):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "nothing to update")
+    if payload.website and not payload.website.startswith(("http://", "https://")):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "website must start with http:// or https://")
+    if payload.logo and not payload.logo.startswith(("http://", "https://",
+                                                     "data:image/")):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "logo must be an https URL or an inline image")
+    changed = []
+    if payload.name is not None and payload.name.strip() != org.name:
+        changed.append(f"name {org.name} -> {payload.name.strip()}")
+        org.name = payload.name.strip()
+    if payload.description is not None and payload.description.strip() != (org.description or ""):
+        org.description = payload.description.strip() or None
+        changed.append("description")
+    if payload.website is not None and payload.website.strip().rstrip("/") != (org.website or ""):
+        org.website = payload.website.strip().rstrip("/") or None
+        changed.append("website")
+    if payload.logo is not None and payload.logo.strip() != (org.logo or ""):
+        org.logo = payload.logo.strip() or None
+        changed.append("logo")
+    if changed:
+        _audit_log(session, org.id, payload.actor, "org.updated", "organization",
+                   org.id, ", ".join(changed)[:500])
+        session.commit()
     return {"data": _org_data(org)}
 
 

@@ -2,14 +2,9 @@
 import datetime
 import json
 import urllib.request
-<<<<<<< Updated upstream
 from email.utils import parsedate_to_datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-=======
-
-from fastapi import APIRouter, Depends, HTTPException, status
->>>>>>> Stashed changes
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -22,7 +17,6 @@ router = APIRouter(prefix="/api/v1", tags=["easm"])
 CRTSH_CTLOG = "https://crt.sh/?q=%25.{domain}&output=json"
 
 
-<<<<<<< Updated upstream
 def _parse_cert_date(value) -> str | None:
     """TLS dates arrive in RFC-822 form ("Dec 20 14:00:30 2026 GMT")."""
     if not isinstance(value, str) or not value:
@@ -68,8 +62,6 @@ def _latest_observation(session: Session, asset: models.Asset) -> dict | None:
 
 
 
-=======
->>>>>>> Stashed changes
 def crtsh_subdomains(domain: str, timeout: float = 25.0) -> list[str]:
     """Certificate-transparency sweep for the domain (public crt.sh JSON)."""
     url = CRTSH_CTLOG.format(domain=domain)
@@ -88,7 +80,6 @@ def crtsh_subdomains(domain: str, timeout: float = 25.0) -> list[str]:
     return sorted(found)
 
 
-<<<<<<< Updated upstream
 def _asset_data(session: Session, asset: models.Asset) -> dict:
     project = session.get(models.Project, asset.project_id) if asset.project_id else None
     groups = (session.query(models.InventoryGroup)
@@ -204,6 +195,11 @@ def needs_attention(limit: int = Query(default=100, ge=1, le=500),
 
 
 class AssetPatch(BaseModel):
+    # A declared value is data a human typed: a typo has to be fixable without
+    # deleting the asset and losing its links, snapshots and history. Renaming
+    # does not move a scope target or a grant — those record the old value.
+    value: str | None = Field(default=None, min_length=1, max_length=1024)
+    type: str | None = None
     owner: str | None = Field(default=None, max_length=255)
     project: str | None = Field(default=None, max_length=128)
     classification_status: str | None = None
@@ -224,6 +220,30 @@ def patch_asset(asset_id: str, payload: AssetPatch = None,
     if asset is None or asset.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
     changes = []
+    next_type = payload.type if payload.type is not None else asset.type
+    next_value = payload.value.strip() if payload.value is not None else asset.value
+    if payload.type is not None or payload.value is not None:
+        if next_type not in models.ASSET_TYPES:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"type must be one of {sorted(models.ASSET_TYPES)}")
+        if not next_value:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "value required")
+        if next_type in {"domain", "subdomain", "api"}:
+            next_value = next_value.lower()
+            if "://" in next_value:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    "give the hostname, not a URL, for a domain")
+        if (next_type, next_value) != (asset.type, asset.value):
+            clash = (session.query(models.Asset)
+                     .filter_by(org_id=org.id, type=next_type, value=next_value)
+                     .one_or_none())
+            if clash is not None and clash.id != asset.id:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    f"{next_type} {next_value} already exists in this organization")
+            changes.append(f"{asset.type}:{asset.value} -> {next_type}:{next_value}")
+            asset.type = next_type
+            asset.value = next_value
     if payload.owner is not None:
         asset.owner = payload.owner.strip() or None
         changes.append(f"owner={asset.owner or 'none'}")
@@ -287,21 +307,6 @@ def unarchive_asset(asset_id: str, actor: str | None = Query(default=None),
                     org: models.Organization = Depends(auth.require_org),
                     session: Session = Depends(get_session)):
     return _set_archived(asset_id, actor, False, org, session)
-=======
-@router.get("/assets")
-def list_assets(type: str | None = None,
-                org: models.Organization = Depends(auth.require_org),
-                session: Session = Depends(get_session)):
-    query = session.query(models.Asset).filter_by(org_id=org.id)
-    if type is not None:
-        query = query.filter_by(type=type)
-    rows = query.order_by(models.Asset.last_seen_at.desc()).all()
-    return {"data": [{"id": r.id, "type": r.type, "value": r.value,
-                      "source": r.source, "detail": r.detail,
-                      "discovered_at": r.discovered_at.isoformat(),
-                      "last_seen_at": r.last_seen_at.isoformat()} for r in rows],
-            "total": len(rows)}
->>>>>>> Stashed changes
 
 
 class AssetIn(BaseModel):
@@ -556,24 +561,32 @@ def collect(asset_id: str, payload: CollectIn = None,
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "collection supports domain assets only")
     target = [{"type": "domain", "value": asset.value}]
+    # A grant narrowed to an environment only applies to that environment, so
+    # the collector must name the one the asset is served from. An asset linked
+    # to no deployment carries none, and an environment-restricted grant then
+    # cannot match it — denied, not silently widened.
+    deployment_environment = None
+    link = (session.query(models.AssetLink)
+            .filter_by(org_id=org.id, asset_id=asset.id,
+                       entity_type="deployment", removed_at=None).first())
+    if link is not None:
+        deployment = session.get(models.Deployment, link.entity_id)
+        if deployment is not None:
+            deployment_environment = deployment.environment
     decision = authorization.authorize(
         session, org.id, payload.actor, "passive_discovery", target,
-        tool="dns-collector")
+        tool="dns-collector", environment=deployment_environment)
     if decision["decision"] == "deny":
         _audit_log(session, org.id, payload.actor, "easm.collect_denied",
                    "asset", asset.id, decision["reason"][:300])
         session.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             f"not authorized: {decision['reason']}")
-<<<<<<< Updated upstream
-=======
-
->>>>>>> Stashed changes
     observation: dict = {"dns": _dns_lookup(asset.value)}
     if payload.tls:
         tls_decision = authorization.authorize(
             session, org.id, payload.actor, "active_verification", target,
-            tool="tls-probe")
+            tool="tls-probe", environment=deployment_environment)
         if tls_decision["decision"] == "deny":
             _audit_log(session, org.id, payload.actor, "easm.tls_denied",
                        "asset", asset.id, tls_decision["reason"][:300])
@@ -596,7 +609,6 @@ def collect(asset_id: str, payload: CollectIn = None,
     session.commit()
     return {"data": {"snapshot_id": row.id, "observed_at": now.isoformat(),
                      "observation": observation}}
-<<<<<<< Updated upstream
 
 
 class ScheduleIn(BaseModel):
@@ -729,5 +741,3 @@ def trigger_schedule(payload: SweepTrigger = None,
                f"{len(targets)} targets, {result['denied']} denied")
     session.commit()
     return {"data": result}
-=======
->>>>>>> Stashed changes

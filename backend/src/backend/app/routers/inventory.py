@@ -1,5 +1,4 @@
 """Inventory and project listing endpoints."""
-<<<<<<< Updated upstream
 from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -7,17 +6,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app import auth, models, severity as severity_mod
-=======
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
-
-from backend.app import auth, models
->>>>>>> Stashed changes
 from backend.app.db import get_session
+from backend.app.routers.identity import _audit as _audit_log
 
 router = APIRouter(prefix="/api/v1", tags=["inventory"])
 
-<<<<<<< Updated upstream
 SEVERITIES = severity_mod.SEVERITIES
 CLOSED_STATUSES = {"resolved", "suppressed", "false_positive"}
 
@@ -360,9 +353,25 @@ def project_runtime_graph(project_ref: str,
         "nodes": nodes, "edges": edges,
     }}
 
+def _version_by_label(session: Session, project_id: str, version: str,
+                      component_id: str | None):
+    """Versions are scoped to a component, so a label alone can be ambiguous."""
+    query = (session.query(models.ProjectVersion)
+             .filter_by(project_id=project_id, version=version))
+    if component_id:
+        return query.filter_by(component_id=component_id).one_or_none()
+    rows = query.all()
+    if len(rows) == 1:
+        return rows[0]
+    if not rows:
+        return None
+    raise HTTPException(status.HTTP_409_CONFLICT,
+                        "several components have this version; pass component_id")
+
 
 @router.get("/inventory/profile")
 def version_profile(project: str = Query(...), version: str = Query(...),
+                    component_id: str | None = Query(default=None),
                     org: models.Organization = Depends(auth.require_org),
                     session: Session = Depends(get_session)):
     """One project version's rollup, with the components that carry findings."""
@@ -370,35 +379,12 @@ def version_profile(project: str = Query(...), version: str = Query(...),
                    .filter_by(org_id=org.id, slug=project).one_or_none())
     if project_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
-    version_row = (session.query(models.ProjectVersion)
-                   .filter_by(project_id=project_row.id, version=version).one_or_none())
+    version_row = _version_by_label(session, project_row.id, version, component_id)
     if version_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
     return {"data": _serialize_version_profile(session, org.id, project_row, version_row)}
 
-=======
->>>>>>> Stashed changes
 
-@router.get("/projects")
-def list_projects(org: models.Organization = Depends(auth.require_org),
-                  session: Session = Depends(get_session)):
-    rows = (session.query(models.Project)
-            .filter_by(org_id=org.id).order_by(models.Project.name).all())
-    data = []
-    for project in rows:
-        versions = (session.query(models.ProjectVersion)
-                    .filter_by(project_id=project.id)
-                    .order_by(models.ProjectVersion.created_at).all())
-        data.append({"id": project.id, "name": project.name, "slug": project.slug,
-<<<<<<< Updated upstream
-                     "group": project.group_name,
-=======
->>>>>>> Stashed changes
-                     "versions": [v.version for v in versions]})
-    return {"data": data}
-
-
-<<<<<<< Updated upstream
 class VersionRenameIn(BaseModel):
     version: str = Field(min_length=1, max_length=255,
                          description="New label for this project version")
@@ -406,6 +392,7 @@ class VersionRenameIn(BaseModel):
 
 @router.patch("/projects/{slug}/versions/{version}")
 def rename_version(slug: str, version: str, payload: VersionRenameIn,
+                   component_id: str | None = Query(default=None),
                    org: models.Organization = Depends(auth.require_org),
                    session: Session = Depends(get_session)):
     """Relabel a version, e.g. a commit sha that the SBOM itself never declared.
@@ -417,50 +404,81 @@ def rename_version(slug: str, version: str, payload: VersionRenameIn,
                .filter_by(org_id=org.id, slug=slug).one_or_none())
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
-    row = (session.query(models.ProjectVersion)
-           .filter_by(project_id=project.id, version=version).one_or_none())
+    row = _version_by_label(session, project.id, version, component_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
     new_label = payload.version.strip()
     if new_label == version:
         return {"data": {"version": row.version}}
     clash = (session.query(models.ProjectVersion)
-             .filter_by(project_id=project.id, version=new_label).one_or_none())
+             .filter_by(project_id=project.id, component_id=row.component_id,
+                        version=new_label).one_or_none())
     if clash is not None:
         raise HTTPException(status.HTTP_409_CONFLICT,
-                            "that project already has a version with this name")
+                            "that component already has a version with this name")
     row.version = new_label
+    # Deployments mirror the label so the table never shows a stale name.
+    (session.query(models.Deployment)
+     .filter_by(version_id=row.id)
+     .update({models.Deployment.version_label: new_label},
+             synchronize_session=False))
     session.commit()
-    return {"data": {"version": row.version, "previous": version}}
+    return {"data": {"version": row.version, "previous": version,
+                     "component_id": row.component_id}}
 
 
 class ProjectGroupIn(BaseModel):
     group: str | None = Field(
         default=None,
         description="Product or account that owns this repository; null ungroups it")
+    name: str | None = Field(
+        default=None, max_length=255,
+        description="Display name; the slug stays fixed")
+    description: str | None = Field(default=None, max_length=2000)
+    owner: str | None = Field(default=None, max_length=255)
+    actor: str = Field(default="console", max_length=320)
 
 
 @router.patch("/projects/{slug}")
 def set_project_group(slug: str, payload: ProjectGroupIn,
-                      org: models.Organization = Depends(auth.require_org),
+                      org: models.Organization = Depends(auth.require_admin),
                       session: Session = Depends(get_session)):
-    """Assign the project to a group (or clear it).
+    """Group and display name of a project.
 
     Free text rather than a table: the hierarchy reads Aurea > backend, but a
     new organization decides its own labels, and moving a repository between
     products must not need a migration.
     """
-    project = (session.query(models.Project)
-               .filter_by(org_id=org.id, slug=slug).one_or_none())
+    from backend.app.projects import by_ref
+
+    project = by_ref(session, org.id, slug)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
-    project.group_name = (payload.group or "").strip() or None
+    changed = []
+    provided = payload.model_fields_set
+    # `null` is meaningful here: it clears the group. Only an absent field means
+    # "leave it alone", so the body's own keys decide.
+    if "group" in provided:
+        project.group_name = (payload.group or "").strip() or None
+        changed.append(f"group {project.group_name or '-'}")
+    if "name" in provided and payload.name and payload.name.strip() != project.name:
+        changed.append(f"name {project.name} -> {payload.name.strip()}")
+        project.name = payload.name.strip()
+    if "description" in provided:
+        project.description = (payload.description or "").strip() or None
+        changed.append("description")
+    if "owner" in provided:
+        project.owner = (payload.owner or "").strip() or None
+        changed.append(f"owner {project.owner or '-'}")
+    if changed:
+        _audit_log(session, org.id, payload.actor, "project.updated", "project",
+                   project.id, ", ".join(changed)[:300])
     session.commit()
-    return {"data": {"slug": project.slug, "group": project.group_name}}
+    return {"data": {"id": project.id, "slug": project.slug, "name": project.name,
+                     "group": project.group_name,
+                     "description": project.description, "owner": project.owner}}
 
 
-=======
->>>>>>> Stashed changes
 @router.get("/components")
 def list_components(
     project: str | None = Query(default=None),

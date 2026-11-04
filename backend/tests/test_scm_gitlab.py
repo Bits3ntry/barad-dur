@@ -163,7 +163,7 @@ def test_unknown_provider_is_rejected(gitlab_client):
     session = session_factory()()
     org = session.query(models.Organization).first()
     other_repo = models.Repository(org_id=org.id, name="internal",
-                                   remote_url="https://gitea.local/acme/app",
+                                   remote_url="https://bitbucket.local/acme/app",
                                    created_at=models.utcnow())
     session.add(other_repo)
     session.commit()

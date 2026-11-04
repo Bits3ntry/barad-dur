@@ -1,6 +1,9 @@
 """Minimal Jira REST client (stdlib only) for the BL-050 bridge.
 
-Configuration comes from the environment so the deployment owns credentials:
+Credentials come from the organization's saved Jira connection
+(`app/integrations.py`) when one exists; the environment is the fallback for
+deployments configured the old way:
+
   JIRA_BASE_URL   e.g. https://company.atlassian.net
   JIRA_EMAIL      account email for basic auth
   JIRA_TOKEN      API token (never logged, never returned to clients)
@@ -22,7 +25,15 @@ class JiraError(RuntimeError):
         self.status_code = status_code
 
 
-def _config() -> tuple[str, str, str]:
+def config_for(session=None, org_id: str | None = None) -> tuple[str, str, str]:
+    """(base_url, email, token): saved connection first, environment second."""
+    if session is not None and org_id:
+        from backend.app import integrations
+
+        saved = integrations.for_tickets(session, org_id)
+        if saved is not None and saved.get("token"):
+            return (saved.get("base_url") or "").rstrip("/"), \
+                saved.get("account") or "", saved["token"]
     base = (os.environ.get("JIRA_BASE_URL") or "").rstrip("/")
     email = os.environ.get("JIRA_EMAIL") or ""
     token = os.environ.get("JIRA_TOKEN") or ""
@@ -31,14 +42,27 @@ def _config() -> tuple[str, str, str]:
     return base, email, token
 
 
-def configured() -> bool:
-    return bool((os.environ.get("JIRA_BASE_URL") or "") and
-                (os.environ.get("JIRA_TOKEN") or ""))
+def _config(config: tuple[str, str, str] | None = None) -> tuple[str, str, str]:
+    if config is not None:
+        base, email, token = config
+        if not base or not token:
+            raise JiraError("jira_not_configured")
+        return base.rstrip("/"), email, token
+    return config_for()
+
+
+def configured(session=None, org_id: str | None = None) -> bool:
+    try:
+        config_for(session, org_id)
+        return True
+    except JiraError:
+        return False
 
 
 def request(method: str, path: str, payload: dict | None = None,
-            timeout: float = 10.0) -> dict:
-    base, email, token = _config()
+            timeout: float = 10.0,
+            config: tuple[str, str, str] | None = None) -> dict:
+    base, email, token = _config(config)
     url = f"{base}/rest/api/3{path}"
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method)
@@ -68,29 +92,35 @@ def adf_paragraphs(text: str) -> dict:
 
 
 def create_issue(project_key: str, summary: str, description: str,
-                 issue_type: str = "Task", assignee: str | None = None) -> dict:
+                 issue_type: str = "Task", assignee: str | None = None,
+                 config: tuple[str, str, str] | None = None) -> dict:
     fields = {"project": {"key": project_key}, "summary": summary[:255],
               "issuetype": {"name": issue_type},
               "description": adf_paragraphs(description)}
     if assignee:
         fields["assignee"] = {"accountId": assignee}
-    return request("POST", "/issue", {"fields": fields})
+    return request("POST", "/issue", {"fields": fields}, config=config)
 
 
-def update_issue(issue_key: str, fields: dict) -> dict:
-    return request("PUT", f"/issue/{issue_key}", {"fields": fields})
+def update_issue(issue_key: str, fields: dict,
+                 config: tuple[str, str, str] | None = None) -> dict:
+    return request("PUT", f"/issue/{issue_key}", {"fields": fields}, config=config)
 
 
-def transition_issue(issue_key: str, to_status: str) -> dict:
-    transitions = request("GET", f"/issue/{issue_key}/transitions").get("transitions", [])
+def transition_issue(issue_key: str, to_status: str,
+                     config: tuple[str, str, str] | None = None) -> dict:
+    transitions = request("GET", f"/issue/{issue_key}/transitions",
+                          config=config).get("transitions", [])
     match = next((t for t in transitions
                   if (t.get("to") or {}).get("name", "").lower() == to_status.lower()),
                  None)
     if match is None:
         raise JiraError(f"transition_unavailable: {to_status}")
     return request("POST", f"/issue/{issue_key}/transitions",
-                   {"transition": {"id": match["id"]}})
+                   {"transition": {"id": match["id"]}}, config=config)
 
 
-def get_issue(issue_key: str) -> dict:
-    return request("GET", f"/issue/{issue_key}?fields=status,assignee,summary")
+def get_issue(issue_key: str,
+              config: tuple[str, str, str] | None = None) -> dict:
+    return request("GET", f"/issue/{issue_key}?fields=status,assignee,summary",
+                   config=config)

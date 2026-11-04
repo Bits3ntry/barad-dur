@@ -67,6 +67,24 @@ cannot duplicate a run; a denied schedule records the denial and still waits
 for its next interval. Schedules can be `scan` (scanner + repository targets)
 or `easm` (domain asset → DNS observation snapshot).
 
+### Health probes: what `interval_minutes` means
+
+A probe with `interval_minutes > 0` becomes due on its own once a tick calls
+`POST /api/v1/probes/tick`; `0` is manual-only and the console says so. The
+tick runs at most `limit` probes (default 10) per call, claims each row with a
+compare-and-swap on `last_run_at` *before* the GET leaves, and reports the rest
+as `skipped` — two overlapping ticks can never check the same deployment twice.
+A probe needs no grant: it is a GET against the deployment's own endpoint, and
+a failed probe never rewrites the version it was supposed to confirm.
+
+```cron
+* * * * * curl -s -X POST http://127.0.0.1:8090/api/v1/probes/tick \
+  -H "X-API-Key: *** -H 'Content-Type: application/json' -d '{"actor":"cron"}' >/dev/null
+```
+
+In the compose stack the same three ticks run from one container:
+`docker compose --profile ops up -d scheduler` (needs `BARAD_API_KEY` in `.env`).
+
 ## Shauron worker
 
 ```sh

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from backend.app.versions import pick_version
 from backend.app import auth, incidents, models
 from backend.app.db import get_session
 
@@ -67,8 +68,7 @@ def ingest_sarif(payload: SarifIngestIn = None,
             .filter_by(org_id=org.id, slug=project).one_or_none())
     if proj is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
-    pv = (session.query(models.ProjectVersion)
-          .filter_by(project_id=proj.id, version=version).one_or_none())
+    pv = (pick_version(session, proj.id, version))
     if pv is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
 
@@ -143,8 +143,7 @@ def diff_versions(project: str = Query(...), version: str = Query(...),
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     versions = {}
     for name in (version, baseline):
-        row = (session.query(models.ProjectVersion)
-               .filter_by(project_id=proj.id, version=name).one_or_none())
+        row = (pick_version(session, proj.id, name))
         if row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 f"version {name} not found")

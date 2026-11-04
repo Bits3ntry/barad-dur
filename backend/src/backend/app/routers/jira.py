@@ -55,24 +55,26 @@ def _drain_one(session, org: models.Organization, item: models.JiraOutbox) -> di
     payload = json.loads(item.payload)
     item.attempts += 1
     try:
+        config = jira_client.config_for(session, org.id)
         if item.action == "create":
-            issue = jira_client.create_issue(**payload)
+            issue = jira_client.create_issue(config=config, **payload)
             key = issue.get("key")
             if not key:
                 raise jira_client.JiraError("jira_create_missing_key")
             link.issue_key = key
-            link.issue_url = f"{(jira_client._config()[0])}/browse/{key}"
+            link.issue_url = f"{config[0]}/browse/{key}"
             link.sync_state = "linked"
-            issue_fields = jira_client.get_issue(key)
+            issue_fields = jira_client.get_issue(key, config=config)
             link.external_status = (issue_fields.get("fields", {})
                                     .get("status", {}).get("name"))
             link.last_synced_at = models.utcnow()
         elif item.action == "update":
-            jira_client.update_issue(link.issue_key, payload)
+            jira_client.update_issue(link.issue_key, payload, config=config)
             link.sync_state = "linked"
             link.last_synced_at = models.utcnow()
         elif item.action == "transition":
-            jira_client.transition_issue(link.issue_key, payload["to_status"])
+            jira_client.transition_issue(link.issue_key, payload["to_status"],
+                                         config=config)
             link.sync_state = "linked"
             link.last_synced_at = models.utcnow()
         else:
@@ -139,7 +141,7 @@ def create_link(payload: LinkIn = None,
                "jira_link", link.id, payload.project_key)
     session.commit()
     outcome = None
-    if payload.send_now and jira_client.configured():
+    if payload.send_now and jira_client.configured(session, org.id):
         item = (session.query(models.JiraOutbox)
                 .filter_by(org_id=org.id, link_id=link.id, status="pending")
                 .order_by(models.JiraOutbox.created_at).first())
@@ -147,7 +149,7 @@ def create_link(payload: LinkIn = None,
             outcome = _drain_one(session, org, item)
     session.refresh(link)
     return {"data": _link_data(link), "outcome": outcome,
-            "jira_configured": jira_client.configured()}
+            "jira_configured": jira_client.configured(session, org.id)}
 
 
 @router.get("/links")

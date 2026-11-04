@@ -18,7 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app import auth, gates, incidents, models, redaction
+from backend.app.versions import pick_version
+from backend.app import auth, gates, incidents, integrations, models, redaction
 from backend.app.db import get_session
 from backend.app.routers.code_baselines import approved_fingerprints
 from backend.app.routers.identity import _audit as _audit_log
@@ -201,9 +202,7 @@ def create_pull_request(payload: PullRequestIn = None,
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
         project_id = project.id
         if payload.version:
-            pv = (session.query(models.ProjectVersion)
-                  .filter_by(project_id=project.id, version=payload.version)
-                  .one_or_none())
+            pv = (pick_version(session, project.id, payload.version))
             if pv is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "version not found")
             pv_id = pv.id
@@ -536,10 +535,14 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
         provider = scm_client.provider_for(repo.remote_url)
     except scm_client.ScmError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
-    token_hint = "GITLAB_TOKEN" if provider == "gitlab" else "GITHUB_TOKEN"
-    if not scm_client.configured(provider):
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            f"scm_not_configured: set {token_hint}")
+    # The credential is the organization's saved connection; the environment is
+    # only the legacy fallback, so a console-connected code host is enough.
+    creds = integrations.for_scm(session, org.id, remote_url=repo.remote_url)
+    if not scm_client.configured(provider, creds):
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"scm_not_configured: connect a {provider} code host in Settings "
+            "(or set GITHUB_TOKEN/GITLAB_TOKEN/GITEA_TOKEN)")
     try:
         slug = scm_client.repo_slug(repo.remote_url)
         state = "success" if pr.gate_verdict == "pass" else "failure"
@@ -551,12 +554,14 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
             gitlab_state = "success" if state == "success" else "failed"
             status_response = scm_client.post_gitlab_commit_status(
                 slug, pr.head_sha, gitlab_state, description,
-                target_url=payload.target_url)
-            comment = scm_client.upsert_gitlab_mr_note(slug, pr.number, body)
+                target_url=payload.target_url, creds=creds)
+            comment = scm_client.upsert_gitlab_mr_note(slug, pr.number, body,
+                                                       creds=creds)
             if payload.annotations:
                 discussions = 0
                 try:
-                    versions = scm_client.gitlab_mr_versions(slug, pr.number)
+                    versions = scm_client.gitlab_mr_versions(slug, pr.number,
+                                                             creds=creds)
                     for link in (session.query(models.PrFinding)
                                  .filter_by(pr_id=pr.id).limit(20).all()):
                         finding = session.get(models.Finding, link.finding_id)
@@ -566,7 +571,7 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
                             slug, pr.number,
                             f"**{finding.severity}** `{finding.rule_id or 'finding'}`: "
                             f"{(finding.title or '')[:400]}",
-                            link.file_path, link.line or 1, versions)
+                            link.file_path, link.line or 1, versions, creds=creds)
                         discussions += 1
                 except scm_client.ScmError as exc:
                     _audit_log(session, org.id, payload.actor,
@@ -577,11 +582,18 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
                         _audit_log(session, org.id, payload.actor,
                                    "code.pr_annotations_published", "pull_request",
                                    pr.id, f"gitlab discussions: {discussions}")
+        elif provider == "gitea":
+            # Gitea accepts GitHub's state vocabulary for commit statuses.
+            status_response = scm_client.post_gitea_commit_status(
+                slug, pr.head_sha, state, description,
+                target_url=payload.target_url, creds=creds)
+            comment = scm_client.upsert_gitea_issue_comment(slug, pr.number, body,
+                                                            creds=creds)
         else:
             status_response = scm_client.post_commit_status(
                 slug, pr.head_sha, state, description,
-                target_url=payload.target_url)
-            comment = scm_client.upsert_pr_comment(slug, pr.number, body)
+                target_url=payload.target_url, creds=creds)
+            comment = scm_client.upsert_pr_comment(slug, pr.number, body, creds=creds)
             if payload.annotations:
                 links = (session.query(models.PrFinding)
                          .filter_by(pr_id=pr.id).all())
@@ -601,7 +613,7 @@ def publish_pr(pr_id: str, payload: PublishIn = None,
                         slug, pr.head_sha,
                         "success" if pr.gate_verdict == "pass" else "failure",
                         f"Barad-dûr gate {pr.gate_verdict}",
-                        pr.comment or "No findings.", annotations)
+                        pr.comment or "No findings.", annotations, creds=creds)
                 except scm_client.ScmError as exc:
                     # statuses/comments already landed; record the failure loudly
                     _audit_log(session, org.id, payload.actor,
