@@ -57,7 +57,11 @@ ACTIONS: dict[str, dict] = {
         "target": "repository",
         "tasks": ["sbom", "misconfig", "secrets"],
         "deadline_s": 1200,
-        "network": True,
+        # `network` is about the SCAN reaching a target, not about the machine
+        # fetching a signature database: sbom/misconfig/secrets only read the
+        # checkout, and the job already pulls engines from GitHub before running.
+        # Declaring it networked kept SBOM out of every pipeline for no reason.
+        "network": False,
         "isolation": "container",
         "coverage": "full",
     },

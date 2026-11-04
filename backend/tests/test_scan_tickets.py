@@ -174,10 +174,23 @@ def test_an_action_spanning_two_capabilities_needs_both(flow):
         "active_verification", "passive_discovery"]
 
 
-def test_push_may_not_ask_for_network_capabilities(flow):
-    response = _mint(flow, action="supply-chain")
-    assert response.status_code == 422
+def test_push_may_not_run_a_networked_action(flow):
+    """`network` means the SCAN reaches a target. Verifying a credential presents it
+    to its issuer, so that one stays console-only."""
+    response = _mint(flow, action="secrets-verified")
+    assert response.status_code == 422, response.text
     assert "push ticket" in response.json()["detail"]
+
+
+def test_a_pipeline_may_build_a_sbom(flow):
+    """sbom/misconfig/secrets only read the checkout. The job already fetches its
+    engines, so refusing SBOM to pipelines was never a real isolation boundary —
+    it just kept the bill of materials out of every CI run."""
+    response = _mint(flow, action="supply-chain")
+    assert response.status_code == 201, response.text
+    ticket = response.json()["ticket"]
+    assert [t["task"] for t in ticket["tasks"]] == ["sbom", "misconfig", "secrets"]
+    assert ticket["execution"]["network"] is False
 
 
 def test_verified_secrets_is_never_a_push_action(flow):
