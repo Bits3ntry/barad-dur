@@ -120,6 +120,8 @@ class SbomImport(Base, TimestampMixin):
     artifact_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("artifacts.id"), nullable=True, index=True)
     content_sha256: Mapped[str] = mapped_column(String(64))
+    scan_job_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("scan_jobs.id"), nullable=True, index=True)
     source: Mapped[str] = mapped_column(String(32), default="api")
     filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
@@ -1140,6 +1142,28 @@ class ScanJob(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # ── v01 scan flows: what this job is, and what it points at ───────────
+    # `origin` says who asked (ci/cli/console/api); `executor` says who holds the
+    # process, which is what decides whether this platform can kill it.
+    origin: Mapped[str] = mapped_column(String(16), default="console")
+    executor: Mapped[str] = mapped_column(String(16), default="shauron")
+    tasks: Mapped[str] = mapped_column(Text, default="[]")
+    subject: Mapped[str] = mapped_column(Text, default="{}")
+    ticket_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    daemon_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    contract_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    deadline_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    evidence_state: Mapped[str] = mapped_column(String(16), default="none")
+    upload_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_event_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    revived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    revival_count: Mapped[int] = mapped_column(Integer, default=0)
+    cancelled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
 
 class JobArtifact(Base):
     __tablename__ = "job_artifacts"
@@ -1669,6 +1693,10 @@ class AnalysisRun(Base):
     repository_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("repositories.id"), nullable=True, index=True)
     pull_request: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Which scan flow produced this evidence. NULL means a plain import: allowed,
+    # attributable to a person, and structurally unable to close a finding.
+    scan_job_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("scan_jobs.id"), nullable=True, index=True)
     evaluated: Mapped[dict] = mapped_column(JSON, default=dict)
     receipt: Mapped[dict] = mapped_column(JSON, default=dict)
     findings_seen: Mapped[int] = mapped_column(Integer, default=0)
@@ -2192,3 +2220,39 @@ class HealthProbe(Base):
     created_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────── v01 scan flows: the timeline ───────────────
+
+
+class ScanEvent(Base):
+    """One line of a scan flow's timeline: append-only, never edited.
+
+    `status` on the job is a projection of these rows; that projection is what
+    makes "it was abandoned and then answered" representable at all. `seq` is
+    assigned by the platform, `at_server` is when the platform saw the event and
+    `at_client` is when the executor claims it happened — client clocks are
+    evidence, never ordering.
+    """
+
+    __tablename__ = "scan_events"
+    __table_args__ = (
+        UniqueConstraint("job_id", "seq", name="uq_scan_event_seq"),
+        Index("ix_scan_events_job", "job_id", "seq"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), index=True)
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("scan_jobs.id", ondelete="CASCADE"))
+    seq: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(32))
+    source: Mapped[str] = mapped_column(String(16), default="platform")
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    at_server: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+    at_client: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    detail: Mapped[str] = mapped_column(Text, default="{}")

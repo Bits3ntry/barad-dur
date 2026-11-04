@@ -1,41 +1,42 @@
-# Barad-dûr ↔ Shauron scanner contract (v0 draft)
+# Barad-dûr ↔ Shauron scanner contract
 
-Shauron is an independent product (CLI, GitHub Action, sensor/worker). This
-repo ships the *platform side* of the contract; Shauron's repo (new) builds the
-runner. Nothing here couples scanner identity to persistence entities.
+This document used to carry a v0 draft of the contract. **The contract now lives in
+the Shauron repository**, which is its source of truth:
 
-## Goals of the contract
-1. Same verbs for every engine: sbom, secrets, misconfig, sast, dast-passive,
-   auth-analyzed (later pentest), regression (authorized only).
-2. Versioned, additive: upload/downgrade of the contract is rejected by the
-   platform, not guessed.
-3. Ephemeral execution: runner containers isolate per run; the platform never
-   trusts "shauron says" — every result carries the run identity + tool version
-   + fingerprint recipe id, and dedupes against the same recipes the platform
-   already uses.
+    ../shauron/CONTRACT.md      the envelopes: barad-ticket-v1, barad-evidence-v1,
+                                barad-event-v1, and the invariants a receiver must refuse
+    ../shauron/DESIGN.md        how a scan works: jobs, timeline, revival,
+                                permissions, deadlines
+    ../shauron/ARCHITECTURE.md  how the scanner is built and shipped
+    ../shauron/contract/        the JSON Schemas, versioned, plus fixtures
 
-## Contract v0 (first slice to land in phase 7)
+Two products, one envelope. Barad-dûr mints and signs a **ticket**; Shauron
+verifies it offline with the public key, executes inside it, and publishes
+**events** and **evidence** keyed by `ticket_id`.
 
-```
-POST /api/v1/scanner/v0/begin        -> {run_id, upload_token (short-lived), recipes[]}
-POST /bag-digest /api/v1/scanner/v0/findings   (chunked, ≤ 1k/req, barad-findings-v1)
-POST /api/v1/scanner/v0/request-authorization {asset_id, profile} -> explicit grant/deny
-   (denied for intrusive profiles without scan_authorizations)
-POST /api/v1/scanner/v0/finish       {verdict, counters, evidence_refs (redacted)}
-```
+## What this repository implements (v01)
 
-- Auth: OIDC exchange (action identity) **or** API key for sensors; upload_token
-  binds to `run_id` only.
-- `barad-findings-v1` stays THE envelope schema; recipes array lets the
-  platform confirm which fingerprint kind the scanner used.
-- Evidence: never raw secrets; ref-blobs with pre-set redaction — the same
-  boundary the CLI already enforces (tests pin it).
+- `POST /api/v1/scans` — resolves an action into tasks, authorizes it **once**
+  (grant for console work, repository binding for CI/CLI work), signs an Ed25519
+  ticket and delivers it to a daemon.
+- `GET /api/v1/scans/actions` — the closed catalog the console offers.
+- `GET /api/v1/scans/key` — the public half of the signing key.
+- `GET /api/v1/scans`, `GET /api/v1/scans/{id}`, `.../timeline` — the flow and its
+  append-only history, with both clocks.
+- `POST /api/v1/scans/{id}/events`, `.../evidence` — executor routes, authenticated
+  with the ticket's own `upload_token`, never an organization API key.
+- `POST /api/v1/scans/{id}/cancel` — a human instruction, not a policy verdict.
+- `POST /api/v1/scans/sweep` — declares silent flows abandoned; idempotent, safe
+  from cron.
 
-## Trivy/OpenGrep today vs Shauron
+`SUPPORTED_CONTRACT` in `routers/scans.py` is pinned to `shauron/VERSION`, and a
+test fails when the two drift: a format change must fail a build, never a scan at
+3am.
 
-The `barad` CLI currently runs Trivy + pinned OpenGrep directly and publishes
-through its platform/DT/dojo adapters. Shauron keeps that code path but lives
-outside: CLI + GitHub Action composite (existing `action/`) becomes a thin
-installer, the sensor is the long-running picker for scheduled scans. Migration
-order: contract land → CLI delegates its run to the contract → action keeps
-local fallback for air-gapped machines.
+## The one rule worth repeating
+
+A grant authorizes the platform to act **alone** on a target. CI and laptop runs
+push evidence about code the caller already holds, so they need no grant; the
+console button does. Revoking a grant does not stop a run in flight — it governs
+the next ticket, and the running flow is annotated instead of killed. Cancelling
+is a separate act: that one does stop it.
