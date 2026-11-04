@@ -65,7 +65,11 @@ def _exact_or_wildcard(grant_type: str, grant_value: str,
     own-domain names, never to the apex, sibling TLDs or unrelated hosts."""
     target_value = target_value.strip().lower()
     grant_value = grant_value.strip().lower()
-    if grant_type == "wildcard_domain" and target_type in ("domain", "wildcard_domain"):
+    # A grant written before the normalisation above (or by hand) may carry the
+    # wildcard in a `domain` row: the star is the permission, the label is not.
+    is_wildcard = grant_type == "wildcard_domain" or (
+        grant_type == "domain" and grant_value.startswith("*."))
+    if is_wildcard and target_type in ("domain", "wildcard_domain"):
         if not grant_value.startswith("*."):
             return False
         base = grant_value[2:]
@@ -255,6 +259,11 @@ def issue_grant(session, org_id: str, principal: str, capabilities: list[str],
             raise ValueError(f"unknown target type {t.get('type')!r}")
         if not t.get("value"):
             raise ValueError("target value required")
+        # `domain` + `*.example` is the same permission as `wildcard_domain`, and
+        # the picker copies the type from the scope row, which stores patterns as
+        # `domain`. Normalise at the door so the stored grant and its reading agree.
+        if t["type"] == "domain" and t["value"].strip().startswith("*."):
+            t["type"] = "wildcard_domain"
     now = _now()
     grant = models.ScanGrant(
         org_id=org_id, principal=principal,

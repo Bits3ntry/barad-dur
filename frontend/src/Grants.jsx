@@ -275,7 +275,10 @@ function IssueDialog({ open, onClose, catalog, onIssued }) {
       seen.set(`${type}:${row.value}`, { type, value: row.value, hint: row.project || '' })
     }
     for (const row of scopeTargets) {
-      const type = row.target_type || 'domain'
+      // Scope stores a pattern as `domain` with a leading star; a grant needs the
+      // wildcard type or it would only ever match the literal string.
+      const type = (row.value || '').startsWith('*.')
+        ? 'wildcard_domain' : (row.target_type || 'domain')
       seen.set(`${type}:${row.value}`, { type, value: row.value, hint: 'in scope' })
     }
     return [...seen.values()]

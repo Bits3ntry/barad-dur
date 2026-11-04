@@ -96,6 +96,48 @@ def test_default_deny_and_grant_allows(client):
     assert allow.json()["policy_version"] == 1
 
 
+def test_a_star_value_is_a_wildcard_whatever_type_it_arrives_as(client):
+    """`domain: *.example` and `wildcard_domain: *.example` are one permission.
+
+    The console's target picker copies the type from the scope row, and Scope
+    stores a pattern as `domain` with a leading star — so grants were being
+    written as an exact `domain` whose value happened to contain `*`, matching
+    nothing and denying every host under it. The star is the permission.
+    """
+    http, headers, *_ = client
+
+    created = _grant(client, headers, capabilities=("passive_discovery",),
+                     targets=("domain", "*.empresa.com"), hours=24)
+    assert created.status_code == 200, created.text
+    stored = created.json()["data"]["targets"][0]
+    assert stored["type"] == "wildcard_domain", stored
+
+    allowed = _authorize(http, headers, "runner-01", "passive_discovery",
+                         [("domain", "api.dev.empresa.com")])
+    assert allowed.json()["decision"] == "allow", allowed.text
+    apex = _authorize(http, headers, "runner-01", "passive_discovery",
+                      [("domain", "empresa.com")])
+    assert apex.json()["decision"] == "deny"     # *.empresa.com never covers the apex
+
+    # A grant written before the normalisation still works: same star, old label.
+    session = client[3]
+    legacy = models.ScanGrant(org_id=client[4].id, principal="runner-legacy",
+                              capabilities="passive_discovery", issued_by="santiago",
+                              justification="written before normalisation",
+                              policy_version="v1", status="active",
+                              valid_from=models.utcnow(),
+                              valid_until=models.utcnow() + __import__("datetime").timedelta(hours=1),
+                              created_at=models.utcnow(), updated_at=models.utcnow())
+    session.add(legacy)
+    session.flush()
+    session.add(models.ScanGrantTarget(grant_id=legacy.id, target_type="domain",
+                                       target_value="*.legacy.example"))
+    session.commit()
+    read = _authorize(http, headers, "runner-legacy", "passive_discovery",
+                      [("domain", "api.legacy.example")])
+    assert read.json()["decision"] == "allow", read.text
+
+
 def test_wildcard_strictness(client):
     test_client, headers, _other, _session, _org = client
     _grant(client, headers)
