@@ -57,7 +57,8 @@ class SarifIngestIn(BaseModel):
 
 def ingest_run(session, org_id: str, proj, pv, run: dict, *,
                source: str = "api", tool_hint: str | None = None,
-               actor: str | None = None, commit: bool = True) -> dict:
+               actor: str | None = None, commit: bool = True,
+               analysis_run_id: str | None = None) -> dict:
     """Ingest ONE SARIF run into the findings pipeline (idempotent by recipe).
 
     Extracted from the route so the scan-flow evidence sink uses the same code:
@@ -100,6 +101,7 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
                 detail=f"SARIF {tool_name} {rule_id}", tool=tool_name,
                 rule_id=rule_id, path=path, line=line,
                 last_seen_version_id=pv.id,
+                last_evaluated_run_id=analysis_run_id,
                 first_seen_at=now, last_seen_at=now, updated_at=now)
             session.add(finding)
             session.flush()
@@ -107,6 +109,10 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
         else:
             finding.last_seen_at = now
             finding.last_seen_version_id = pv.id
+            # A run that just ingested this finding is the run that evaluated it.
+            # Without this the flow cannot answer "what did I produce".
+            if analysis_run_id:
+                finding.last_evaluated_run_id = analysis_run_id
             finding.severity = severity
             finding.line = line
             finding.updated_at = now

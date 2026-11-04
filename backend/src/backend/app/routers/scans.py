@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app import authorization, models, scan_actions, scan_flow, shauron_signing
+from backend.app.routers import findings as findings_router
 from backend.app.auth import require_org
 from backend.app.db import get_session
 from backend.app.projects import by_ref
@@ -462,6 +463,34 @@ def get_scan(job_id: str, org: models.Organization = Depends(require_org),
     return {"data": data}
 
 
+@router.get("/scans/{job_id}/findings")
+def scan_findings(job_id: str, limit: int = Query(default=200, ge=1, le=1000),
+                  org: models.Organization = Depends(require_org),
+                  session: Session = Depends(get_session)) -> dict:
+    """What this run produced, by identity.
+
+    A flow owns its artifacts, and every artifact is an analysis run; a finding
+    records the run that last evaluated it. So the flow's result is the findings
+    whose last evaluation was one of its own runs — no guessing from timestamps.
+    """
+    job = _job_or_404(session, org.id, job_id)
+    run_ids = [row[0] for row in session.query(models.AnalysisRun.id)
+               .filter(models.AnalysisRun.scan_job_id == job.id).all()]
+    if not run_ids:
+        return {"data": [], "counters": {"total": 0, "by_severity": {}}}
+
+    rows = (session.query(models.Finding)
+            .filter(models.Finding.org_id == org.id,
+                    models.Finding.last_evaluated_run_id.in_(run_ids))
+            .order_by(models.Finding.last_seen_at.desc())
+            .limit(limit).all())
+    data = [findings_router.finding_data(session, row) for row in rows]
+    by_severity: dict[str, int] = {}
+    for item in data:
+        by_severity[item["severity"]] = by_severity.get(item["severity"], 0) + 1
+    return {"data": data, "counters": {"total": len(data), "by_severity": by_severity}}
+
+
 @router.get("/scans/{job_id}/state")
 def scan_state(job_id: str,
                x_ticket_token: str = Header(default="", alias=TOKEN_HEADER),
@@ -598,23 +627,20 @@ def _ingest_evidence(session: Session, job: models.ScanJob,
         # one engine produced both.
         tools: set[str] = set()
         counters = {"received": 0, "created": 0, "existing": 0, "skipped": 0}
-        for run in runs:
-            result = sarif_router.ingest_run(
-                session, job.org_id, project, pv, run, source="scan", commit=False)
-            if result["tool"]:
-                tools.add(str(result["tool"]))
-            for key in counters:
-                counters[key] += result["counts"].get(key, 0)
-        tool_name = ",".join(sorted(tools)) if tools else None
+        # The analysis record is created FIRST: the findings it ingests are the
+        # findings it evaluated, and that link is what lets a flow report its own
+        # result instead of the project's whole backlog.
+        drivers = {str((run.get("tool") or {}).get("driver", {}).get("name") or "sarif")
+                   for run in runs}
         repository_id = None
         remote = subject.get("repository")
         if remote:
             row = (session.query(models.Repository)
                    .filter_by(org_id=job.org_id, remote_url=remote).one_or_none())
             repository_id = row.id if row else None
-        session.add(models.AnalysisRun(
+        analysis_run = models.AnalysisRun(
             org_id=job.org_id, project_id=project.id, project_version_id=pv.id,
-            tool=(tool_name or "sarif")[:64],
+            tool=(",".join(sorted(drivers)) if drivers else "sarif")[:64],
             tool_version=(payload.tool or {}).get("version"),
             coverage=payload.coverage or "full", source="scan",
             revision=subject.get("commit"), branch=subject.get("branch"),
@@ -625,7 +651,24 @@ def _ingest_evidence(session: Session, job: models.ScanJob,
             evaluated={"paths": (payload.evaluated or {}).get("paths") or []},
             findings_seen=counters["received"], scan_job_id=job.id,
             actor=job.created_by, receipt={"source": "scan_flow"},
-            started_at=job.started_at, finished_at=_now()))
+            started_at=job.started_at, finished_at=_now())
+        session.add(analysis_run)
+        session.flush()
+
+        for run in runs:
+            result = sarif_router.ingest_run(
+                session, job.org_id, project, pv, run, source="scan", commit=False,
+                analysis_run_id=analysis_run.id)
+            if result["tool"]:
+                tools.add(str(result["tool"]))
+            for key in counters:
+                counters[key] += result["counts"].get(key, 0)
+
+        # Name the providers the ingest actually resolved, and record how many
+        # results were parsed — the record was created before the loop.
+        tool_name = ",".join(sorted(tools)) if tools else None
+        analysis_run.tool = (tool_name or "sarif")[:64]
+        analysis_run.findings_seen = counters["received"]
         return {"kind": payload.kind, "counters": counters, "tool": tool_name}
 
     return {"kind": payload.kind, "stored_only": True}

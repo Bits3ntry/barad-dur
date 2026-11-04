@@ -407,6 +407,39 @@ def test_a_sarif_artifact_becomes_findings_attributed_to_the_flow(flow):
         session.close()
 
 
+def test_the_flow_reports_its_own_result(flow):
+    """What did this run produce? The answer is the findings whose last evaluation
+    was one of the flow's own artifacts — not the project's whole backlog, and not
+    "everything seen since"."""
+    ticket = _mint(flow, version="0.4.2").json()["ticket"]
+    job_id, token = ticket["ticket_id"], ticket["evidence"]["upload_token"]
+    content = _sarif(_result(uri="app/models.py", line=7))
+    posted = flow["client"].post(
+        f"/api/v1/scans/{job_id}/evidence",
+        json={"schema": "barad-evidence-v1", "ticket_id": job_id, "kind": "sast",
+              "format": "sarif-2.1.0", "coverage": "full",
+              "content_hash": "sha256:" + hashlib.sha256(content.encode()).hexdigest(),
+              "content": content, "tool": {"name": "opengrep", "version": "1.33.1"},
+              "evaluated": {"paths": ["app/"]}},
+        headers={"X-Ticket-Token": token})
+    assert posted.status_code == 201, posted.text
+
+    result = flow["client"].get(f"/api/v1/scans/{job_id}/findings",
+                                headers=flow["headers"])
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["counters"]["total"] == 1
+    assert body["data"][0]["path"] == "app/models.py"
+    assert body["data"][0]["line"] == 7
+    assert body["counters"]["by_severity"]
+
+    # A flow that never delivered evidence reports an empty result, not an error.
+    quiet = _mint(flow, commit="a" * 40).json()["ticket"]["ticket_id"]
+    empty = flow["client"].get(f"/api/v1/scans/{quiet}/findings",
+                               headers=flow["headers"]).json()
+    assert empty["data"] == [] and empty["counters"]["total"] == 0
+
+
 def test_the_same_artifact_twice_is_not_two_findings(flow):
     minted = _mint(flow, version="0.4.2").json()
     ticket = minted["ticket"]

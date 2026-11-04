@@ -373,13 +373,21 @@ def list_findings(
     rows = (query.order_by(models.Finding.last_seen_at.desc())
             .offset(offset).limit(limit).all())
 
-    data = []
-    for finding in rows:
-        component = session.get(models.Component, finding.component_id) \
-            if finding.component_id else None
-        vulnerability = session.get(models.Vulnerability, finding.vulnerability_id) \
-            if finding.vulnerability_id else None
-        data.append({
+    data = [finding_data(session, finding) for finding in rows]
+    return {"data": data, "total": total, "limit": limit, "offset": offset}
+
+
+def finding_data(session, finding: models.Finding) -> dict:
+    """One finding exactly as the API returns it.
+
+    Shared on purpose: a second reader (the scan drawer) must not grow its own
+    copy of this shape and drift from the list screen.
+    """
+    component = session.get(models.Component, finding.component_id) \
+        if finding.component_id else None
+    vulnerability = session.get(models.Vulnerability, finding.vulnerability_id) \
+        if finding.vulnerability_id else None
+    return {
             "id": finding.id,
             "kind": finding.kind,
             "status": finding.status,
@@ -403,8 +411,7 @@ def list_findings(
             "sla_deadline": finding.sla_deadline.isoformat() if finding.sla_deadline else None,
             "first_seen_at": finding.first_seen_at.isoformat(),
             "last_seen_at": finding.last_seen_at.isoformat(),
-        })
-    return {"data": data, "total": total, "limit": limit, "offset": offset}
+    }
 
 
 def _resolve(session, org_id: str, project: str, version: str):
