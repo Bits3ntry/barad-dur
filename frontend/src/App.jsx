@@ -21,6 +21,7 @@ import Setup from './Setup'
 import Startup from './Startup'
 import Invite from './Invite'
 import Projects from './Projects'
+import Sbom from './Sbom'
 import CtemCycle from './CtemCycle'
 import Scope from './Scope'
 import Vulnerabilities from './Vulnerabilities'
@@ -80,6 +81,7 @@ const NAV = [
     { key: 'regression', label: 'Regression', icon: 'regression' },
   ] },
   { group: 'Supply chain', collapsible: true, items: [
+    { key: 'sbom', label: 'SBOMs', icon: 'components' },
     { key: 'licenses', label: 'Licenses', icon: 'licenses' },
     { key: 'orchestration', label: 'Orchestration', icon: 'orchestration' },
     { key: 'jira', label: 'Jira', icon: 'jira' },
@@ -119,6 +121,11 @@ function parseHash() {
   const tail = rest.join('::')
   const tab = LEGACY_KEYS[key] || (ALL_KEYS.includes(key) ? key : 'dashboard')
   const focus = {}
+  if (tab === 'sbom' && tail) {
+    const [projectSlug, ...rest] = tail.split('/')
+    focus.projectSlug = projectSlug
+    focus.version = decodeURIComponent(rest.join('/'))
+  }
   if (tab === 'findings' && tail) focus.findingId = tail
   if (tab === 'analysis' && tail) {
     const params = new URLSearchParams(tail)
@@ -260,6 +267,12 @@ export default function App() {
     window.history.pushState({}, '', `/#${key}`)
   }
 
+  function openBom(slug, version) {
+    setTab('sbom')
+    setFocus({ projectSlug: slug, version })
+    window.history.pushState({}, '', `/#sbom::${slug}/${encodeURIComponent(version)}`)
+  }
+
   function openProject(slug, nextTab = 'summary') {
     if (!slug) return
     const suffix = nextTab && nextTab !== 'summary' ? `/${nextTab}` : ''
@@ -339,6 +352,9 @@ export default function App() {
       )
       case 'code': return <CodeReview projects={projects} />
       case 'gates': return <Gates projects={projects} />
+      case 'sbom': return (
+        <Sbom focus={focus} onOpen={openBom} onBack={() => go('sbom')} />
+      )
       case 'licenses': return <Licenses projects={projects} />
       case 'pentest': return <Pentest projects={projects} />
       case 'jira': return <Jira />

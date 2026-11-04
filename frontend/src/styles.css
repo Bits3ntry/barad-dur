@@ -2022,3 +2022,64 @@ a:focus-visible,
 /* Unknown keeps a bar too — a missing verdict is still a verdict the reader has
    to see, it just is not a colour that competes with green, amber or red. */
 .verification-table tbody tr.state-unknown td.state-cell { box-shadow: inset 2px 0 0 #d4d7dd; }
+
+/* ── supply chain: a BOM read as a document ───────────────────────────────
+   The index is a list of builds; one build is a header with its severity
+   vector, then tabs. The vector is the only place saturation is allowed, the
+   same way severity is elsewhere in the console. */
+.sbom-totals { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; font-size: 12.5px;
+  color: var(--text-dim); }
+.sbom-totals strong { display: block; font-size: 19px; font-weight: 650; color: var(--text);
+  letter-spacing: -.3px; }
+.sbom-vector { display: flex; gap: 6px; align-items: center; }
+.sbom-count { display: grid; gap: 1px; padding: 4px 9px; border: 1px solid var(--line);
+  border-radius: 8px; min-width: 52px; }
+.sbom-count-value { font-size: 14px; font-weight: 650; color: var(--text);
+  font-variant-numeric: tabular-nums; line-height: 1.1; }
+.sbom-count-label { font-size: 9.5px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); }
+/* A zero in red is noise: the colour only appears when there is something. */
+.sbom-count.sev-critical:has(.sbom-count-value:not(.is-zero)) .sbom-count-value { color: var(--critical); }
+.sbom-count.sev-high:has(.sbom-count-value:not(.is-zero)) .sbom-count-value { color: var(--high); }
+.sbom-count.sev-medium:has(.sbom-count-value:not(.is-zero)) .sbom-count-value { color: var(--medium); }
+.sbom-count.sev-low:has(.sbom-count-value:not(.is-zero)) .sbom-count-value { color: var(--low); }
+.sbom-count-value.is-zero { color: var(--muted); font-weight: 500; }
+.sbom-head { display: flex; justify-content: space-between; align-items: flex-end;
+  gap: 18px; flex-wrap: wrap; }
+.sbom-version { font-size: 15px; font-weight: 500; color: var(--text-dim); margin-left: 6px; }
+.sbom-latest { margin-left: 6px; font-size: 10px; }
+.sbom-sub { display: block; font-size: 11px; }
+.sbom-open { text-align: right; }
+.sbom-index td, .sbom-components td, .sbom-vulns td { vertical-align: top; }
+.sbom-index .sbom-vector { gap: 3px; }
+.sbom-index .sbom-count { padding: 2px 6px; min-width: 40px; border: none; }
+.sbom-index .sbom-count-value { font-size: 12px; }
+.sbom-index .sbom-count-label { display: none; }
+.sbom-overview { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.sbom-top { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.sbom-top li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 8px; align-items: baseline; font-size: 12.5px; }
+.sbom-licenses { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 12.5px; }
+.sbom-licenses li { display: flex; justify-content: space-between; gap: 12px;
+  border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.sbom-licenses li:last-child { border-bottom: 0; }
+.sbom-imports { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 12.5px; }
+.sbom-imports li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 10px; align-items: baseline; }
+.sbom-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sbom-filters select, .sbom-filters input { height: 32px; min-height: 32px; font-size: 12.5px; }
+.pill.sev-critical, .pill.sev-high, .pill.sev-medium, .pill.sev-low, .pill.sev-unknown {
+  background: var(--panel); border-color: currentColor; }
+.pill.sev-critical { color: var(--critical); }
+.pill.sev-high { color: var(--high); }
+.pill.sev-medium { color: var(--medium); }
+.pill.sev-low { color: var(--low); }
+.pill.sev-unknown { color: var(--muted); }
+.sbom-clean { font-size: 12px; color: var(--muted); border: 1px dashed var(--line-strong);
+  border-radius: 999px; padding: 3px 10px; }
+.sbom-drill { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 8px; align-items: baseline; width: 100%; justify-content: normal; text-align: left;
+  border: none; background: transparent; padding: 3px 4px; border-radius: 6px;
+  font: inherit; font-size: 12.5px; }
+.sbom-drill:hover { background: var(--panel-2); }
+.sbom-top li { display: block; }

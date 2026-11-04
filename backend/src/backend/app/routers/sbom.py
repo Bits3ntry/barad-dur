@@ -275,3 +275,181 @@ def baseline_diff(project: str = Query(...), version: str = Query(...),
     return {"data": {"project": project, "version": version,
                      "baseline_at": row.created_at.isoformat(),
                      **_baseline_diff(before, after)}}
+
+
+# ── the BOM as a screen, not a receipt ──────────────────────────────────────
+# A BOM belongs to a project version, but it is not a project concern: the same
+# reading (components, vulnerabilities, KEV, licenses) is asked from Supply
+# chain without opening the project. So the index answers "which versions have
+# a BOM" and the version endpoint answers "what is inside this one" — the two
+# questions the Dependency-Track screen is built on.
+
+CLOSED_FINDING_STATUSES = ("closed", "resolved", "false_positive")
+
+
+def _severity_counts(findings) -> dict:
+    counts = {sev: 0 for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")}
+    for finding in findings:
+        key = (finding.severity or "UNKNOWN").upper()
+        counts[key if key in counts else "UNKNOWN"] += 1
+    return counts
+
+
+def _kev_cves(session) -> set:
+    return {row.cve_id for row in session.query(models.KevEntry).all()}
+
+
+def _version_bom(session, org_id: str, project, version, kev_cves: set) -> dict:
+    """One project version, read as a BOM: what it ships and what is wrong with it."""
+    links = (session.query(models.VersionComponent)
+             .filter_by(project_version_id=version.id).all())
+    components = {}
+    if links:
+        components = {row.id: row for row in
+                      session.query(models.Component)
+                      .filter(models.Component.id.in_({link.component_id for link in links})).all()}
+    findings = (session.query(models.Finding)
+                .filter_by(org_id=org_id, last_seen_version_id=version.id)
+                .filter(models.Finding.status.notin_(CLOSED_FINDING_STATUSES)).all())
+    imports = (session.query(models.SbomImport)
+               .filter_by(project_version_id=version.id)
+               .order_by(models.SbomImport.created_at.desc()).all())
+    advisory_ids = {f.vulnerability_id for f in findings if f.vulnerability_id}
+    advisories = {}
+    if advisory_ids:
+        advisories = {row.id: row for row in
+                      session.query(models.Vulnerability)
+                      .filter(models.Vulnerability.id.in_(advisory_ids)).all()}
+    kev = sum(1 for finding in findings
+              if (advisories.get(finding.vulnerability_id) or None) is not None
+              and advisories[finding.vulnerability_id].cve_id in kev_cves)
+    licenses = {}
+    for component in components.values():
+        license_name = (component.license or "unknown").strip() or "unknown"
+        licenses[license_name] = licenses.get(license_name, 0) + 1
+    return {
+        "project": {"slug": project.slug, "name": project.name},
+        "version": version.version,
+        "version_id": version.id,
+        "component_id": version.component_id,
+        "components": len(components),
+        "direct": sum(1 for link in links if link.is_direct),
+        "imports": [{"id": row.id, "source": row.source, "filename": row.filename,
+                     "at": row.created_at.isoformat() if row.created_at else None,
+                     "components_received": row.components_received}
+                    for row in imports],
+        "last_import_at": imports[0].created_at.isoformat() if imports else None,
+        "findings": {"total": len(findings), "kev": kev,
+                     "by_severity": _severity_counts(findings)},
+        "licenses": licenses,
+        "_components": components,
+        "_findings": findings,
+        "_advisories": advisories,
+    }
+
+
+@router.get("/sbom/index")
+def bom_index(org: models.Organization = Depends(auth.require_org),
+              session: Session = Depends(get_session)):
+    """Every project version that has a BOM, newest import first."""
+    rows = []
+    seen_project = set()
+    kev_cves = _kev_cves(session)
+    for project in (session.query(models.Project).filter_by(org_id=org.id)
+                    .order_by(models.Project.name).all()):
+        for version in (session.query(models.ProjectVersion)
+                        .filter_by(project_id=project.id)
+                        .order_by(models.ProjectVersion.created_at.desc()).all()):
+            data = _version_bom(session, org.id, project, version, kev_cves)
+            if not data["imports"] and not data["components"]:
+                continue
+            data.pop("_components"); data.pop("_findings"); data.pop("_advisories")
+            # Versions arrive newest first: the first one that survives the
+            # empty filter is the latest BOM of that project.
+            data["is_latest"] = project.slug not in seen_project
+            seen_project.add(project.slug)
+            rows.append(data)
+    totals = {sev: sum(row["findings"]["by_severity"][sev] for row in rows)
+              for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")}
+    return {"data": rows,
+            "totals": {"boms": len(rows),
+                       "components": sum(row["components"] for row in rows),
+                       "findings": sum(row["findings"]["total"] for row in rows),
+                       "kev": sum(row["findings"]["kev"] for row in rows),
+                       "by_severity": totals}}
+
+
+@router.get("/sbom/version")
+def bom_version(project: str = Query(...), version: str = Query(...),
+                component_id: str | None = Query(default=None),
+                org: models.Organization = Depends(auth.require_org),
+                session: Session = Depends(get_session)):
+    """One version's dependency-tracker payload: header, components, findings."""
+    project_row = (session.query(models.Project)
+                   .filter_by(org_id=org.id, slug=project).one_or_none())
+    if project_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    query = (session.query(models.ProjectVersion)
+             .filter_by(project_id=project_row.id, version=version))
+    if component_id:
+        query = query.filter_by(component_id=component_id)
+    version_row = query.one_or_none()
+    if version_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
+
+    data = _version_bom(session, org.id, project_row, version_row, _kev_cves(session))
+    kev_cves = _kev_cves(session)
+    components = data.pop("_components")
+    findings = data.pop("_findings")
+    advisories = data.pop("_advisories")
+
+    rows = []
+    for finding in sorted(findings, key=lambda f: (f.severity or "UNKNOWN", f.first_seen_at)):
+        component = components.get(finding.component_id) if finding.component_id else None
+        advisory = advisories.get(finding.vulnerability_id)
+        rows.append({
+            "finding_id": finding.id,
+            "component": component.name if component else None,
+            "component_version": component.version if component else None,
+            "purl": component.purl if component else None,
+            "vulnerability": (advisory.cve_id if advisory and advisory.cve_id
+                              else (advisory.source_id if advisory else finding.rule_id)),
+            "title": advisory.title if advisory else finding.title,
+            "severity": (finding.severity or "UNKNOWN").upper(),
+            "kev": bool(advisory and advisory.cve_id in kev_cves),
+            "analyzer": finding.tool or finding.source,
+            "kind": finding.kind,
+            "attributed_on": finding.first_seen_at.isoformat() if finding.first_seen_at else None,
+            "analysis": finding.status,
+            "suppressed": finding.status in ("suppressed", "false_positive"),
+            "url": advisory.url if advisory else finding.url,
+        })
+
+    # The Components tab reads the same version: each library with its own
+    # finding count, so "what is wrong here" starts from the inventory, not
+    # from a severity rollup nobody can act on.
+    per_component = {}
+    worst = {}
+    for finding in findings:
+        key = finding.component_id
+        per_component[key] = per_component.get(key, 0) + 1
+        severity = (finding.severity or "UNKNOWN").upper()
+        order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+        if severity not in order:
+            severity = "UNKNOWN"
+        if key not in worst or order.index(severity) < order.index(worst[key]):
+            worst[key] = severity
+    links = {link.component_id: link for link in
+             session.query(models.VersionComponent)
+             .filter_by(project_version_id=version_row.id).all()}
+    data["component_rows"] = sorted(
+        ({"name": component.name, "version": component.version,
+          "purl": component.purl, "license": component.license,
+          "direct": bool(links.get(component.id) and links[component.id].is_direct),
+          "findings": per_component.get(component.id, 0),
+          "worst": worst.get(component.id)}
+         for component in components.values()),
+        key=lambda row: (-(row["findings"] or 0), (row["name"] or "").lower()))
+
+    data["vulnerabilities"] = rows
+    return {"data": data}
