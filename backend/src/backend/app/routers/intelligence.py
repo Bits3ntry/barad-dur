@@ -40,13 +40,29 @@ def fetch_kev(timeout: float = 15.0) -> list[dict]:
     return [row for row in rows if row["cve_id"]]
 
 
-def fetch_epss(timeout: float = 15.0) -> list[dict]:
-    """Pull EPSS scores from the FIRST public API (no key supported)."""
-    url = f"{EPSS_URL}?limit=500"
-    with urllib.request.urlopen(url, timeout=timeout) as response:
-        payload = json.load(response)
+def fetch_epss(timeout: float = 15.0, cve_ids: list[str] | None = None) -> list[dict]:
+    """Pull EPSS scores from the FIRST public API (no key supported).
+
+    Without ids this returns the highest-scoring 500 advisories in the world,
+    which is not the same thing as "the ones in this inventory": a CVE published
+    last week scores low and would silently stay `unknown`. With ids it asks for
+    exactly what the catalogue holds, so an unknown score means the feed has none.
+    """
+    entries: list[dict] = []
+    if cve_ids:
+        for start in range(0, len(cve_ids), 80):
+            chunk = cve_ids[start:start + 80]
+            url = f"{EPSS_URL}?cve={','.join(chunk)}"
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                payload = json.load(response)
+            entries.extend(payload.get("data", []) or [])
+    else:
+        url = f"{EPSS_URL}?limit=500"
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            payload = json.load(response)
+        entries = payload.get("data", []) or []
     rows = []
-    for entry in payload.get("data", []):
+    for entry in entries:
         rows.append({
             "cve_id": entry.get("cve"),
             "epss": f"{float(entry.get('epss', 0)):.6f}",
@@ -135,8 +151,10 @@ def sync_feeds(org: models.Organization = Depends(auth.require_org),
     for row in rows:
         session.merge(models.KevEntry(**row, fetched_at=now))
         kev_n += 1
+    held = sorted({row.cve_id for row in session.query(models.Vulnerability).all()
+                   if row.cve_id})
     try:
-        rows = fetch_epss()
+        rows = fetch_epss(cve_ids=held) if held else fetch_epss()
     except Exception as error:  # noqa: BLE001
         raise HTTPException(status.HTTP_502_BAD_GATEWAY,
                             f"EPSS sync failed: {type(error).__name__}") from None

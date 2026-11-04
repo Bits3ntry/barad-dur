@@ -268,9 +268,11 @@ def list_projects(org: models.Organization = Depends(auth.require_org),
             .filter_by(org_id=org.id).order_by(models.Project.name).all())
     data = []
     for project in rows:
+        # Newest first: every screen defaults to the first entry, and defaulting
+        # to the oldest version is how an analysed project opened on an empty one.
         versions = (session.query(models.ProjectVersion)
                     .filter_by(project_id=project.id)
-                    .order_by(models.ProjectVersion.created_at).all())
+                    .order_by(models.ProjectVersion.created_at.desc()).all())
         data.append({"id": project.id, "name": project.name, "slug": project.slug,
                      "group": project.group_name,
                      "description": project.description,
