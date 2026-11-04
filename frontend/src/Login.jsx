@@ -2,6 +2,19 @@ import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { Dialog, Input, Loading, Banner } from './ui'
 
+const STARTUP_STEPS = [
+  'Organization and owner',
+  'Organization details',
+  'Invite your team',
+  'Connect code',
+  'Connect tickets',
+  'Enter Barad-dûr',
+]
+
+function slugify(value) {
+  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
 /* The entrance. Nothing else renders without credentials: an app that shows a
    broken dashboard to a visitor is worse than an honest sign-in screen. */
 
@@ -28,6 +41,10 @@ export function BrandMark({ size = 30 }) {
 export default function Login({ onAuthenticated }) {
   const [mode, setMode] = useState('signin')
   const [form, setForm] = useState({ email: '', password: '', org_slug: '', url: '', key: '' })
+  const [setup, setSetup] = useState({
+    org_name: '', org_slug: '', email: '', display_name: '', password: '', setup_code: '',
+  })
+  const [bootstrap, setBootstrap] = useState(undefined)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
@@ -44,9 +61,39 @@ export default function Login({ onAuthenticated }) {
     api.get('/api/v1/auth/oidc/status')
       .then((r) => setSso(r.data))
       .catch(() => setSso(null))
+    api.get('/api/v1/auth/bootstrap/status')
+      .then((r) => {
+        setBootstrap(r.data)
+        if (r.data?.available && r.data?.setup_enabled) {
+          setMode('setup')
+          if (!r.data.organization_exists && window.location.pathname !== '/startup') {
+            window.history.replaceState({}, '', '/startup')
+          }
+        }
+      })
+      .catch(() => setBootstrap(null))
   }, [])
 
   const set = (field) => (event) => setForm((f) => ({ ...f, [field]: event.target.value }))
+  const setSetupField = (field) => (event) => {
+    const value = field === 'org_slug' ? slugify(event.target.value) : event.target.value
+    setSetup((current) => ({ ...current, [field]: value }))
+  }
+
+  function openSetup() {
+    setMode('setup')
+    setError('')
+  }
+
+  function openSignIn() {
+    setMode('signin')
+    setError('')
+  }
+
+  function openApiKey() {
+    setMode('key')
+    setError('')
+  }
 
   async function submit(event) {
     event.preventDefault()
@@ -55,6 +102,29 @@ export default function Login({ onAuthenticated }) {
     const url = form.url.trim()
     const previous = api.settings()
     try {
+      if (mode === 'setup') {
+        if (!setup.org_name.trim() || !setup.org_slug.trim() || !setup.email.trim()
+          || !setup.password || !setup.setup_code.trim()) {
+          throw new Error('Workspace, owner details, password and setup code are required.')
+        }
+        const response = await api.post('/api/v1/auth/bootstrap', {
+          org_name: setup.org_name.trim(),
+          org_slug: setup.org_slug.trim(),
+          email: setup.email.trim(),
+          display_name: setup.display_name.trim() || undefined,
+          password: setup.password,
+        }, { headers: { 'X-Bootstrap-Token': setup.setup_code.trim() } })
+        api.save({
+          url,
+          key: '',
+          token: response.session.access_token,
+          refresh_token: response.session.refresh_token,
+          expires_at: response.session.expires_at,
+        })
+        window.history.replaceState({}, '', '/startup#step=2')
+        onAuthenticated({ firstSetup: true })
+        return
+      }
       if (mode === 'key') {
         if (form.key.trim().length < 8) throw new Error('That API key looks too short.')
         api.save({ url, key: form.key.trim(), token: '' })
@@ -90,7 +160,9 @@ export default function Login({ onAuthenticated }) {
       onAuthenticated()
     } catch (e) {
       const message = String(e.message || e)
-      setError(message.includes('401') ? 'Those credentials were rejected.' : message)
+      setError(message.includes('401')
+        ? (mode === 'setup' ? 'That setup code was rejected.' : 'Those credentials were rejected.')
+        : message)
     } finally {
       setBusy(false)
     }
@@ -168,9 +240,11 @@ export default function Login({ onAuthenticated }) {
     }
   }
 
+  const isStartup = mode === 'setup' && bootstrap?.organization_exists === false
+
   return (
-    <div className="gate">
-      <section className="gate-brand">
+    <div className={isStartup ? 'gate startup-gate' : 'gate'}>
+      {!isStartup && <section className="gate-brand">
         <div className="row" style={{ gap: 12 }}>
           <BrandMark size={38} />
           <span className="gate-eyebrow">management plane</span>
@@ -187,31 +261,60 @@ export default function Login({ onAuthenticated }) {
           <li>Authorized scanning only: every active job passes the same grant.</li>
         </ul>
         <p className="gate-foot">Self-hosted. Nothing leaves this deployment.</p>
-      </section>
+      </section>}
 
       <section className="gate-panel">
         <div className="auth-card">
           <div>
-            <h2 className="auth-h1">{mode === 'signin' ? 'Sign in' : 'Connect with an API key'}</h2>
+            <h2 className="auth-h1">{bootstrap === undefined
+              ? 'Preparing your workspace'
+              : mode === 'setup' ? 'Set up your workspace'
+              : mode === 'signin' ? 'Sign in' : 'Connect with an API key'}</h2>
             <p className="auth-sub">
-              {mode === 'signin'
+              {bootstrap === undefined
+                ? 'Checking whether this installation needs its first owner.'
+                : mode === 'setup' ? 'Create the first owner account. You can add your team next.'
+                : mode === 'signin'
                 ? 'Your session carries your role.'
                 : 'A service identity for automation and scripts.'}
             </p>
           </div>
 
+          {bootstrap !== undefined && !(bootstrap?.available && bootstrap?.setup_enabled) && (
           <div className="auth-tabs" role="tablist">
             <button role="tab" aria-selected={mode === 'signin'}
               className={mode === 'signin' ? 'active' : ''}
-              onClick={() => { setMode('signin'); setError('') }}>Sign in</button>
+              onClick={openSignIn}>Sign in</button>
+            {bootstrap?.available && bootstrap?.setup_enabled && (
+              <button role="tab" aria-selected={mode === 'setup'}
+                className={mode === 'setup' ? 'active' : ''}
+                onClick={openSetup}>Set up</button>
+            )}
             <button role="tab" aria-selected={mode === 'key'}
               className={mode === 'key' ? 'active' : ''}
-              onClick={() => { setMode('key'); setError('') }}>API key</button>
+              onClick={openApiKey}>API key</button>
           </div>
+          )}
 
           {error && <div className="banner banner-error" role="alert">{error}</div>}
 
-          {challenge ? (
+          {mode === 'setup' && !bootstrap?.organization_exists && (
+            <div className="startup-progress" aria-label="Startup progress">
+              <div className="startup-progress-label">Step 1 of 6 · Foundation</div>
+              <ol>
+                {STARTUP_STEPS.map((step, index) => (
+                  <li key={step} className={index === 0 ? 'current' : ''}>
+                    <span>{index + 1}</span>{step}
+                  </li>
+                ))}
+              </ol>
+              <p>Only this step is required. Integrations and invitations can be skipped and configured later.</p>
+            </div>
+          )}
+
+          {bootstrap === undefined ? (
+            <Loading rows={2} label="checking installation status" />
+          ) : challenge ? (
             <form onSubmit={verifyMfa}>
               <p className="auth-sub">
                 {useRecovery
@@ -246,7 +349,40 @@ export default function Login({ onAuthenticated }) {
             </form>
           ) : (
           <form onSubmit={submit}>
-            {mode === 'signin' ? (
+            {mode === 'setup' ? (
+              <>
+                <label>
+                  <span>Workspace name</span>
+                  <input autoFocus value={setup.org_name} onChange={setSetupField('org_name')}
+                    placeholder="North Star Security" />
+                </label>
+                <label>
+                  <span>Workspace slug</span>
+                  <input value={setup.org_slug} onChange={setSetupField('org_slug')}
+                    placeholder="north-star" />
+                </label>
+                <label>
+                  <span>Your name</span>
+                  <input value={setup.display_name} onChange={setSetupField('display_name')}
+                    placeholder="Ada Lovelace" />
+                </label>
+                <label>
+                  <span>Owner email</span>
+                  <input type="email" autoComplete="username" value={setup.email}
+                    onChange={setSetupField('email')} placeholder="you@company.com" />
+                </label>
+                <label>
+                  <span>Password</span>
+                  <input type="password" autoComplete="new-password" value={setup.password}
+                    onChange={setSetupField('password')} placeholder="At least 8 characters" />
+                </label>
+                <label>
+                  <span>Setup code</span>
+                  <input type="password" autoComplete="off" value={setup.setup_code}
+                    onChange={setSetupField('setup_code')} placeholder="From BOOTSTRAP_TOKEN" />
+                </label>
+              </>
+            ) : mode === 'signin' ? (
               <>
                 <label>
                   <span>Email</span>
@@ -277,12 +413,13 @@ export default function Login({ onAuthenticated }) {
             </label>
 
             <button className="btn-primary" type="submit" disabled={busy}>
-              {busy ? 'checking…' : mode === 'signin' ? 'Enter' : 'Connect'}
+              {busy ? 'checking…' : mode === 'setup' ? 'Create workspace'
+                : mode === 'signin' ? 'Enter' : 'Connect'}
             </button>
           </form>
           )}
 
-          {!challenge && sso?.configured && mode === 'signin' && (
+          {!challenge && bootstrap !== undefined && sso?.configured && mode === 'signin' && (
             <>
               <button type="button" className="sso-button" onClick={startSso}>
                 Continue with {sso.provider}
@@ -295,15 +432,17 @@ export default function Login({ onAuthenticated }) {
             </>
           )}
 
-          <p className="auth-hint">
-            First time? The very first account is created with the deployment's
-            <span className="mono"> BOOTSTRAP_TOKEN </span> through
-            <span className="mono"> POST /api/v1/auth/bootstrap</span>.
-          </p>
+          {bootstrap?.available && bootstrap?.setup_enabled && mode !== 'setup' && (
+            <p className="auth-hint">
+              First installation? Choose <strong>Set up</strong> to create the workspace and its owner account here.
+            </p>
+          )}
 
+          {bootstrap !== undefined && !(bootstrap?.available && bootstrap?.setup_enabled) && (
           <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button className="mini" onClick={() => setResetOpen(true)}>Forgot password?</button>
           </div>
+          )}
         </div>
       </section>
 

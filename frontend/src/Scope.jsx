@@ -149,13 +149,6 @@ export default function Scope() {
         </>}
       />
 
-      <Banner kind="info">
-        A scope row is a declaration. It never runs a scan, and it never grants an
-        authorization on its own — collectors still check a scan grant. A
-        <span className="mono"> *.domain </span>
-        rule covers subdomains at any depth and excludes the apex unless you tick it.
-      </Banner>
-
       <Tabs
         tabs={[
           { id: 'targets', label: 'Targets' },
@@ -166,26 +159,61 @@ export default function Scope() {
         onChange={setTab}
       />
 
+      <p className="scope-note">
+        A row is a declaration: it runs nothing and grants nothing — collectors still need
+        a scan grant. <span className="mono">*.domain</span> covers subdomains at any depth;
+        the apex only when the row says <span className="mono">apex</span>.
+      </p>
+
       {error && <ErrorBanner error={error} />}
       {notice && <div className="banner banner-ok">{notice}</div>}
 
       {tab === 'targets' && (
         targets.length ? (
-          <Table head={['type', 'value', 'capabilities', 'owner · reason', 'validity', 'asset', '']}>
+          <Table className="scope-table"
+            head={['value', 'capabilities', 'owner · reason', 'validity', 'asset', '']}>
             {targets.map((row) => (
               <tr key={row.id}>
-                <td><span className="pill">{row.target_type}</span></td>
-                <td className="title mono">
-                  {row.value}
-                  {row.is_pattern && <span className="pill" style={{ marginLeft: 6 }}>rule</span>}
-                  {row.is_pattern && row.include_apex && (
-                    <div className="muted" style={{ fontSize: 11.5 }}>includes the apex</div>
-                  )}
+                <td>
+                  <div className="scope-value">
+                    <span className="scope-type">{row.target_type}</span>
+                    <span className="title mono scope-target" title={row.value}>{row.value}</span>
+                    {row.is_pattern && (
+                      <button className={`pill pill-toggle ${row.include_apex ? 'on' : ''}`}
+                        title={row.include_apex
+                          ? 'the apex is covered — click to exclude it'
+                          : 'the apex is not covered — click to include it'}
+                        onClick={() => patchTarget(row, { include_apex: !row.include_apex },
+                          `apex ${row.include_apex ? 'excluded' : 'included'}`)}>
+                        apex
+                      </button>
+                    )}
+                  </div>
                 </td>
                 <td>
                   {(row.capabilities || []).length
-                    ? row.capabilities.map((c) => <span key={c} className="pill">{c}</span>)
+                    ? row.capabilities.map((c) => (
+                      <button key={c} className="pill pill-toggle on"
+                        title={row.status === 'active'
+                          ? `this row permits ${c} — click to withdraw it`
+                          : 'the row is disabled, so nothing here runs'}
+                        onClick={() => patchTarget(row, {
+                          capabilities: row.capabilities.filter((x) => x !== c),
+                        }, `${c} withdrawn`)}>
+                        {c}
+                      </button>
+                    ))
                     : <span className="muted">none — declares nothing actionable</span>}
+                  {row.status === 'active' && (row.capabilities || []).length > 0
+                    && !row.capabilities.includes('active_verification') && (
+                    <button className="pill pill-toggle"
+                      title="add active verification: this row then also allows probing, not just discovery"
+                      onClick={() => patchTarget(row, {
+                        capabilities: [...row.capabilities, 'active_verification'],
+                      }, 'active verification added')}>
+                      + verification
+                    </button>
+                  )}
                 </td>
                 <td>
                   <div className="stack" style={{ gap: 2 }}>
@@ -210,30 +238,12 @@ export default function Scope() {
                     ? <span className="mono">{row.asset.value}</span>
                     : <span className="muted">—</span>}
                 </td>
-                <td>
-                  <div className="row">
-                    <button className="mini" onClick={() => patchTarget(
-                      row, { status: row.status === 'active' ? 'disabled' : 'active' },
-                      row.status === 'active' ? 'disabled' : 're-enabled')}>
-                      {row.status === 'active' ? 'disable' : 'enable'}
-                    </button>
-                    <button className="mini" onClick={() => patchTarget(
-                      row,
-                      { capabilities: row.capabilities.includes('active_verification')
-                        ? row.capabilities.filter((c) => c !== 'active_verification')
-                        : [...row.capabilities, 'active_verification'] },
-                      'active capability toggled')}>
-                      {row.capabilities.includes('active_verification')
-                        ? 'drop active' : 'allow active'}
-                    </button>
-                    {row.is_pattern && (
-                      <button className="mini" onClick={() => patchTarget(
-                        row, { include_apex: !row.include_apex },
-                        `apex ${row.include_apex ? 'excluded' : 'included'}`)}>
-                        {row.include_apex ? 'exclude apex' : 'include apex'}
-                      </button>
-                    )}
-                  </div>
+                <td className="row-action">
+                  <button className="mini" onClick={() => patchTarget(
+                    row, { status: row.status === 'active' ? 'disabled' : 'active' },
+                    row.status === 'active' ? 'disabled' : 're-enabled')}>
+                    {row.status === 'active' ? 'disable' : 'enable'}
+                  </button>
                 </td>
               </tr>
             ))}

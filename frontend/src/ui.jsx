@@ -152,12 +152,12 @@ export function Loading({ rows = 3, label = 'loading' }) {
 }
 
 /* ── Table ── */
-export function Table({ head, children, empty }) {
+export function Table({ head, children, empty, className }) {
   const rows = React.Children.toArray(children)
   if (rows.length === 0 && empty) return empty
   return (
     <div className="table-wrap">
-      <table>
+      <table className={className}>
         <thead><tr>{head.map((cell, index) => <th key={index}>{cell}</th>)}</tr></thead>
         <tbody>{children}</tbody>
       </table>
@@ -264,7 +264,8 @@ export function Modal({ title, children, onClose, size = 'normal' }) {
 
 /* ── Dialog (accessible, replaces window.alert/confirm/prompt) ── */
 export function Dialog({ open, title, onClose, onConfirm, confirmLabel = 'Confirm',
-                        destructive = false, size = 'normal', children, body }) {
+                        destructive = false, size = 'normal', children, body,
+                        hideFooter = false }) {
   useEffect(() => {
     if (open) document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = '' }
@@ -274,8 +275,11 @@ export function Dialog({ open, title, onClose, onConfirm, confirmLabel = 'Confir
 
   // A dialog without a confirm action is legitimate (a form owns its submit):
   // calling a missing onConfirm unmounted the app with "x is not a function".
+  // A handler that returns `false` vetoes the close — that is how a form keeps
+  // its own validation message on screen instead of closing over it.
   const onOK = () => {
-    if (onConfirm) onConfirm()
+    const verdict = onConfirm ? onConfirm() : undefined
+    if (verdict === false) return
     if (onClose) onClose()
   }
 
@@ -288,15 +292,17 @@ export function Dialog({ open, title, onClose, onConfirm, confirmLabel = 'Confir
           <button className="mini" onClick={onClose} aria-label="close dialog">✕</button>
         </div>
         {body !== undefined ? <div className="dialog-body">{body}</div> : children}
-        <div className="dialog-actions">
-          <button className="mini" onClick={onClose}>Cancel</button>
-          {onConfirm && (
-            <button className={`${destructive ? 'btn-danger' : ''}`} onClick={onOK}
-              style={{ marginLeft: 8 }}>
-              {confirmLabel}
-            </button>
-          )}
-        </div>
+        {!hideFooter && (
+          <div className="dialog-actions">
+            <button className="mini" onClick={onClose}>Cancel</button>
+            {onConfirm && (
+              <button className={destructive ? 'btn-danger' : 'btn-primary'} onClick={onOK}
+                style={{ marginLeft: 8 }}>
+                {confirmLabel}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

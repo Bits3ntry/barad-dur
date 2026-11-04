@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { Dialog, Input, Select, CheckBox, Loading, Banner, EmptyState, useToasts, Table } from './ui'
+import MailSettings from './MailSettings'
 
 export default function Settings({ onClose }) {
   const { toasts, push, dismiss } = useToasts()
@@ -242,6 +243,18 @@ export default function Settings({ onClose }) {
         </label>
         <button type="submit" disabled={busy}>{busy ? 'signing in…' : 'sign in'}</button>
       </form>
+
+      {(identity?.kind === 'api_key' || ['owner', 'admin'].includes(identity?.role)) && (
+        <>
+          <h3 className="section">deployment email (SMTP)</h3>
+          <p className="muted" style={{ margin: '0 0 8px', fontSize: 12 }}>
+            Invitations and email notification channels leave through this relay. Saving
+            here overrides the deployment's <code>SMTP_*</code> variables; removing it
+            hands control back to them.
+          </p>
+          <MailSettings defaultRecipient={identity?.user?.email || ''} />
+        </>
+      )}
 
       <h3 className="section">service identities (API keys)</h3>
       {keys.error && <Banner kind="error">{keys.error}</Banner>}

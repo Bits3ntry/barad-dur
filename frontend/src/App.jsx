@@ -18,6 +18,8 @@ import Regression from './Regression'
 import Pipelines from './Pipelines'
 import Settings from './Settings'
 import Setup from './Setup'
+import Startup from './Startup'
+import Invite from './Invite'
 import Projects from './Projects'
 import CtemCycle from './CtemCycle'
 import Scope from './Scope'
@@ -55,12 +57,12 @@ const NAV = [
       { key: 'cycles', label: 'Cycles', icon: 'cycles' },
       { key: 'scope', label: 'Scope', icon: 'scope' },
     ] },
-    { label: 'Discovery', items: [
+    { label: 'Inventory', items: [
+      { key: 'projects', label: 'Projects', icon: 'applications' },
       { key: 'assets', label: 'Assets', icon: 'assets' },
       { key: 'attack-surface', label: 'Attack surface', icon: 'attack-surface' },
       { key: 'components', label: 'Components', icon: 'components' },
       { key: 'exposures', label: 'Exposures', icon: 'exposures' },
-      { key: 'projects', label: 'Applications', icon: 'applications' },
     ] },
     { label: 'Prioritization', items: [
       { key: 'priority-rules', label: 'Prioritization rules', icon: 'prioritization' },
@@ -127,8 +129,26 @@ function parseHash() {
   return { tab, focus }
 }
 
+/* Projects has real URLs — /projects and /projects/{slug}[/{tab}] — so a
+   reload, a pasted link and the back button all land on the same record.
+   Every other screen still rides the hash; the two coexist because only one
+   of them is in the address bar at a time. */
+const PROJECT_PATH = /^\/projects(?:\/([^/]+))?(?:\/([a-z-]+))?\/?$/
+
+function parseProjectPath() {
+  // A hash names another screen; a stale /projects path behind it must not win.
+  if (window.location.hash) return null
+  const match = window.location.pathname.match(PROJECT_PATH)
+  if (!match) return null
+  return {
+    slug: match[1] ? decodeURIComponent(match[1]) : '',
+    tab: match[2] || 'summary',
+  }
+}
+
 export default function App() {
-  const [tab, setTab] = useState(() => parseHash().tab)
+  const [projectRoute, setProjectRoute] = useState(() => parseProjectPath())
+  const [tab, setTab] = useState(() => (parseProjectPath() ? 'projects' : parseHash().tab))
   const [focus, setFocus] = useState(() => parseHash().focus)
   const [projects, setProjects] = useState([])
   const [projectsError, setProjectsError] = useState('')
@@ -167,12 +187,21 @@ export default function App() {
 
   useEffect(() => {
     const onHash = () => {
+      // The hash names a screen only when the path does not name a project.
+      const project = window.location.hash ? null : parseProjectPath()
+      if (project) { setProjectRoute(project); setTab('projects'); setFocus({}); return }
       const next = parseHash()
+      setProjectRoute(null)
       setTab(next.tab)
       setFocus(next.focus)
     }
+    const onPop = () => onHash()
     window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
+    window.addEventListener('popstate', onPop)
+    return () => {
+      window.removeEventListener('hashchange', onHash)
+      window.removeEventListener('popstate', onPop)
+    }
   }, [])
 
   function loadProjects() {
@@ -219,7 +248,37 @@ export default function App() {
   const go = (key) => {
     setTab(key)
     setFocus({})
-    window.location.hash = key
+    if (key === 'projects') {
+      window.history.pushState({}, '', '/projects')
+      setProjectRoute({ slug: '', tab: 'summary' })
+      if (window.location.hash) window.history.replaceState({}, '', '/projects')
+      return
+    }
+    setProjectRoute(null)
+    // pushState, not location.hash: assigning the hash keeps the current path,
+    // which is how /projects/aurea/components#grants ended up as a dead link.
+    window.history.pushState({}, '', `/#${key}`)
+  }
+
+  function openProject(slug, nextTab = 'summary') {
+    if (!slug) return
+    const suffix = nextTab && nextTab !== 'summary' ? `/${nextTab}` : ''
+    window.history.pushState({}, '', `/projects/${encodeURIComponent(slug)}${suffix}`)
+    setProjectRoute({ slug, tab: nextTab || 'summary' })
+    setTab('projects')
+  }
+
+  function switchProjectTab(nextTab) {
+    if (!projectRoute?.slug) return
+    const suffix = nextTab && nextTab !== 'summary' ? `/${nextTab}` : ''
+    window.history.pushState({}, '',
+      `/projects/${encodeURIComponent(projectRoute.slug)}${suffix}`)
+    setProjectRoute({ slug: projectRoute.slug, tab: nextTab || 'summary' })
+  }
+
+  function closeProject() {
+    window.history.pushState({}, '', '/projects')
+    setProjectRoute({ slug: '', tab: 'summary' })
   }
 
   const matches = useMemo(() => {
@@ -233,11 +292,25 @@ export default function App() {
     return found ? found.label : 'Dashboard'
   }, [tab])
 
+  // An invitation is opened by someone with no credential yet: it must render
+  // before the sign-in gate, never behind it.
+  if (window.location.pathname === '/invite') {
+    return <Invite />
+  }
+
   if (needsKey) {
-    return <Login onAuthenticated={() => {
+    return <Login onAuthenticated={(context = {}) => {
       setSession(api.settings())
       setSettingsOpen(false)
+      // The first bootstrap lands on /startup, which owns the rest of the
+      // walk-through. Sending it to the Setup guide here would overwrite the
+      // step hash and drop the owner into the wrong screen.
+      if (context.firstSetup && window.location.pathname !== '/startup') go('setup')
     }} />
+  }
+
+  if (window.location.pathname === '/startup') {
+    return <Startup onFinish={() => go('dashboard')} />
   }
 
   const screen = () => {
@@ -246,7 +319,15 @@ export default function App() {
       case 'ctem': return <CtemCycle onNavigate={go} />
       case 'priority-rules': return <Lifecycle initialTab="rules" />
       case 'business-impact': return <BusinessImpact onNavigate={go} />
-      case 'projects': return <Projects onNavigate={go} />
+      case 'projects': return (
+        <Projects
+          slug={projectRoute?.slug || ''}
+          tab={projectRoute?.tab || 'summary'}
+          onNavigate={go}
+          onOpenProject={openProject}
+          onProjectTab={switchProjectTab}
+          onCloseProject={closeProject} />
+      )
       case 'findings': return (
         <Findings projects={projects} focusId={focus.findingId}
           onOpenAnalysis={(target) => {
@@ -290,7 +371,9 @@ export default function App() {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <BrandMark size={26} />
+          {org && org.logo
+            ? <img className="brand-logo" src={org.logo} alt="" />
+            : <BrandMark size={26} />}
           <span className="brand-text">
             <span className="brand-name">{org ? org.name : 'BARAD-DÛR'}</span>
             <span className="brand-sub">continuous exposure</span>

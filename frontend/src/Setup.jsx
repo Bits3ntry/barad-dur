@@ -8,63 +8,63 @@ import { Card, ErrorBanner, Loading, PageHeader } from './ui'
 
 const STEPS = [
   {
-    key: 'grants',
-    label: 'Grants',
-    title: 'Authorize what may be scanned',
-    hint: 'Nothing is scanned by default. A grant names the capabilities and '
-      + 'targets allowed for a project; without one every scan is denied.',
-    count: (d) => d.grants,
-    unit: 'grants',
+    key: 'scope',
+    label: 'Scope',
+    title: 'Define what belongs in scope',
+    hint: 'Add domains, repositories, IPs and exclusions first. Connecting an '
+      + 'integration never starts a scan automatically.',
+    count: (d) => d.scopeTargets,
+    unit: 'targets',
   },
   {
-    key: 'components',
-    label: 'Components',
-    title: 'Create a project and ingest an SBOM',
-    hint: 'Upload a CycloneDX or SPDX SBOM: the project and version are created '
-      + 'from it and its components become the inventory every finding hangs on.',
+    key: 'projects',
+    label: 'Projects',
+    title: 'Organize applications',
+    hint: 'Relate code and infrastructure to each application. Add repositories '
+      + 'you explicitly choose to bring into Barad-dûr.',
     count: (d) => d.projects,
     unit: 'projects',
   },
   {
-    key: 'gates',
-    label: 'Quality gates',
-    title: 'Decide what fails a build',
-    hint: 'A gate turns findings into a verdict: severity thresholds, known '
-      + 'exploited issues, license rules. It is what CI obeys.',
-    count: (d) => d.gatePolicies,
-    unit: 'policies',
+    key: 'assets',
+    label: 'Assets',
+    title: 'Add business context',
+    hint: 'Add owners, environments and criticality to the assets that make up '
+      + 'each application before interpreting risk.',
+    count: (d) => d.assets,
+    unit: 'assets',
+  },
+  {
+    key: 'grants',
+    label: 'Authorization',
+    title: 'Authorize analysis',
+    hint: 'Grants are a control before active work, not the product entry point. '
+      + 'Set targets, tools, workers and permissions deliberately.',
+    count: (d) => d.grants,
+    unit: 'grants',
   },
   {
     key: 'findings',
     label: 'Findings',
-    title: 'Triage the first findings',
-    hint: 'Review what the data says, accept risk with a second approver, and '
-      + 'open remediation tasks with owners and deadlines.',
+    title: 'Run analysis and manage results',
+    hint: 'Launch analysis only when you are ready, then triage findings with '
+      + 'owners, priority and remediation deadlines.',
     count: (d) => d.components,
     unit: 'components tracked',
   },
   {
-    key: 'pipelines',
-    label: 'Pipelines',
-    title: 'Connect continuous integration',
-    hint: 'Runs reported by CI carry the gate verdict back to the pull request, '
-      + 'so the decision happens before merge.',
-    count: (d) => d.pipelines,
-    unit: 'pipelines',
-  },
-  {
-    key: 'members',
-    label: 'Members',
-    title: 'Bring the team in',
-    hint: 'Analysts triage and write; viewers read. Only an owner is created by '
-      + 'bootstrap, so everyone else starts here.',
-    count: (d) => d.members,
-    unit: 'accounts',
+    key: 'cycles',
+    label: 'Cycles',
+    title: 'Create cycles when you need them',
+    hint: 'Start a CTEM cycle or pentest campaign when its scope, ownership and '
+      + 'evidence need a bounded operating rhythm.',
+    count: (d) => d.cycles,
+    unit: 'cycles',
   },
 ]
 
-const EMPTY = { grants: 0, projects: 0, components: 0, gatePolicies: 0,
-  pipelines: 0, members: 0 }
+const EMPTY = { grants: 0, projects: 0, components: 0, assets: 0,
+  scopeTargets: 0, cycles: 0 }
 
 async function safeCount(path, pick) {
   try {
@@ -85,12 +85,12 @@ export default function SetupGuide({ onNavigate }) {
       safeCount('/api/v1/authorization/grants', (b) => (b.data || []).length),
       safeCount('/api/v1/projects', (b) => (b.data || []).length),
       safeCount('/api/v1/components?limit=1', (b) => b.total ?? (b.data || []).length),
-      safeCount('/api/v1/gate-policies', (b) => (b.data || []).length),
-      safeCount('/api/v1/ci/pipelines', (b) => (b.data || []).length),
-      safeCount('/api/v1/auth/users', (b) => (b.data || []).length),
+      safeCount('/api/v1/assets?limit=1', (b) => b.total ?? (b.data || []).length),
+      safeCount('/api/v1/scope/targets', (b) => (b.data || []).length),
+      safeCount('/api/v1/cycles', (b) => (b.data || []).length),
     ])
-      .then(([grants, projects, components, gatePolicies, pipelines, members]) =>
-        setData({ grants, projects, components, gatePolicies, pipelines, members }))
+      .then(([grants, projects, components, assets, scopeTargets, cycles]) =>
+        setData({ grants, projects, components, assets, scopeTargets, cycles }))
       .catch((e) => setError(String(e.message || e)))
   }
 

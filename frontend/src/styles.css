@@ -222,6 +222,188 @@ a:hover { text-decoration: underline; }
 .auth-card form { display: grid; gap: var(--gap-3); }
 .auth-hint { color: var(--muted); font-size: 11.5px; line-height: 1.5;
   border-top: 1px solid var(--line); padding-top: var(--gap-3); }
+.startup-progress { border: 1px solid var(--line); background: var(--bg-soft);
+  padding: 14px; border-radius: var(--radius-sm); font-size: 12px; }
+.startup-progress-label { color: var(--text); font-weight: 650; margin-bottom: 10px; }
+.startup-progress ol { list-style: none; display: grid; grid-template-columns: 1fr 1fr;
+  gap: 7px 12px; margin: 0; padding: 0; color: var(--muted); }
+.startup-progress li { display: flex; align-items: center; gap: 7px; }
+.startup-progress li span { width: 18px; height: 18px; display: inline-grid; place-items: center;
+  border-radius: 50%; border: 1px solid var(--line-strong); font-size: 10px; }
+.startup-progress li.current { color: var(--text); font-weight: 600; }
+.startup-progress li.current span { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+.startup-progress p { margin: 12px 0 0; color: var(--muted); line-height: 1.45; }
+.startup-gate { grid-template-columns: 1fr; min-height: 100vh; }
+.startup-gate .gate-panel { min-height: 100vh; display: block; padding: clamp(36px, 7vw, 112px); }
+.startup-gate .auth-card { width: min(980px, 100%); padding: 0; border: 0; border-radius: 0;
+  box-shadow: none; overflow: visible; background: transparent; }
+.startup-gate .auth-card::before { display: none; }
+.startup-gate .auth-h1 { font-size: clamp(28px, 4vw, 48px); letter-spacing: -1.4px; }
+.startup-gate .auth-sub { max-width: 620px; font-size: 15px; line-height: 1.55; }
+.startup-gate .startup-progress { margin: 36px 0 30px; padding: 20px 0; border-inline: 0;
+  border-radius: 0; background: transparent; }
+.startup-gate .startup-progress ol { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.startup-gate .auth-card form { max-width: 680px; }
+/* ------------------------------------------------------------- onboarding */
+
+.onb-shell { min-height: 100vh; background: var(--bg); }
+.onb-body { width: min(940px, 100%); margin: 0 auto; padding: clamp(32px, 6vw, 80px) 24px 96px; }
+.onb-head { display: grid; gap: 8px; max-width: 720px; }
+.onb-brand { display: flex; align-items: center; gap: 9px; color: var(--text);
+  font-weight: 650; font-size: 13px; margin-bottom: 12px; }
+.onb-kicker { color: var(--muted); font-size: 11.5px; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase; }
+.onb-h1 { margin: 0; font-size: clamp(26px, 3.6vw, 38px); letter-spacing: -1px;
+  line-height: 1.15; }
+.onb-sub { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55;
+  max-width: 640px; }
+
+/* The rail is the map: a hairline with six numbered stops. It stays clickable so
+   the owner can go back and correct a step without losing anything. */
+.onb-rail { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0; margin: 40px 0 0; border-bottom: 1px solid var(--line); }
+.onb-rail-step { display: grid; justify-items: start; gap: 8px; padding: 0 12px 14px 0;
+  background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px;
+  text-align: left; cursor: pointer; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; }
+.onb-rail-step:hover { color: var(--text); }
+.onb-rail-step.current { color: var(--text); font-weight: 650;
+  border-bottom-color: var(--text); }
+.onb-rail-num { width: 24px; height: 24px; display: grid; place-items: center;
+  border: 1px solid var(--line-strong); border-radius: 50%; font-size: 11px;
+  font-variant-numeric: tabular-nums; }
+.onb-rail-step.done { color: var(--text-dim); }
+.onb-rail-step.done .onb-rail-num,
+.onb-rail-step.current .onb-rail-num { background: var(--accent);
+  border-color: var(--accent); color: var(--accent-ink); }
+.onb-rail-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%; }
+
+.onb-stage { padding-top: 32px; display: grid; gap: 26px; }
+.onb-section-head { display: grid; gap: 4px; }
+.onb-section-head h2 { margin: 0; font-size: 15px; letter-spacing: -0.2px; }
+.onb-section-head p { margin: 0; color: var(--muted); font-size: 13px;
+  line-height: 1.55; max-width: 720px; }
+.onb-help { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.onb-muted { color: var(--muted); }
+.onb-empty { margin: 0; color: var(--muted); font-size: 13px; border: 1px dashed
+  var(--line-strong); border-radius: var(--radius-sm); padding: 16px; }
+.onb-code { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px; background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+
+.onb-form { display: grid; gap: 16px; max-width: 720px; }
+.onb-form label { display: grid; gap: 6px; font-size: 12.5px; font-weight: 600;
+  color: var(--text); grid-template-columns: 1fr auto; align-items: baseline; }
+/* Label text and its "optional" badge share the first row; the field takes both. */
+.onb-form label > input, .onb-form label > select, .onb-form label > textarea,
+.onb-form label > .onb-help, .onb-form label > .row { grid-column: 1 / -1; }
+.onb-form input, .onb-form select, .onb-form textarea { width: 100%; }
+.onb-form textarea { min-height: 76px; resize: vertical; }
+.onb-grid { grid-template-columns: 1fr 1fr; column-gap: 16px; }
+.onb-span { grid-column: 1 / -1; }
+.onb-form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-start; }
+.onb-check { grid-column: 1 / -1; grid-template-columns: auto auto 1fr;
+  align-items: center; column-gap: 8px; }
+.onb-check input { width: auto; margin: 0; grid-column: auto; }
+.onb-check .onb-help { grid-column: auto; }
+
+.onb-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  border-top: 1px solid var(--line); padding-top: 20px; }
+
+/* Organization identity block */
+.onb-logo-row { display: flex; gap: 16px; align-items: center; }
+.onb-logo { width: 64px; height: 64px; border-radius: 14px; border: 1px solid
+  var(--line); background: var(--panel-2); display: grid; place-items: center;
+  overflow: hidden; font-size: 24px; font-weight: 650; color: var(--text-dim); }
+.onb-logo img { width: 100%; height: 100%; object-fit: cover; }
+.onb-logo-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.onb-logo-actions .onb-help { flex-basis: 100%; }
+
+/* Role picker: three rows, one selectable at a time, risk stated up front. */
+.onb-role-table { display: grid; border: 1px solid var(--line); border-radius:
+  var(--radius-sm); overflow: hidden; }
+/* The global button rule centres its content; these rows are documents, not
+   pills, so the grid is explicitly stretched back to full width. */
+.onb-role { display: grid; justify-content: normal; justify-items: stretch;
+  align-items: start; width: 100%; gap: 4px; padding: 14px 16px; text-align: left;
+  background: var(--panel); border: 0; border-bottom: 1px solid var(--line);
+  font: inherit; cursor: pointer; color: var(--text); }
+.onb-role:last-child { border-bottom: 0; }
+.onb-role:hover { background: var(--bg-soft); }
+.onb-role.selected { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
+.onb-role-head { display: flex; align-items: center; justify-content: flex-start;
+  gap: 10px; }
+.onb-radio { width: 14px; height: 14px; flex: 0 0 14px; border-radius: 50%;
+  border: 1px solid var(--line-strong); background: var(--panel); }
+.onb-role.selected .onb-radio { border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--panel), inset 0 0 0 8px var(--accent); }
+.onb-role-name { font-weight: 650; font-size: 13.5px; }
+.onb-role-summary { font-size: 12.5px; color: var(--text-dim); }
+.onb-role-access { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.onb-risk { font-size: 10.5px; font-weight: 650; border-radius: 999px;
+  padding: 1px 8px; border: 1px solid var(--line-strong); color: var(--text-dim); }
+.onb-risk.viewer { border-color: var(--ok); color: var(--ok); }
+.onb-risk.analyst { border-color: var(--medium); color: var(--medium); }
+.onb-risk.admin { border-color: var(--critical); color: var(--critical); }
+
+.onb-invite-form { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr)
+  minmax(0, 1fr) auto; gap: 12px; align-items: end; }
+.onb-invite-form label { display: grid; gap: 6px; font-size: 12px; font-weight: 600;
+  color: var(--text); }
+.onb-invite-form input, .onb-invite-form select { width: 100%; }
+.onb-inline-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: 10px; align-items: center; max-width: 720px; }
+
+.onb-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.onb-table th { text-align: left; font-weight: 600; color: var(--muted);
+  padding: 0 12px 8px 0; border-bottom: 1px solid var(--line); }
+.onb-table td { padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line);
+  vertical-align: top; }
+.onb-table tr:last-child td { border-bottom: 0; }
+.onb-row-actions { display: flex; gap: 8px; justify-content: flex-end;
+  white-space: nowrap; }
+
+.onb-pill { font-size: 10.5px; font-weight: 650; text-transform: lowercase;
+  border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line-strong);
+  color: var(--text-dim); }
+.onb-pill.pending { border-color: var(--medium); color: var(--medium); }
+.onb-pill.accepted { border-color: var(--ok); color: var(--ok); }
+.onb-pill.revoked, .onb-pill.expired { color: var(--muted); }
+.onb-pill.read { border-color: var(--line-strong); color: var(--text-dim); }
+
+.onb-link { display: grid; gap: 6px; border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm); padding: 12px; background: var(--bg-soft); }
+.onb-link-row { display: flex; gap: 8px; }
+.onb-link-row input { flex: 1; font-family: var(--mono, ui-monospace, Menlo, monospace);
+  font-size: 11.5px; }
+
+.onb-note { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text-dim);
+  border-left: 3px solid var(--line-strong); padding: 2px 0 2px 12px; max-width: 720px; }
+
+.onb-summary { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.onb-summary li { display: grid; grid-template-columns: 24px 180px minmax(0, 1fr) auto;
+  gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line);
+  font-size: 13px; }
+.onb-tick { width: 20px; height: 20px; display: grid; place-items: center;
+  border-radius: 50%; border: 1px solid var(--line-strong); font-size: 11px;
+  color: var(--muted); }
+.onb-tick.done { background: var(--accent); border-color: var(--accent);
+  color: var(--accent-ink); }
+.onb-summary-label { font-weight: 600; }
+.onb-summary-value { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+
+.mini.quiet { background: transparent; border-color: transparent; color: var(--muted); }
+.mini.quiet:hover { color: var(--text); border-color: var(--line-strong); }
+
+@media (max-width: 760px) {
+  .onb-body { padding: 28px 18px 72px; }
+  .onb-rail { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 12px; }
+  .onb-grid, .onb-invite-form, .onb-inline-form { grid-template-columns: 1fr; }
+  .onb-summary li { grid-template-columns: 24px minmax(0, 1fr) auto; }
+  .onb-summary-value { grid-column: 2; color: var(--muted); }
+}
+
 
 /* ------------------------------------------------------------------ shell */
 
@@ -237,6 +419,8 @@ a:hover { text-decoration: underline; }
 .brand { display: flex; align-items: center; gap: 10px;
   padding: 2px var(--gap-2) var(--gap-3); border-bottom: 1px solid var(--line); }
 .brand-text { display: grid; gap: 1px; }
+.brand-logo { width: 26px; height: 26px; border-radius: 7px; object-fit: cover;
+  border: 1px solid var(--line); flex: 0 0 26px; }
 .brand-name { font-size: 13.5px; font-weight: 700; letter-spacing: 1.6px; }
 .brand-sub { color: var(--muted); font-size: 9.5px; text-transform: uppercase;
   letter-spacing: 1.4px; }
@@ -1351,3 +1535,418 @@ td .mono, .table-wrap td .mono { white-space: nowrap; }
   .runtime-graph-head { align-items: stretch; flex-direction: column; }
   .runtime-graph-list-row { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* ── inventory: projects ───────────────────────────────────────────────────── */
+.inv-list { list-style: none; margin: 0; padding: 0; }
+.inv-list li { display: grid; grid-template-columns: minmax(0, 1.4fr) 100px 90px minmax(0, 1fr);
+  gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line);
+  font-size: 12.5px; }
+.inv-list li:last-child { border-bottom: 0; }
+.inv-list .title { font-weight: 600; }
+
+/* Empty state with real guidance (projects, and anywhere else that needs it). */
+.onb-empty-state { display: grid; gap: 12px; justify-items: center; text-align: center;
+  padding: 36px 24px 40px; max-width: 660px; margin: 0 auto; }
+.onb-empty-state h2 { margin: 0; font-size: 18px; letter-spacing: -0.3px; }
+.onb-empty-state p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.onb-empty-steps { list-style: none; margin: 2px 0 8px; padding: 0; display: grid;
+  gap: 6px; text-align: left; font-size: 12.5px; color: var(--text-dim); }
+.onb-empty-steps li { display: flex; gap: 8px; align-items: baseline; }
+.onb-empty-steps strong { color: var(--text); font-weight: 650; }
+.onb-inline-section { display: grid; gap: 8px; border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm); padding: 12px; }
+.onb-section-label { font-size: 11px; font-weight: 650; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted); }
+.empty .row { justify-content: center; }
+.onb-optional { font-size: 10.5px; font-weight: 500; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; margin-left: 6px; }
+.onb-inline-section { border-style: solid; background: var(--bg-soft); }
+
+/* Project detail: the setup path replaces four duplicated info blocks. */
+.setup-path { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.setup-path li { display: grid; grid-template-columns: 26px 1fr auto auto;
+  align-items: center; gap: 12px; padding: 10px 4px; border-radius: var(--radius-sm); }
+.setup-path li + li { border-top: 1px solid var(--line); }
+.setup-path li > div strong { font-size: 13px; font-weight: 600; }
+.setup-path li > div p { margin: 2px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.setup-mark { display: grid; place-items: center; width: 22px; height: 22px;
+  border-radius: 50%; border: 1px solid var(--line-strong); font-size: 11px;
+  color: var(--muted); font-variant-numeric: tabular-nums; }
+.setup-path li.done .setup-mark { border-color: transparent; background: var(--accent);
+  color: var(--accent-contrast); }
+
+/* Inline confirmation, not a field-sized banner. */
+.inv-notice { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 8px 10px 8px 12px; border-radius: var(--radius-sm);
+  background: var(--bg-soft); border: 1px solid var(--line); font-size: 12.5px;
+  color: var(--text-dim); }
+.inv-notice .ghost { border: none; background: none; color: var(--muted); }
+
+.setup-path li.next { background: var(--bg-soft); }
+.setup-path li.next .setup-mark { border-color: var(--accent); color: var(--text); font-weight: 650; }
+.setup-check { color: var(--accent-contrast-2, #0f7a4d); font-size: 11px; font-weight: 600; }
+.setup-path li > div strong { display: block; }
+.mini.primary { background: var(--accent); color: var(--accent-contrast); border-color: transparent; }
+
+/* Long dialogs scroll; the save row stays reachable. */
+.modal .row-end { position: sticky; bottom: -6px; background: var(--dialog-bg);
+  padding: 10px 0 2px; }
+
+/* Repository picker inside the attach dialog: rows, not fake inputs. */
+.onb-repo-list { display: grid; gap: 2px; max-height: 200px; overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 4px; }
+.onb-repo-row { display: flex; justify-content: space-between; gap: 12px;
+  background: none; border: none; text-align: left; padding: 7px 8px;
+  border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+.onb-repo-row:hover { background: var(--bg-soft); }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* Short status cells shouldn't break mid-word in dense tables. */
+.content table td.muted { white-space: nowrap; }
+
+/* Action buttons in a table row keep a gap instead of reading as one word. */
+.content table td .mini + .mini { margin-left: 6px; }
+
+/* Running-now graph: fixed columns make inventory relationships readable. */
+.project-graph-stack { display: grid; gap: 12px; margin-top: 16px; }
+
+/* ── the graph: a canvas you can move through ─────────────────────────────
+   Node fill is a grey ramp by kind (product darkest, leaf records lightest),
+   and size is the number of recorded relationships. No hue: severity keeps
+   the only saturated colours in the console. */
+
+.graph-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  justify-content: space-between;
+}
+.graph-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.graph-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 26px;
+  padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel); color: var(--text-dim); font-size: 11.5px;
+}
+.graph-chip:hover { border-color: var(--line-strong); color: var(--text); }
+.graph-chip.off { opacity: .42; }
+.graph-chip.off .graph-chip-dot { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }
+.graph-chip-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
+.graph-chip-count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.graph-chip.type-project .graph-chip-dot { background: var(--text); }
+.graph-chip.type-component .graph-chip-dot { background: color-mix(in srgb, var(--text) 66%, var(--bg-soft)); }
+.graph-chip.type-repository .graph-chip-dot { background: color-mix(in srgb, var(--text) 50%, var(--bg-soft)); }
+.graph-chip.type-version .graph-chip-dot,
+.graph-chip.type-deployment .graph-chip-dot,
+.graph-chip.type-asset .graph-chip-dot { background: color-mix(in srgb, var(--text) 34%, var(--bg-soft)); }
+
+.graph-tools { display: flex; align-items: center; gap: 4px; }
+.graph-filter {
+  height: 28px; min-height: 28px; width: 150px; padding: 0 9px;
+  font-size: 12px; border-radius: 6px;
+}
+.graph-zoom { min-width: 52px; font-variant-numeric: tabular-nums; }
+
+.project-graph-wrap {
+  position: relative; height: 540px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background-color: var(--bg-soft);
+  background-image: radial-gradient(var(--line) 1px, transparent 1px);
+  background-size: 22px 22px; background-position: -1px -1px;
+  cursor: grab; touch-action: none;
+}
+.project-graph-wrap:active { cursor: grabbing; }
+.project-graph { display: block; width: 100%; height: 100%; }
+
+.graph-edge { stroke: color-mix(in srgb, var(--text) 34%, var(--bg-soft)); stroke-width: 1.15; }
+.graph-edge.hot { stroke: color-mix(in srgb, var(--text) 68%, var(--bg-soft)); stroke-width: 1.6; }
+.graph-edge.dim { opacity: .12; }
+.graph-edge-label {
+  fill: var(--text-dim); font-size: 10px; letter-spacing: .02em;
+  paint-order: stroke; stroke: var(--bg-soft); stroke-width: 3px;
+  stroke-linejoin: round; pointer-events: none;
+}
+
+.graph-node { cursor: grab; }
+.graph-node:active { cursor: grabbing; }
+.graph-node-hit { fill: transparent; }
+.graph-node-dot { stroke-width: 1.25; transition: stroke-width .12s ease; }
+.graph-node-label {
+  fill: var(--text-dim); font-size: 11.5px; font-weight: 500;
+  pointer-events: none; paint-order: stroke;
+  stroke: var(--bg-soft); stroke-width: 3px; stroke-linejoin: round;
+}
+/* A single grey ramp mixed from the text colour, so both themes read the same:
+   product darkest, leaf records lightest. Mixing with the canvas keeps the fills
+   solid instead of letting the dot grid show through. */
+.graph-node.type-project .graph-node-dot { fill: var(--text); stroke: var(--text); }
+.graph-node.type-component .graph-node-dot {
+  fill: color-mix(in srgb, var(--text) 66%, var(--bg-soft));
+  stroke: color-mix(in srgb, var(--text) 66%, var(--bg-soft)); }
+.graph-node.type-repository .graph-node-dot {
+  fill: color-mix(in srgb, var(--text) 50%, var(--bg-soft));
+  stroke: color-mix(in srgb, var(--text) 50%, var(--bg-soft)); }
+.graph-node.type-version .graph-node-dot,
+.graph-node.type-deployment .graph-node-dot,
+.graph-node.type-asset .graph-node-dot {
+  fill: color-mix(in srgb, var(--text) 34%, var(--bg-soft));
+  stroke: color-mix(in srgb, var(--text) 34%, var(--bg-soft)); }
+.graph-node:hover .graph-node-dot { fill: var(--text); stroke: var(--text); }
+.graph-node.focus .graph-node-dot { stroke: var(--text); stroke-width: 2.4; }
+.graph-node.focus .graph-node-label { fill: var(--text); font-weight: 600; }
+.graph-node.pinned .graph-node-dot { stroke-dasharray: 3 2.5; }
+.graph-node.dim { opacity: .18; }
+.graph-node:focus { outline: none; }
+.graph-node:focus-visible .graph-node-dot { stroke: var(--text); stroke-width: 2.4; }
+
+.graph-hint {
+  position: absolute; left: 10px; bottom: 8px; pointer-events: none;
+  color: var(--muted); font-size: 10.5px; background: color-mix(in srgb, var(--bg) 82%, transparent);
+  padding: 2px 7px; border-radius: 4px;
+}
+.graph-empty { position: absolute; inset: 0; display: grid; place-items: center;
+  margin: 0; color: var(--muted); font-size: 12.5px; pointer-events: none; }
+
+.graph-neighbor-list { display: grid; gap: 1px; }
+.graph-neighbor {
+  display: grid; grid-template-columns: 108px 76px minmax(0, 1fr); gap: 10px;
+  justify-content: normal; align-items: center; width: 100%; text-align: left;
+  padding: 6px 8px; border: none; background: transparent; color: var(--text-dim);
+  font-size: 12.5px;
+}
+.graph-neighbor:hover { background: var(--bg-soft); color: var(--text); }
+.graph-neighbor-rel { color: var(--muted); font-size: 11px; }
+.graph-neighbor-type { color: var(--muted); font-size: 11px; }
+.graph-neighbor-label { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+
+.project-graph-list { display: grid; gap: 2px; }
+.project-graph-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 10px; justify-content: normal; width: 100%; padding: 7px 8px; border: none;
+  background: transparent; color: var(--text-dim); text-align: left; }
+.project-graph-row:hover { background: var(--bg-soft); color: var(--text); }
+.project-graph-row b { color: var(--muted); font-size: 11px; font-weight: 500; }
+@media (max-width: 720px) {
+  .project-graph-wrap { display: none; }
+  .project-graph-row { grid-template-columns: 1fr; gap: 2px; }
+  .graph-toolbar { display: none; }
+}
+
+/* ── verification: declared / allowed / observed ──────────────────────────
+   State is carried by the word first; colour only widens the gap. "denied" is
+   dashed and quiet because it is the default, not an alarm. */
+
+.pill.good { color: var(--text-dim); }
+.pill.denied { color: var(--muted); background: transparent;
+  border-style: dashed; border-color: var(--line-strong); }
+
+/* A pill is a word, not a wrapping paragraph: a hyphenated hostname or an
+   environment name breaking mid-token reads as a rendering fault. */
+.verification-table .pill,
+.verification-table td.title { white-space: nowrap; }
+
+/* A TLS outcome that did not complete is a finding, not noise: it stays in the
+   text colour with a dotted rule so it reads as something to look at, without
+   borrowing a severity colour the console reserves for severity. */
+.obs-warn { color: var(--text); border-bottom: 1px dotted var(--line-strong); cursor: help; }
+
+/* The verification table: a row here is a record, so the value carries the
+   weight and everything derived from it stays quiet. Headers stop shouting in
+   caps, actions move to the far right where the eye looks for them. */
+.verification-table thead th {
+  background: transparent; text-transform: none; letter-spacing: 0;
+  font-size: 11.5px; font-weight: 500; color: var(--muted);
+  border-bottom: 1px solid var(--line-strong); padding-bottom: 7px;
+}
+.verification-table tbody td { vertical-align: top; padding: 11px 12px; }
+.verification-table tbody tr:first-child td { border-top: none; }
+.verification-table td.title {
+  font-weight: 600; color: var(--text); font-size: 13px; max-width: 340px;
+}
+.verification-table td.title .muted { font-weight: 400; }
+.verification-table td:last-child { white-space: nowrap; text-align: right; }
+.verification-table td:last-child .row { justify-content: flex-end; gap: 4px; flex-wrap: wrap; }
+.verification-table .pill { font-variant-numeric: tabular-nums; }
+.verification-table thead th:last-child { text-align: right; }
+.verification-table td:last-child .mini {
+  background: transparent; border-color: transparent; color: var(--text-dim);
+  padding-left: 5px; padding-right: 5px;
+}
+.verification-table td:last-child .mini:hover:not(:disabled) {
+  border-color: var(--line-strong); color: var(--text);
+}
+
+/* ── the release form: one dialog, grouped fields, no wizard ─────────────── */
+.modal-wide { width: min(780px, 100%); }
+.release-form { display: grid; gap: 14px; }
+.release-group {
+  border: 1px solid var(--line); border-radius: 10px; margin: 0;
+  padding: 10px 14px 14px; display: grid; gap: 10px;
+}
+.release-group legend {
+  padding: 0 5px; font-size: 11.5px; color: var(--muted);
+  text-transform: none; letter-spacing: 0;
+}
+.release-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.release-intro { margin: 0; font-size: 12.5px; }
+.release-hint { margin: 0; font-size: 11.5px; }
+.release-check { justify-content: flex-start; gap: 8px; font-size: 12.5px; color: var(--text-dim); }
+.release-error { margin: 0; color: var(--err-fg); font-size: 12.5px; }
+
+/* ── Projects: structure the reader can scan ───────────────────────────────
+   A page that is one flat list of cards gives the eye nowhere to land. The
+   header carries identity (crumb + meta), each card carries one job, and the
+   component tree groups builds under the part that builds them. */
+
+.project-crumb {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--muted); margin: 0;
+}
+.project-crumb a, .project-crumb button {
+  background: none; border: none; padding: 0; min-height: 0;
+  color: var(--muted); font-size: 12px; text-decoration: none;
+}
+.project-crumb a:hover, .project-crumb button:hover { color: var(--text); text-decoration: underline; }
+.project-crumb .sep { color: var(--line-strong); }
+
+.project-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 2px 0 0; }
+.project-meta .meta-item { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; }
+.project-meta dt { color: var(--muted); font-size: 11.5px; text-transform: none; letter-spacing: 0; }
+.project-meta dd { margin: 0; color: var(--text); font-weight: 500; }
+
+.component-tree { display: grid; gap: 18px; }
+.component-block { border-top: 1px solid var(--line); padding-top: 14px; }
+.component-block:first-child { border-top: 0; padding-top: 0; }
+.component-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.component-head h3 {
+  margin: 0; font-size: 14.5px; font-weight: 650; letter-spacing: -0.15px;
+  text-transform: none; color: var(--text);
+}
+.component-head p { margin: 3px 0 0; font-size: 12px; }
+.version-tree { margin-top: 10px; }
+.version-tree thead th {
+  background: transparent; text-transform: none; letter-spacing: 0;
+  font-size: 11.5px; font-weight: 500; color: var(--muted);
+  border-bottom: 1px solid var(--line); padding: 6px 10px;
+}
+.version-tree td { padding: 8px 10px; font-size: 12.5px; }
+.version-tree tbody tr:first-child td { border-top: 0; }
+.version-label { font-weight: 600; color: var(--text); font-size: 12.5px; }
+.env-pill { margin-right: 4px; font-size: 10.5px; padding: 1px 8px; }
+.component-empty { margin: 8px 0 0; font-size: 12px; }
+.version-actions { justify-content: flex-end; }
+
+/* Keyboard users get a ring the mouse never sees; the console had a 14% shadow
+   that all but disappeared on the pale ground. */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+}
+.version-note { margin-left: 8px; font-family: inherit; font-size: 11px; font-weight: 400; color: var(--muted); }
+.component-block.product-wide { background: var(--bg-soft); border: 1px dashed var(--line-strong);
+  border-radius: 10px; padding: 12px 14px; }
+.component-block.product-wide .component-head h3 { font-size: 13px; }
+.env-pill { background: var(--panel-2); border-color: transparent; color: var(--text-dim); }
+.component-actions .mini { color: var(--text-dim); }
+
+/* An accordion row is a button that happens to contain a heading: reset the
+   control, keep the type. */
+.component-toggle {
+  display: flex; align-items: flex-start; gap: 8px; flex: 1;
+  background: none; border: none; padding: 0; min-height: 0;
+  text-align: left; color: inherit; font: inherit; cursor: pointer;
+}
+.component-toggle:hover .component-ident h3 { text-decoration: underline; }
+.caret { color: var(--muted); font-size: 11px; line-height: 2; width: 9px; flex: none; }
+.component-ident { display: grid; gap: 3px; min-width: 0; }
+.component-sub { font-size: 12px; }
+.component-repos { list-style: none; margin: 10px 0 2px; padding: 0; display: grid; gap: 5px; }
+.component-repos li { display: flex; align-items: baseline; gap: 10px; font-size: 12px; min-width: 0; }
+.component-repos .repo-name { font-weight: 600; color: var(--text); white-space: nowrap; }
+.component-repos a.repo-remote {
+  color: var(--muted); text-decoration: none; font-size: 11.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.component-repos a.repo-remote:hover { color: var(--text); text-decoration: underline; }
+.component-attach { margin-top: 10px; }
+.version-pager { display: flex; gap: 8px; margin-top: 8px; }
+
+/* The global button rule centres its content; an accordion header is a row. */
+.component-toggle { justify-content: flex-start; }
+.component-toggle .caret { font-size: 12px; color: var(--text-dim); line-height: 1.75; }
+.component-block.open > .component-head {
+  background: var(--bg-soft); border-radius: 8px;
+  padding: 8px 10px; margin: -8px -10px 8px;
+}
+.component-block.open > .component-head .component-ident h3 { color: var(--text); }
+.version-pager .mini { color: var(--text-dim); }
+
+/* ── grants ledger ─────────────────────────────────────────────────────────
+   The page is a record: filters on one line, one row per grant, issuing and
+   simulating behind buttons. Targets read as a list, not as a text blob. */
+.grant-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.grant-filters select, .grant-filters input { height: 32px; min-height: 32px; font-size: 12.5px; }
+.grant-count { margin-left: auto; }
+.grants-table td { vertical-align: top; }
+.grants-table .pill { margin: 0 4px 3px 0; }
+.grants-table td.title { max-width: 160px; }
+.grant-targets { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.grant-targets li { display: flex; gap: 8px; align-items: baseline; }
+.grant-target-type { font-size: 10.5px; color: var(--muted); min-width: 84px; }
+.grant-restr { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.grant-issued { max-width: 320px; }
+.grant-actions { text-align: right; }
+.grant-capabilities { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 4px 12px; }
+.grant-verdict { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+  border-top: 1px solid var(--line); padding-top: 10px; }
+.grant-verdict p { margin: 0; }
+/* Fixed widths keep the ledger from scrolling sideways: the reading columns
+   wrap, the state columns never do. */
+.grants-table { table-layout: fixed; width: 100%; }
+.grants-table th:nth-child(1), .grants-table td:nth-child(1) { width: 190px; }
+.grants-table th:nth-child(2), .grants-table td:nth-child(2) { width: 200px; }
+.grants-table th:nth-child(3), .grants-table td:nth-child(3) { width: 240px; }
+.grants-table th:nth-child(4), .grants-table td:nth-child(4) { width: 140px; }
+.grants-table th:nth-child(5), .grants-table td:nth-child(5) { width: 84px; }
+.grants-table th:nth-child(6), .grants-table td:nth-child(6) { width: 80px; }
+.grants-table th:nth-child(7), .grants-table td:nth-child(7) { width: 84px; }
+.grants-table td:nth-child(1), .grants-table td:nth-child(3),
+.grants-table td:nth-child(4) { overflow-wrap: anywhere; }
+.grants-table .pill { white-space: nowrap; }
+.grants-table td:nth-child(5), .grants-table td:nth-child(6),
+.grants-table td:last-child { white-space: nowrap; }
+.grant-just {
+  margin-top: 3px; font-size: 11.5px; font-weight: 400; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── scope: declarations, not a form ──────────────────────────────────────
+   The type rides with the value and a capability pill is the control for that
+   capability — clicking it withdraws it — so a row needs one button, not three. */
+.scope-note { margin: -2px 0 0; font-size: 12px; color: var(--muted); line-height: 1.55; }
+.scope-note .pill { margin: 0 3px; }
+.scope-note .mono { font-size: 11.5px; }
+.scope-value { display: flex; align-items: baseline; gap: 7px; flex-wrap: nowrap; min-width: 0; }
+.scope-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-type { font-size: 10.5px; color: var(--muted); min-width: 58px; }
+.pill-toggle {
+  font: inherit; font-size: 11px; cursor: pointer; background: transparent;
+  border: 1px dashed #d4d4d8; color: var(--muted); padding: 1px 8px;
+}
+.pill-toggle:hover { border-color: var(--text-dim); color: var(--text); }
+.pill-toggle.on { border-style: solid; border-color: var(--line); background: var(--panel-2);
+  color: var(--text); }
+.row-action { text-align: right; white-space: nowrap; }
+/* fixed columns: a long url truncates instead of pushing the table sideways */
+.scope-table { table-layout: fixed; width: 100%; }
+.scope-table th:nth-child(1), .scope-table td:nth-child(1) { width: 30%; }
+.scope-table th:nth-child(2), .scope-table td:nth-child(2) { width: 22%; }
+.scope-table th:nth-child(3), .scope-table td:nth-child(3) { width: 20%; }
+.scope-table th:nth-child(4), .scope-table td:nth-child(4) { width: 9%; }
+.scope-table th:nth-child(5), .scope-table td:nth-child(5) { width: 12%; }
+.scope-table th:nth-child(6), .scope-table td:nth-child(6) { width: 7%; }
+.scope-table td:nth-child(3), .scope-table td:nth-child(5) { overflow-wrap: anywhere; }
+.pill-toggle:hover { background: var(--panel-2); }
+.scope-table td:nth-child(2) { white-space: normal; }
+.scope-table td:nth-child(2) .pill { margin: 0 4px 3px 0; }
+.scope-table td:nth-child(5) .mono { display: block; overflow: hidden; text-overflow: ellipsis; }
+.scope-table td:nth-child(6) { text-align: right; }
+/* a granted capability shows how to withdraw it only when pointed at */
+.pill-toggle.on:hover::after { content: '×'; margin-left: 5px; color: var(--text-dim); }

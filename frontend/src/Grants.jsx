@@ -1,227 +1,515 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
-import { Dialog, PageHeader } from './ui'
+import { Card, Dialog, EmptyState, Loading, PageHeader } from './ui'
 
-const CAPABILITIES = ['passive_discovery', 'active_verification',
+/* Authorization grants: the ledger of "who may run what, against which targets,
+   until when". It is a record first — issuing and simulating are two deliberate
+   actions behind buttons, not three forms stacked on the reading surface. */
+
+const TARGET_TYPES = ['domain', 'wildcard_domain', 'ip', 'cidr', 'url',
+  'repository', 'service', 'endpoint']
+const FALLBACK_CAPABILITIES = ['passive_discovery', 'active_verification',
   'vulnerability_analysis', 'intrusive_testing']
+
+function humanWindow(hours) {
+  const value = Number(hours)
+  if (!Number.isFinite(value) || value <= 0) return 'no window'
+  if (value < 48) return `${value} hour${value === 1 ? '' : 's'}`
+  const days = value / 24
+  return `${Number.isInteger(days) ? days : days.toFixed(1)} days`
+}
 
 function parseTargets(text) {
   return text.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
     const [type, ...rest] = line.split('=')
     return { type: (type || '').trim(), value: rest.join('=').trim() }
-  }).filter((t) => t.type && t.value)
+  }).filter((target) => target.type && target.value)
 }
 
-function targetLines(targets) {
-  return (targets || []).map((t) => `${t.type}=${t.value}`).join('\n')
+function expiry(iso) {
+  if (!iso) return { label: '—', detail: '' }
+  const date = new Date(iso)
+  const days = Math.round((date.getTime() - Date.now()) / 86400000)
+  const exact = date.toLocaleString()
+  if (days < 0) return { label: 'expired', detail: exact, tone: 'denied' }
+  if (days === 0) return { label: 'today', detail: exact, tone: 'good' }
+  return { label: `${days}d left`, detail: exact, tone: 'good' }
+}
+
+function TargetList({ targets }) {
+  if (!targets?.length) return <span className="muted">—</span>
+  return (
+    <ul className="grant-targets">
+      {targets.map((target) => {
+        const type = target.target_type || target.type
+        const value = target.target_value || target.value
+        return (
+          <li key={`${type}:${value}`}>
+            <span className="grant-target-type">{type}</span>
+            <span className="mono">{value}</span>
+          </li>
+        )
+      })}
+    </ul>
+  )
 }
 
 export default function Grants() {
-  const [rows, setRows] = useState([])
+  const [rows, setRows] = useState(null)
   const [total, setTotal] = useState(0)
+  const [catalog, setCatalog] = useState([])
+  const [error, setError] = useState('')
   const [filters, setFilters] = useState({
     status: '', principal: '', capability: '', tool: '', target: '', expired: '',
   })
-  const [form, setForm] = useState({
-    principal: '', capability: 'passive_discovery', targets: 'domain=staging.company.org\n',
-    issued_by: 'console', justification: '', hours: 168, environment: '', tools: '',
-  })
-  const [sim, setSim] = useState({ capability: 'intrusive_testing', type: 'domain', value: '', tool: '', environment: ''  })
-  const [simResult, setSimResult] = useState(null)
-  const [error, setError] = useState('')
-  const [revokeOpen, setRevokeOpen] = useState(false)
+  const [issueOpen, setIssueOpen] = useState(false)
+  const [simulateOpen, setSimulateOpen] = useState(false)
   const [revokeGrant, setRevokeGrant] = useState(null)
 
   useEffect(() => { load() }, [filters])
 
+  useEffect(() => {
+    api.get('/api/v1/authorization/capabilities')
+      .then((r) => setCatalog(r.data || []))
+      .catch(() => setCatalog([]))
+  }, [])
+
   function load() {
     setError('')
     const params = new URLSearchParams()
-    for (const [k, v] of Object.entries(filters)) if (v) params.set(k, v)
+    for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value)
     api.get(`/api/v1/authorization/grants${params.toString() ? '?' + params : ''}`)
-      .then((r) => { setRows(r.data); setTotal(r.total) })
-      .catch((e) => setError(String(e.message || e)))
+      .then((r) => { setRows(r.data || []); setTotal(r.total || 0) })
+      .catch((problem) => { setError(String(problem.message || problem)); setRows([]) })
   }
 
-  async function create() {
-    try {
-      await api.post('/api/v1/authorization/grants', {
-        principal: form.principal.trim(),
-        capabilities: [form.capability],
-        targets: parseTargets(form.targets),
-        issued_by: form.issued_by.trim() || 'console',
-        justification: form.justification.trim() || 'created from console',
-        hours: Number(form.hours) || 168,
-        environment: form.environment.trim() || undefined,
-        tools: form.tools.trim() ? form.tools.split(',').map((t) => t.trim()) : undefined,
-      })
-      setForm((f) => ({ ...f, principal: '', justification: '' }))
-      load()
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-  }
-
-  async function revoke(g) {
-    setRevokeGrant(g)
-    setRevokeOpen(true)
-  }
-
-  async function confirmRevoke() {
-    if (!revokeGrant) return
-    try {
-      await api.post(`/api/v1/authorization/grants/${revokeGrant.id}/revoke`,
-        { reason: 'revoked from console', actor: 'console' })
-      setRevokeOpen(false)
-      setRevokeGrant(null)
-      load()
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-  }
-
-  async function simulate() {
-    setSimResult('…')
-    try {
-      const body = { principal: form.principal.trim() || 'simulated-principal',
-        capability: sim.capability,
-        targets: [{ type: sim.type, value: sim.value.trim() }] }
-      if (sim.tool.trim()) body.tool = sim.tool.trim()
-      if (sim.environment.trim()) body.environment = sim.environment.trim()
-      const result = await api.post('/api/v1/authorization/authorize', body)
-      setSimResult(result)
-    } catch (e) {
-      setSimResult({ decision: 'error', reason: String(e.message || e) })
-    }
-  }
+  const capabilities = catalog.length
+    ? catalog
+    : FALLBACK_CAPABILITIES.map((id) => ({ id, description: '', invasive: false }))
+  const activeFilters = Object.values(filters).filter(Boolean).length
 
   return (
     <div className="stack">
-      <PageHeader title="Authorization grants" />
-      <div className="toolbar">
-        <select value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}>
-          <option value="">any status</option>
-          <option value="active">active</option>
-          <option value="revoked">revoked</option>
-        </select>
-        <input placeholder="principal…" value={filters.principal}
-          onChange={(e) => setFilters((f) => ({ ...f, principal: e.target.value }))} />
-        <select value={filters.capability} onChange={(e) => setFilters((f) => ({ ...f, capability: e.target.value }))}>
-          <option value="">any capability</option>
-          {CAPABILITIES.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <input placeholder="tool…" value={filters.tool}
-          onChange={(e) => setFilters((f) => ({ ...f, tool: e.target.value }))} />
-        <input placeholder="target…" value={filters.target}
-          onChange={(e) => setFilters((f) => ({ ...f, target: e.target.value }))} />
-        <select value={filters.expired} onChange={(e) => setFilters((f) => ({ ...f, expired: e.target.value }))}>
-          <option value="">any expiry</option>
-          <option value="false">not expired</option>
-          <option value="true">expired</option>
-        </select>
-        <span className="count">{total} grants</span>
-      </div>
+      <PageHeader
+        title="Authorization grants"
+        subtitle="Who may run a capability against which targets, and until when. Default deny: nothing runs without a grant here, and a scope exclusion always wins."
+        actions={(
+          <>
+            <button className="mini" onClick={() => setSimulateOpen(true)}>check a decision</button>
+            <button className="btn-primary mini" onClick={() => setIssueOpen(true)}>issue grant</button>
+          </>
+        )}
+      />
+
       {error && <div className="banner banner-error">{error}</div>}
-      <table>
-        <thead>
-          <tr><th>principal</th><th>capability</th><th>targets</th><th>env/tool</th>
-              <th>valid until</th><th>status</th><th>justification / issuer</th><th></th></tr>
-        </thead>
-        <tbody>
-          {rows.map((g) => (
-            <tr key={g.id} className={g.status === 'revoked' ? 'muted-row' : ''}>
-              <td>{g.principal}</td>
-              <td>{(g.capabilities || []).map((c) => <span key={c} className="pill">{c}</span>)}</td>
-              <td className="title">{targetLines(g.targets)}</td>
-              <td>{g.environment || '—'} / {(g.tools || []).join(', ') || '—'}</td>
-              <td className="muted">{new Date(g.valid_until).toLocaleString()}</td>
-              <td><span className={`status st-${g.status}`}>{g.status}</span></td>
-              <td className="muted">
-                {g.justification} <br />by {g.issued_by} · policy v{g.policy_version}
-              </td>
-              <td>
-                {g.status === 'active' &&
-                  <button onClick={() => revoke(g)}>revoke</button>}
-                {g.status === 'revoked' &&
-                  <span className="muted">by {g.revoked_by || '—'}</span>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {!rows.length && !error && <p className="empty">No grants for these filters.</p>}
-      <h2 className="section">issue a grant</h2>
-      {!error && (
-        <div className="card">
-          <input placeholder="principal (who will run)" value={form.principal}
-            onChange={(e) => setForm((f) => ({ ...f, principal: e.target.value }))} />
-          <select value={form.capability} onChange={(e) => setForm((f) => ({ ...f, capability: e.target.value }))}>
-            {CAPABILITIES.map((c) => <option key={c} value={c}>{c}</option>)}
+
+      <Card tight>
+        <div className="grant-filters">
+          <select value={filters.status}
+            onChange={(event) => setFilters((f) => ({ ...f, status: event.target.value }))}>
+            <option value="">any status</option>
+            <option value="active">active</option>
+            <option value="revoked">revoked</option>
           </select>
-          <textarea placeholder="targets, one per line: type=value" rows="3"
-            value={form.targets}
-            onChange={(e) => setForm((f) => ({ ...f, targets: e.target.value }))} />
-          <input placeholder="issued_by (you)" value={form.issued_by}
-            onChange={(e) => setForm((f) => ({ ...f, issued_by: e.target.value }))} />
-          <input placeholder="justification (audited)" value={form.justification}
-            onChange={(e) => setForm((f) => ({ ...f, justification: e.target.value }))} />
-          <div className="toolbar">
-            <label>hours <input type="number" value={form.hours} style={{ width: 70 }}
-              onChange={(e) => setForm((f) => ({ ...f, hours: e.target.value }))} /></label>
-            <input placeholder="environment (optional)" value={form.environment}
-              onChange={(e) => setForm((f) => ({ ...f, environment: e.target.value }))} />
-            <input placeholder="tools, comma separated (optional)" value={form.tools}
-              onChange={(e) => setForm((f) => ({ ...f, tools: e.target.value }))} />
-          </div>
-          <button onClick={create}>issue grant</button>
-          <p className="hint">
-            Invasive capabilities cannot be self-authorized (issued_by must
-            differ from principal); the backend enforces this.
-          </p>
+          <input placeholder="principal" value={filters.principal}
+            onChange={(event) => setFilters((f) => ({ ...f, principal: event.target.value }))} />
+          <select value={filters.capability}
+            onChange={(event) => setFilters((f) => ({ ...f, capability: event.target.value }))}>
+            <option value="">any capability</option>
+            {capabilities.map((cap) => <option key={cap.id} value={cap.id}>{cap.id}</option>)}
+          </select>
+          <input placeholder="target" value={filters.target}
+            onChange={(event) => setFilters((f) => ({ ...f, target: event.target.value }))} />
+          <select value={filters.expired}
+            onChange={(event) => setFilters((f) => ({ ...f, expired: event.target.value }))}>
+            <option value="">any expiry</option>
+            <option value="false">still valid</option>
+            <option value="true">expired</option>
+          </select>
+          <input placeholder="tool" value={filters.tool}
+            onChange={(event) => setFilters((f) => ({ ...f, tool: event.target.value }))} />
+          {activeFilters > 0 && (
+            <button className="mini" onClick={() => setFilters({
+              status: '', principal: '', capability: '', tool: '', target: '', expired: '',
+            })}>
+              clear
+            </button>
+          )}
+          <span className="count grant-count">
+            {rows === null ? 'loading…' : `${total} grant${total === 1 ? '' : 's'}`}
+          </span>
         </div>
+      </Card>
+
+      {rows === null && <Card><Loading rows={3} /></Card>}
+
+      {rows !== null && !rows.length && (
+        <Card>
+          <EmptyState
+            title={activeFilters ? 'No grant matches these filters' : 'No grants yet'}
+            hint={activeFilters
+              ? 'Clear the filters to see the whole ledger.'
+              : 'A grant is permission to run one capability against specific targets, for a window. Nothing runs without it.'} />
+        </Card>
       )}
-      <h2 className="section">authorize() simulator</h2>
-      <div className="toolbar">
-        <select value={sim.capability} onChange={(e) => setSim((s) => ({ ...s, capability: e.target.value }))}>
-          {CAPABILITIES.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <select value={sim.type} onChange={(e) => setSim((s) => ({ ...s, type: e.target.value }))}>
-          <option value="domain">domain</option>
-          <option value="wildcard_domain">wildcard_domain</option>
-          <option value="ip">ip</option>
-          <option value="url">url</option>
-          <option value="repository">repository</option>
-          <option value="service">service</option>
-        </select>
-        <input placeholder="target value" value={sim.value}
-          onChange={(e) => setSim((s) => ({ ...s, value: e.target.value }))}
-          onKeyDown={(e) => e.key === 'Enter' && simulate()} />
-        <input placeholder="tool (optional)" value={sim.tool}
-          onChange={(e) => setSim((s) => ({ ...s, tool: e.target.value }))} />
-        <input placeholder="environment (optional)" value={sim.environment}
-          onChange={(e) => setSim((s) => ({ ...s, environment: e.target.value }))} />
-        <button onClick={simulate}>simulate</button>
-      </div>
-      {simResult && simResult !== '…' && (
-        <div className="detail">
-          <dl>
-            <dt>decision</dt>
-            <dd><span className={simResult.decision === 'allow' ? 'ok' : 'sev sev-critical'}>
-              {simResult.decision}</span></dd>
-            <dt>reason</dt><dd>{simResult.reason}</dd>
-            <dt>policy</dt><dd>v{simResult.policy_version} — evaluated {simResult.evaluated_at}</dd>
-          </dl>
-        </div>
+
+      {rows !== null && rows.length > 0 && (
+        <Card tight>
+          <table className="grants-table">
+            <thead>
+              <tr>
+                <th>principal</th><th>capabilities</th><th>targets</th>
+                <th>restrictions</th><th>expires</th><th>status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((grant) => {
+                const when = expiry(grant.valid_until)
+                return (
+                  <tr key={grant.id} className={grant.status === 'revoked' ? 'muted-row' : ''}>
+                    <td className="title">
+                      {grant.principal}
+                      <div className="grant-just" title={`${grant.justification} — by ${grant.issued_by} · policy v${grant.policy_version}`}>
+                        {grant.justification}
+                      </div>
+                      <div className="grant-restr">
+                        by {grant.issued_by}
+                        {grant.status === 'revoked' && grant.revoked_by
+                          ? ` · revoked by ${grant.revoked_by}` : ''}
+                      </div>
+                    </td>
+                    <td>
+                      {(grant.capabilities || []).map((cap) => (
+                        <span className="pill" key={cap}
+                          title={capabilities.find((entry) => entry.id === cap)?.description || cap}>
+                          {cap}
+                        </span>
+                      ))}
+                    </td>
+                    <td><TargetList targets={grant.targets} /></td>
+                    <td className="muted">
+                      {grant.environment || 'any environment'}
+                      <div className="grant-restr">
+                        {grant.tools?.length ? `tools: ${grant.tools.join(', ')}` : 'any tool'}
+                      </div>
+                    </td>
+                    <td>
+                      <span className={`pill ${when.tone || ''}`} title={when.detail}>{when.label}</span>
+                    </td>
+                    <td><span className={`pill ${grant.status === 'active' ? 'good' : 'denied'}`}>
+                      {grant.status}</span></td>
+                    <td className="grant-actions">
+                      {grant.status === 'active' && (
+                        <button className="mini" onClick={() => setRevokeGrant(grant)}>revoke</button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </Card>
       )}
-      <Dialog open={revokeOpen} title="Revoke grant"
-        onClose={() => setRevokeOpen(false)}
-        confirmLabel="Revoke" destructive onConfirm={confirmRevoke}>
-        <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-          Grant <strong>{revokeGrant?.id}</strong> will be revoked immediately for
-          principal <strong>{revokeGrant?.principal}</strong>. This is audited and
-          cannot be undone.
-        </p>
-      </Dialog>
+
+      <IssueDialog open={issueOpen} onClose={() => setIssueOpen(false)}
+        catalog={capabilities} onIssued={() => { setIssueOpen(false); load() }} />
+      <SimulateDialog open={simulateOpen} onClose={() => setSimulateOpen(false)}
+        catalog={capabilities} />
+      <RevokeDialog grant={revokeGrant} onClose={() => setRevokeGrant(null)}
+        onRevoked={() => { setRevokeGrant(null); load() }} />
     </div>
+  )
+}
+
+/* ─────────────────────────────── dialogs ─────────────────────────────── */
+
+function IssueDialog({ open, onClose, catalog, onIssued }) {
+  const [form, setForm] = useState({
+    principal: 'console', issued_by: 'console-operator',
+    capabilities: ['passive_discovery'], targets: '', justification: '',
+    hours: 168, environment: '', tools: '',
+  })
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const parsed = useMemo(() => parseTargets(form.targets), [form.targets])
+
+  function toggleCapability(id) {
+    setForm((current) => ({
+      ...current,
+      capabilities: current.capabilities.includes(id)
+        ? current.capabilities.filter((cap) => cap !== id)
+        : [...current.capabilities, id],
+    }))
+    setError('')
+  }
+
+  function submit() {
+    if (!form.capabilities.length) {
+      setError('Choose at least one capability — a grant with none permits nothing.')
+      return false
+    }
+    if (!parsed.length) {
+      setError('Declare at least one target, one per line: type=value.')
+      return false
+    }
+    if (form.principal.trim().length < 2 || form.issued_by.trim().length < 2) {
+      setError('Name who runs it and who issues it.')
+      return false
+    }
+    const hours = Number(form.hours)
+    if (!Number.isFinite(hours) || hours < 1 || hours > 8760) {
+      setError('The window has to be between 1 and 8760 hours.')
+      return false
+    }
+    if (form.justification.trim().length < 4) {
+      setError('Write why — the audit trail keeps this sentence.')
+      return false
+    }
+    issue()
+    return false
+  }
+
+  async function issue() {
+    setBusy(true)
+    setError('')
+    try {
+      await api.post('/api/v1/authorization/grants', {
+        principal: form.principal.trim(),
+        capabilities: form.capabilities,
+        targets: parsed.map((target) => ({ type: target.type, value: target.value })),
+        issued_by: form.issued_by.trim(),
+        justification: form.justification.trim(),
+        hours: Number(form.hours) || 168,
+        environment: form.environment.trim() || undefined,
+        tools: form.tools.trim()
+          ? form.tools.split(',').map((tool) => tool.trim()).filter(Boolean)
+          : undefined,
+      })
+      setForm((current) => ({ ...current, targets: '', justification: '' }))
+      onIssued()
+    } catch (problem) {
+      setError(String(problem.message || problem))
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <Dialog open={open} title="Issue a grant" size="wide"
+      onClose={() => { if (!busy) onClose() }} onConfirm={submit}
+      confirmLabel={busy ? 'issuing…' : 'issue grant'}>
+      <div className="release-form">
+        <fieldset className="release-group">
+          <legend>Capabilities</legend>
+          <p className="muted release-hint">
+            What the holder may do. Invasive capabilities cannot be self-authorized: the
+            issuer must differ from the principal.
+          </p>
+          <div className="grant-capabilities">
+            {catalog.map((cap) => (
+              <label className="row release-check" key={cap.id} title={cap.description}>
+                <input type="checkbox" checked={form.capabilities.includes(cap.id)}
+                  onChange={() => toggleCapability(cap.id)} />
+                {cap.id}
+                {cap.invasive ? <span className="pill denied">invasive</span> : null}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset className="release-group">
+          <legend>Targets</legend>
+          <label className="field">
+            <span>one per line: type=value</span>
+            <textarea rows="3" value={form.targets}
+              placeholder={'domain=api.example.com\nrepository=bitsentry/aurea-server'}
+              onChange={(event) => {
+                setForm((f) => ({ ...f, targets: event.target.value }))
+                setError('')
+              }} />
+          </label>
+          <p className="muted release-hint">
+            {parsed.length
+              ? `${parsed.length} target${parsed.length === 1 ? '' : 's'}`
+              : 'Types: domain, wildcard_domain, ip, cidr, url, repository, service, endpoint.'}
+          </p>
+        </fieldset>
+
+        <fieldset className="release-group">
+          <legend>Who and how long</legend>
+          <div className="release-row">
+            <label className="field">
+              <span>principal (who runs)</span>
+              <input value={form.principal}
+                onChange={(event) => setForm((f) => ({ ...f, principal: event.target.value }))} />
+            </label>
+            <label className="field">
+              <span>issued by</span>
+              <input value={form.issued_by}
+                onChange={(event) => setForm((f) => ({ ...f, issued_by: event.target.value }))} />
+            </label>
+            <label className="field">
+              <span>valid for (hours)</span>
+              <input type="number" min="1" max="8760" value={form.hours}
+                onChange={(event) => setForm((f) => ({ ...f, hours: event.target.value }))} />
+            </label>
+          </div>
+          <div className="release-row">
+            <label className="field">
+              <span>environment (optional)</span>
+              <input value={form.environment} placeholder="production"
+                onChange={(event) => setForm((f) => ({ ...f, environment: event.target.value }))} />
+            </label>
+            <label className="field">
+              <span>tools (optional, comma separated)</span>
+              <input value={form.tools} placeholder="dns-collector, tls-probe"
+                onChange={(event) => setForm((f) => ({ ...f, tools: event.target.value }))} />
+            </label>
+          </div>
+          <p className="muted release-hint">Window: {humanWindow(form.hours)}</p>
+          <label className="field">
+            <span>justification (audited)</span>
+            <input value={form.justification}
+              placeholder="why this range and this window"
+              onChange={(event) => {
+                setForm((f) => ({ ...f, justification: event.target.value }))
+                setError('')
+              }} />
+          </label>
+        </fieldset>
+
+        {error && <p role="alert" className="release-error">{error}</p>}
+      </div>
+    </Dialog>
+  )
+}
+
+function SimulateDialog({ open, onClose, catalog }) {
+  const [form, setForm] = useState({
+    principal: 'console', capability: 'passive_discovery',
+    type: 'domain', value: '', tool: '', environment: '',
+  })
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState('')
+
+  async function simulate() {
+    if (!form.value.trim()) { setError('Give a target value to evaluate.'); return false }
+    setError('')
+    try {
+      const body = {
+        principal: form.principal.trim() || 'console',
+        capability: form.capability,
+        targets: [{ type: form.type, value: form.value.trim() }],
+      }
+      if (form.tool.trim()) body.tool = form.tool.trim()
+      if (form.environment.trim()) body.environment = form.environment.trim()
+      setResult(await api.post('/api/v1/authorization/authorize', body))
+    } catch (problem) {
+      setError(String(problem.message || problem))
+    }
+    return false
+  }
+
+  return (
+    <Dialog open={open} title="Check a decision" size="wide"
+      onClose={onClose} onConfirm={simulate} confirmLabel="evaluate">
+      <div className="release-form">
+        <p className="muted release-hint">
+          One question, nothing touched: may this principal run this capability against
+          this target, with this tool and environment? The same engine the collectors call.
+        </p>
+        <div className="release-row">
+          <label className="field">
+            <span>principal</span>
+            <input value={form.principal}
+              onChange={(event) => setForm((f) => ({ ...f, principal: event.target.value }))} />
+          </label>
+          <label className="field">
+            <span>capability</span>
+            <select value={form.capability}
+              onChange={(event) => setForm((f) => ({ ...f, capability: event.target.value }))}>
+              {catalog.map((cap) => <option key={cap.id} value={cap.id}>{cap.id}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="release-row">
+          <label className="field">
+            <span>target type</span>
+            <select value={form.type}
+              onChange={(event) => setForm((f) => ({ ...f, type: event.target.value }))}>
+              {TARGET_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>value</span>
+            <input value={form.value} placeholder="api.example.com"
+              onChange={(event) => setForm((f) => ({ ...f, value: event.target.value }))} />
+          </label>
+        </div>
+        <div className="release-row">
+          <label className="field">
+            <span>tool (optional)</span>
+            <input value={form.tool} placeholder="dns-collector"
+              onChange={(event) => setForm((f) => ({ ...f, tool: event.target.value }))} />
+          </label>
+          <label className="field">
+            <span>environment (optional)</span>
+            <input value={form.environment} placeholder="production"
+              onChange={(event) => setForm((f) => ({ ...f, environment: event.target.value }))} />
+          </label>
+        </div>
+        {result && result.decision && (
+          <div className="grant-verdict">
+            <span className={`pill ${result.decision === 'allow' ? 'good' : 'denied'}`}>
+              {result.decision}
+            </span>
+            <p className="muted">{result.reason}</p>
+            <p className="muted grant-restr">
+              policy v{result.policy_version} · evaluated {result.evaluated_at}
+            </p>
+          </div>
+        )}
+        {error && <p role="alert" className="release-error">{error}</p>}
+      </div>
+    </Dialog>
+  )
+}
+
+function RevokeDialog({ grant, onClose, onRevoked }) {
+  const [reason, setReason] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function submit() {
+    if (reason.trim().length < 4) {
+      setError('A reason is required: revocation is audited.')
+      return false
+    }
+    setBusy(true)
+    try {
+      await api.post(`/api/v1/authorization/grants/${grant.id}/revoke`,
+        { reason: reason.trim(), actor: 'console' })
+      setReason('')
+      onRevoked()
+    } catch (problem) {
+      setError(String(problem.message || problem))
+    } finally { setBusy(false) }
+    return false
+  }
+
+  return (
+    <Dialog open={Boolean(grant)} title="Revoke grant"
+      onClose={onClose} onConfirm={submit} destructive
+      confirmLabel={busy ? 'revoking…' : 'revoke'}>
+      <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+        {grant?.principal} loses {grant?.capabilities?.join(' + ')} immediately. The grant
+        stays in the ledger as revoked, with who revoked it and why.
+      </p>
+      <label className="field" style={{ marginTop: 10 }}>
+        <span>reason (audited)</span>
+        <input value={reason}
+          onChange={(event) => { setReason(event.target.value); setError('') }} />
+      </label>
+      {error && <p role="alert" className="release-error">{error}</p>}
+    </Dialog>
   )
 }

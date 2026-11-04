@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { PageHeader } from './ui'
+import { ROLE_ORDER, roleLabel } from './roles'
 
-const ROLES = ['owner', 'admin', 'analyst', 'viewer']
+const ROLES = ROLE_ORDER
 const CREATABLE = ['admin', 'analyst', 'viewer']
 
 export default function Members() {
@@ -12,6 +13,9 @@ export default function Members() {
   const [audit, setAudit] = useState({ data: [], chain_ok: null })
   const [form, setForm] = useState({ identity: '', role: 'viewer', added_by: 'console' })
   const [user, setUser] = useState({ email: '', password: '', role: 'analyst' })
+  const [invites, setInvites] = useState([])
+  const [inviteForm, setInviteForm] = useState({ email: '', role: 'viewer' })
+  const [inviteLink, setInviteLink] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => { load() }, [])
@@ -23,6 +27,42 @@ export default function Members() {
     api.get('/api/v1/auth/users')
       .then((r) => { setUsers(r.data); setUserError('') })
       .catch((e) => setUserError(String(e.message || e)))
+    api.get('/api/v1/onboarding/invitations')
+      .then((r) => setInvites(r.data || []))
+      .catch(() => setInvites([]))
+  }
+
+  async function invite(event) {
+    event?.preventDefault()
+    setUserError('')
+    if (!inviteForm.email.trim()) return
+    try {
+      const result = await api.post('/api/v1/onboarding/invitations', {
+        email: inviteForm.email.trim(), role: inviteForm.role, actor: 'console',
+      })
+      setInviteForm({ email: '', role: inviteForm.role })
+      setInviteLink(result.delivery?.sent ? '' : (result.data.invite_url || ''))
+      load()
+    } catch (e) { setUserError(String(e.message || e)) }
+  }
+
+  async function reissue(row) {
+    setUserError('')
+    try {
+      const result = await api.post(`/api/v1/onboarding/invitations/${row.id}/resend`,
+        { actor: 'console' })
+      setInviteLink(result.delivery?.sent ? '' : (result.data.invite_url || ''))
+      load()
+    } catch (e) { setUserError(String(e.message || e)) }
+  }
+
+  async function revokeInvite(row) {
+    setUserError('')
+    try {
+      await api.post(`/api/v1/onboarding/invitations/${row.id}/revoke`, { actor: 'console' })
+      setInviteLink('')
+      load()
+    } catch (e) { setUserError(String(e.message || e)) }
   }
 
   async function add() {
@@ -73,7 +113,7 @@ export default function Members() {
               <td>
                 <select value={row.role} disabled={row.role === 'owner'}
                   onChange={(e) => patchUser(row, { role: e.target.value })}>
-                  {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                  {ROLES.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
                 </select>
               </td>
               <td><span className={`status st-${row.status}`}>{row.status}</span></td>
@@ -97,10 +137,67 @@ export default function Members() {
         <input type="password" placeholder="password (8+ chars)" value={user.password}
           onChange={(e) => setUser((u) => ({ ...u, password: e.target.value }))} />
         <select value={user.role} onChange={(e) => setUser((u) => ({ ...u, role: e.target.value }))}>
-          {CREATABLE.map((r) => <option key={r} value={r}>{r}</option>)}
+          {CREATABLE.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
         </select>
         <button onClick={createUser}>create account</button>
       </div>
+
+      {/* An invitation is a seat that exists before the person does. It stays
+          here until accepted or revoked, and the single-use link is the only
+          way to hand it over when the deployment has no SMTP. */}
+      <h2 className="section">invitations</h2>
+      {invites.length === 0
+        ? <p className="empty">No invitations. Create one to add a teammate without setting a password for them.</p>
+        : (
+          <table>
+            <thead><tr><th>email</th><th>role</th><th>team</th><th>status</th><th>sent</th><th></th></tr></thead>
+            <tbody>
+              {invites.map((row) => (
+                <tr key={row.id}>
+                  <td className="title">{row.email}</td>
+                  <td>{row.role_label || roleLabel(row.role)}</td>
+                  <td>{row.team || '—'}</td>
+                  <td><span className={`status st-${row.status}`}>{row.status}</span></td>
+                  <td className="muted">
+                    {row.last_sent_at
+                      ? `${row.last_delivery === 'email' ? 'email' : 'manual link'} · `
+                        + new Date(row.last_sent_at).toLocaleDateString()
+                      : 'not sent'}
+                  </td>
+                  <td>
+                    {row.status !== 'accepted' && (
+                      <>
+                        <button className="mini" onClick={() => reissue(row)}>new link</button>
+                        {row.status === 'pending' && (
+                          <button className="mini" onClick={() => revokeInvite(row)}>revoke</button>
+                        )}
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      <form className="card" onSubmit={invite}>
+        <input type="email" placeholder="teammate@example.com" value={inviteForm.email}
+          onChange={(e) => setInviteForm((f) => ({ ...f, email: e.target.value }))} />
+        <select value={inviteForm.role}
+          onChange={(e) => setInviteForm((f) => ({ ...f, role: e.target.value }))}>
+          {CREATABLE.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+        </select>
+        <button type="submit">create invitation</button>
+      </form>
+      {inviteLink && (
+        <div className="onb-link">
+          <span className="onb-help">Single-use link — the previous one stops working.</span>
+          <div className="onb-link-row">
+            <input readOnly value={inviteLink} onFocus={(e) => e.target.select()} />
+            <button type="button" className="mini"
+              onClick={() => navigator.clipboard?.writeText(inviteLink)}>copy</button>
+          </div>
+        </div>
+      )}
 
       <h2 className="section">named members (audit attribution)</h2>
       <div className="toolbar">
@@ -108,7 +205,7 @@ export default function Members() {
           onChange={(e) => setForm((f) => ({ ...f, identity: e.target.value }))}
           onKeyDown={(e) => e.key === 'Enter' && add()} />
         <select value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}>
-          {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+          {ROLES.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
         </select>
         <button onClick={add}>add member</button>
         <span className="count">{members.length} members</span>
@@ -122,7 +219,7 @@ export default function Members() {
               <td>{m.identity}</td>
               <td>
                 <select value={m.role} onChange={(e) => setRole(m, e.target.value)}>
-                  {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                  {ROLES.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
                 </select>
               </td>
               <td>{m.added_by || '—'}</td>

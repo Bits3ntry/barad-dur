@@ -22,6 +22,7 @@ const PUBLIC_PATHS = [
   '/api/v1/auth/bootstrap',
   '/api/v1/auth/password/reset',
   '/api/v1/auth/oidc/',
+  '/api/v1/auth/invitations/',
   '/healthz',
   '/api/v1/auth/refresh',
 ]
@@ -63,6 +64,24 @@ async function refreshSession() {
   return result
 }
 
+/* FastAPI answers two shapes on failure: a string (HTTPException) or an array
+   of {loc, msg} (pydantic validation). Stringifying the array put
+   `[{"type":"string_too_short","loc":["body","justification"],...}]` in front of
+   the reader; every screen now gets "justification: String should have at
+   least 4 characters" instead. */
+function describeError(detail) {
+  if (!detail) return ''
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail.map((item) => {
+      const field = (item.loc || []).filter((part) => part !== 'body').join('.')
+      const message = item.msg || item.type || 'invalid'
+      return field ? `${field}: ${message}` : message
+    }).join(' · ')
+  }
+  return JSON.stringify(detail)
+}
+
 async function request(path, options = {}) {
   const { url, key, token } = read()
   // Empty URL = same-origin: in dev the Vite proxy forwards /api to the
@@ -100,7 +119,7 @@ async function request(path, options = {}) {
       let message = `HTTP ${retry.status}`
       try {
         const body = await retry.json()
-        message += `: ${typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)}`
+        message += `: ${describeError(body.detail)}`
       } catch { /* bounded */ }
       throw new Error(message)
     }
@@ -111,7 +130,7 @@ async function request(path, options = {}) {
   let message = `HTTP ${response.status}`
   try {
     const body = await response.json()
-    message += `: ${typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)}`
+    message += `: ${describeError(body.detail)}`
   } catch { /* bounded: keep the status as the reason */ }
   throw new Error(message)
 }
@@ -120,8 +139,13 @@ export const api = {
   settings: read,
   save,
   get: (path) => request(path),
-  post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
+  post: (path, body, options = {}) => request(path, {
+    ...options,
+    method: 'POST',
+    body: JSON.stringify(body),
+  }),
   patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),
+  put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
   postRaw: (path, raw) => request(path, { method: 'POST', body: raw, headers: { 'Content-Type': 'application/octet-stream' } }),
   del: (path, body) => request(path, { method: 'DELETE', ...(body ? { body: JSON.stringify(body) } : {}) }),
 }
