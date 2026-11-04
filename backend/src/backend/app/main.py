@@ -8,7 +8,7 @@ from backend.app.db import get_session, run_migrations
 from backend.app import models
 from backend.app.routers import authorization as authorization_router
 
-from backend.app.routers import accounts, analysis, artifacts, attack_surface, ci, code_baselines, code_review, ctem, cycles, dashboard, deployment, easm, easm_trivy, exposures, findings, gates as gates_router, identity, impact, intelligence, inventory, inventory_groups, jira, lifecycle, licenses as licenses_router, mfa as mfa_router, notifications, onboarding, orchestration, organization, pentest, projects as projects_router, regression, relationships, schedules, sarif, scope, sbom, spdx, vulnerabilities, work
+from backend.app.routers import accounts, analysis, artifacts, attack_surface, ci, code_baselines, code_review, ctem, cycles, dashboard, deployment, easm, easm_trivy, exposures, findings, gates as gates_router, identity, impact, intelligence, inventory, inventory_groups, jira, lifecycle, licenses as licenses_router, mfa as mfa_router, notifications, onboarding, orchestration, organization, pentest, projects as projects_router, regression, relationships, sarif, scans as scans_router, schedules, scope, sbom, spdx, vulnerabilities, work
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -58,6 +58,7 @@ def create_app() -> FastAPI:
     app.include_router(onboarding.public_router)
     app.include_router(deployment.router)
     app.include_router(projects_router.router)
+    app.include_router(scans_router.router)
 
     @app.get("/healthz")
     def healthz(session: Session = Depends(get_session)):
