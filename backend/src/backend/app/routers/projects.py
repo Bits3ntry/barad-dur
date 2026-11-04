@@ -1134,6 +1134,10 @@ def _apply_probe_outcome(session: Session, probe: models.HealthProbe,
             deployment.source = "health"
             deployment.last_check_status = "ok"
             deployment.last_check_error = None
+            # A probe that reads a version nobody declared IS the declaration:
+            # the tree has to show where that build runs, or the row reports a
+            # version that exists nowhere in the component.
+            _link_probe_version(session, deployment, outcome["version"], actor)
         else:
             deployment.last_check_status = "failed"
             deployment.last_check_error = (outcome["error"] or "")[:500]
@@ -1141,6 +1145,37 @@ def _apply_probe_outcome(session: Session, probe: models.HealthProbe,
               if outcome["ok"] else f"failed: {outcome['error']}")
     _audit_log(session, probe.org_id, actor, "inventory.version_checked",
                "deployment", probe.deployment_id, detail[:300])
+
+
+def _link_probe_version(session: Session, deployment: models.Deployment,
+                        label: str | None, actor: str) -> bool:
+    """Point the deployment at a real version row, creating it if needed.
+
+    A /health probe answers "what is running here?", which is exactly what a
+    version row means. Recording the answer only as text left the component tree
+    listing 1.1–1.8 while PRO reported 21.7.8: a version the inventory did not
+    have. Returns True when the row was created (so the caller can say so).
+    """
+    value = (label or "").strip()
+    component = (session.get(models.ApplicationComponent,
+                             deployment.application_component_id)
+                 if deployment.application_component_id else None)
+    if not value or component is None:
+        return False
+    project = session.get(models.Project, component.project_id)
+    if project is None:
+        return False
+    known = _version_row(session, project, value, component.id) is not None
+    version_row = _ensure_version(session, project, value, component.id)
+    if version_row is None:
+        return False
+    deployment.version_id = version_row.id
+    if not known:
+        _audit_log(session, project.org_id, actor, "inventory.version_discovered",
+                   "project_version", version_row.id,
+                   f"{project.slug} {component.slug} {value} "
+                   f"(read from {deployment.environment} health probe)")
+    return not known
 
 
 class ProbeTickIn(BaseModel):

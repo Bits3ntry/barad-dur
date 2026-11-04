@@ -274,6 +274,52 @@ def test_probe_tick_runs_only_what_is_due(client, health_server):
         HealthHandler.fail = False
 
 
+def test_probe_creates_the_version_it_reads(client, health_server):
+    """A /health answer is a declaration: the tree must show where that build runs.
+
+    The regression: PRO reported 21.7.8 while the component listed 1.1–1.8, so the
+    deployment pointed at a version that existed nowhere. Reading a label nobody
+    declared has to materialise the version and link the deployment to it — once.
+    """
+    http, headers = client
+    slug = _project(http, headers).json()["data"]["slug"]
+    component_id = _component(http, headers, slug).json()["data"]["id"]
+    http.post(f"/api/v1/projects/{slug}/versions",
+              json={"version": "1.7.4", "component_id": component_id, "actor": "console"},
+              headers=headers)
+    deployment_id = _deployment(http, headers, slug, component_id,
+                                version=None).json()["data"]["id"]
+
+    HealthHandler.payload = {"version": "21.7.8", "status": "ok"}
+    try:
+        http.put(f"/api/v1/deployments/{deployment_id}/health-probe",
+                 json={"url": health_server, "interval_minutes": 1440, "actor": "console"},
+                 headers=headers)
+        assert http.post("/api/v1/probes/tick", json={}, headers=headers).json()["ran"] == 1
+
+        inventory = http.get(f"/api/v1/projects/{slug}/inventory", headers=headers).json()["data"]
+        versions = {row["version"]: row for row in inventory["versions"]}
+        assert set(versions) == {"1.7.4", "21.7.8"}
+        created = versions["21.7.8"]
+        assert created["component_id"] == component_id
+        assert [dep["environment"] for dep in created["deployments"]] == ["PRO"]
+        # The deployment now carries the link, not just the text.
+        deployment = [row for row in inventory["deployments"]
+                      if row["id"] == deployment_id][0]
+        assert deployment["version_id"] == created["id"]
+        assert deployment["version_label"] == "21.7.8"
+
+        # A second reading of the same version must not duplicate the row.
+        http.put(f"/api/v1/deployments/{deployment_id}/health-probe",
+                 json={"url": health_server, "interval_minutes": 0, "actor": "console"},
+                 headers=headers)
+        http.post(f"/api/v1/deployments/{deployment_id}/health/check", headers=headers)
+        inventory = http.get(f"/api/v1/projects/{slug}/inventory", headers=headers).json()["data"]
+        assert [row["version"] for row in inventory["versions"]].count("21.7.8") == 1
+    finally:
+        HealthHandler.payload = {"version": "1.7.4", "status": "ok"}
+
+
 def test_probe_and_version_are_validated(client):
     http, headers = client
     slug = _project(http, headers).json()["data"]["slug"]
