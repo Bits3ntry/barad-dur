@@ -134,6 +134,7 @@ export default function Projects({ onNavigate, slug = '', tab = 'summary',
   // The open project is the URL, not component state: /projects/{slug}.
   if (slug) {
     return <ProjectInventory refSlug={slug} initialTab={tab}
+      onNavigate={onNavigate}
       onTab={onProjectTab}
       onBack={() => {
         if (onCloseProject) onCloseProject()
@@ -447,7 +448,7 @@ function ProjectForm({ mode, initial, groups = [], onClose, onSubmit }) {
 
 /* ───────────────────────── one project ───────────────────────── */
 
-function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack }) {
+function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNavigate }) {
   const [data, setData] = useState(null)
   const [tab, setTab] = useState(initialTab)
 
@@ -1007,7 +1008,8 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack }) {
 
       {tab === 'assets' && (
         <ProjectVerification slug={project.slug}
-          onAdd={() => setDialog({ kind: 'asset' })} />
+          onAdd={() => setDialog({ kind: 'asset' })}
+          onOpenGrants={() => onNavigate && onNavigate('grants')} />
       )}
 
       <ReleaseDialog open={releaseOpen} onClose={() => setReleaseOpen(false)}

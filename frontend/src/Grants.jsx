@@ -19,13 +19,6 @@ function humanWindow(hours) {
   return `${Number.isInteger(days) ? days : days.toFixed(1)} days`
 }
 
-function parseTargets(text) {
-  return text.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
-    const [type, ...rest] = line.split('=')
-    return { type: (type || '').trim(), value: rest.join('=').trim() }
-  }).filter((target) => target.type && target.value)
-}
-
 function expiry(iso) {
   if (!iso) return { label: '—', detail: '' }
   const date = new Date(iso)
@@ -223,16 +216,91 @@ export default function Grants() {
 
 /* ─────────────────────────────── dialogs ─────────────────────────────── */
 
+const CAPABILITY_HINTS = {
+  passive_discovery: 'read public data — DNS records, certificates',
+  active_verification: 'connect and probe the service',
+  vulnerability_analysis: 'run a scanner against the target',
+  intrusive_testing: 'attempt exploitation',
+}
+
+const WINDOWS = [
+  { hours: 24, label: '1 day' },
+  { hours: 168, label: '7 days' },
+  { hours: 720, label: '30 days' },
+]
+
+// The type of a hand-typed target, guessed the way a person writes it. The chip
+// shows the guess, so a wrong guess is visible instead of silent.
+function guessType(raw) {
+  const value = (raw || '').trim()
+  if (!value) return 'domain'
+  if (value.startsWith('*.')) return 'wildcard_domain'
+  if (/^https?:\/\//i.test(value)) return 'url'
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) return 'ip'
+  if (/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(value)) return 'cidr'
+  if (/^[\w.-]+\/[\w.-]+$/.test(value)) return 'repository'
+  return 'domain'
+}
+
 function IssueDialog({ open, onClose, catalog, onIssued }) {
+  const [targets, setTargets] = useState([])
+  const [query, setQuery] = useState('')
+  const [assets, setAssets] = useState([])
+  const [scopeTargets, setScopeTargets] = useState([])
   const [form, setForm] = useState({
     principal: 'console', issued_by: 'console-operator',
-    capabilities: ['passive_discovery'], targets: '', justification: '',
+    capabilities: ['passive_discovery'], justification: '',
     hours: 168, environment: '', tools: '',
   })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const parsed = useMemo(() => parseTargets(form.targets), [form.targets])
+  // Load the picker's sources once, when the dialog opens: the two lists that
+  // answer "what do I own?" are assets (declared by hand or discovered) and
+  // scope targets (declared patterns, which are not hosts).
+  useEffect(() => {
+    if (!open) return
+    api.get('/api/v1/assets?limit=200')
+      .then((r) => setAssets(r.data || []))
+      .catch(() => setAssets([]))
+    api.get('/api/v1/scope/targets')
+      .then((r) => setScopeTargets(r.data || []))
+      .catch(() => setScopeTargets([]))
+  }, [open])
+
+  const known = useMemo(() => {
+    const seen = new Map()
+    for (const row of assets) {
+      const type = ['domain', 'subdomain'].includes(row.type) ? 'domain' : row.type
+      seen.set(`${type}:${row.value}`, { type, value: row.value, hint: row.project || '' })
+    }
+    for (const row of scopeTargets) {
+      const type = row.target_type || 'domain'
+      seen.set(`${type}:${row.value}`, { type, value: row.value, hint: 'in scope' })
+    }
+    return [...seen.values()]
+  }, [assets, scopeTargets])
+
+  const already = new Set(targets.map((row) => `${row.type}:${row.value}`))
+  const suggestions = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    return known
+      .filter((row) => !already.has(`${row.type}:${row.value}`))
+      .filter((row) => !needle || row.value.toLowerCase().includes(needle))
+      .slice(0, 6)
+  }, [known, query, targets])
+
+  function addTarget(row) {
+    if (!row.value.trim()) return
+    setTargets((current) => (current.some((t) => t.type === row.type && t.value === row.value)
+      ? current : [...current, { type: row.type, value: row.value.trim() }]))
+    setQuery('')
+    setError('')
+  }
+
+  function removeTarget(index) {
+    setTargets((current) => current.filter((_, at) => at !== index))
+  }
 
   function toggleCapability(id) {
     setForm((current) => ({
@@ -245,16 +313,20 @@ function IssueDialog({ open, onClose, catalog, onIssued }) {
   }
 
   function submit() {
+    if (!targets.length) {
+      setError('Pick a target above — a grant with no target permits nothing.')
+      return false
+    }
     if (!form.capabilities.length) {
-      setError('Choose at least one capability — a grant with none permits nothing.')
+      setError('Choose at least one capability.')
       return false
     }
-    if (!parsed.length) {
-      setError('Declare at least one target, one per line: type=value.')
+    if (form.principal.trim().length < 2) {
+      setError('Name who runs it (the principal the collector will act as).')
       return false
     }
-    if (form.principal.trim().length < 2 || form.issued_by.trim().length < 2) {
-      setError('Name who runs it and who issues it.')
+    if (form.issued_by.trim().length < 2) {
+      setError('Name who issues it. Invasive capabilities cannot be self-authorized.')
       return false
     }
     const hours = Number(form.hours)
@@ -277,7 +349,7 @@ function IssueDialog({ open, onClose, catalog, onIssued }) {
       await api.post('/api/v1/authorization/grants', {
         principal: form.principal.trim(),
         capabilities: form.capabilities,
-        targets: parsed.map((target) => ({ type: target.type, value: target.value })),
+        targets,
         issued_by: form.issued_by.trim(),
         justification: form.justification.trim(),
         hours: Number(form.hours) || 168,
@@ -286,12 +358,16 @@ function IssueDialog({ open, onClose, catalog, onIssued }) {
           ? form.tools.split(',').map((tool) => tool.trim()).filter(Boolean)
           : undefined,
       })
-      setForm((current) => ({ ...current, targets: '', justification: '' }))
+      setTargets([])
+      setQuery('')
+      setForm((current) => ({ ...current, justification: '' }))
       onIssued()
     } catch (problem) {
       setError(String(problem.message || problem))
     } finally { setBusy(false) }
   }
+
+  const windowLabel = humanWindow(form.hours)
 
   return (
     <Dialog open={open} title="Issue a grant" size="wide"
@@ -299,46 +375,84 @@ function IssueDialog({ open, onClose, catalog, onIssued }) {
       confirmLabel={busy ? 'issuing…' : 'issue grant'}>
       <div className="release-form">
         <fieldset className="release-group">
+          <legend>Targets</legend>
+          <div className="grant-picker-wrap">
+          <div className="grant-picker">
+            <input value={query} placeholder="search your assets, or type a value"
+              aria-label="search or type a target"
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                const first = suggestions[0]
+                addTarget(first || { type: guessType(query), value: query })
+              }} />
+            {query.trim() && !suggestions.some(
+              (row) => row.value.toLowerCase() === query.trim().toLowerCase()) && (
+              <button type="button" className="mini"
+                onClick={() => addTarget({ type: guessType(query), value: query })}>
+                add “{query.trim()}” as {guessType(query)}
+              </button>
+            )}
+          </div>
+          {query.trim() && suggestions.length > 0 && (
+            <ul className="grant-suggestions" aria-label="matching targets">
+              <li className="grant-suggestions-head">matching targets</li>
+              {suggestions.map((row) => (
+                <li key={`${row.type}:${row.value}`}>
+                  <button type="button" onClick={() => addTarget(row)}>
+                    <span className="grant-target-type">{row.type}</span>
+                    <span className="mono">{row.value}</span>
+                    {row.hint ? <span className="grant-source">{row.hint}</span> : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          </div>
+          {targets.length > 0 ? (
+            <ul className="grant-chips">
+              {targets.map((row, index) => (
+                <li key={`${row.type}:${row.value}`} className="grant-chip">
+                  <span className="grant-target-type">{row.type}</span>
+                  <span className="mono">{row.value}</span>
+                  <button type="button" aria-label={`remove ${row.value}`}
+                    onClick={() => removeTarget(index)}>×</button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted release-hint">
+              Pick from the list or type one and press Enter. Patterns work:
+              <span className="mono"> *.example.com</span>, and repositories as
+              <span className="mono"> owner/name</span>.
+            </p>
+          )}
+        </fieldset>
+
+        <fieldset className="release-group">
           <legend>Capabilities</legend>
-          <p className="muted release-hint">
-            What the holder may do. Invasive capabilities cannot be self-authorized: the
-            issuer must differ from the principal.
-          </p>
           <div className="grant-capabilities">
             {catalog.map((cap) => (
-              <label className="row release-check" key={cap.id} title={cap.description}>
+              <label className="row release-check" key={cap.id}
+                title={cap.description || CAPABILITY_HINTS[cap.id] || ''}>
                 <input type="checkbox" checked={form.capabilities.includes(cap.id)}
                   onChange={() => toggleCapability(cap.id)} />
-                {cap.id}
+                <span>{cap.id}</span>
                 {cap.invasive ? <span className="pill denied">invasive</span> : null}
+                <span className="muted grant-hint">
+                  {CAPABILITY_HINTS[cap.id] || cap.description}
+                </span>
               </label>
             ))}
           </div>
         </fieldset>
 
         <fieldset className="release-group">
-          <legend>Targets</legend>
-          <label className="field">
-            <span>one per line: type=value</span>
-            <textarea rows="3" value={form.targets}
-              placeholder={'domain=api.example.com\nrepository=bitsentry/aurea-server'}
-              onChange={(event) => {
-                setForm((f) => ({ ...f, targets: event.target.value }))
-                setError('')
-              }} />
-          </label>
-          <p className="muted release-hint">
-            {parsed.length
-              ? `${parsed.length} target${parsed.length === 1 ? '' : 's'}`
-              : 'Types: domain, wildcard_domain, ip, cidr, url, repository, service, endpoint.'}
-          </p>
-        </fieldset>
-
-        <fieldset className="release-group">
-          <legend>Who and how long</legend>
+          <legend>Who, and for how long</legend>
           <div className="release-row">
             <label className="field">
-              <span>principal (who runs)</span>
+              <span>principal (who runs it)</span>
               <input value={form.principal}
                 onChange={(event) => setForm((f) => ({ ...f, principal: event.target.value }))} />
             </label>
@@ -347,11 +461,25 @@ function IssueDialog({ open, onClose, catalog, onIssued }) {
               <input value={form.issued_by}
                 onChange={(event) => setForm((f) => ({ ...f, issued_by: event.target.value }))} />
             </label>
-            <label className="field">
-              <span>valid for (hours)</span>
+          </div>
+          <div className="row grant-windows">
+            {WINDOWS.map((option) => (
+              <button type="button" key={option.hours}
+                className={`mini ${Number(form.hours) === option.hours ? 'on' : ''}`}
+                onClick={() => setForm((f) => ({ ...f, hours: option.hours }))}>
+                {option.label}
+              </button>
+            ))}
+            <span className="muted grant-or">or</span>
+            <label className="grant-hours">
               <input type="number" min="1" max="8760" value={form.hours}
+                aria-label="window in hours"
                 onChange={(event) => setForm((f) => ({ ...f, hours: event.target.value }))} />
+              <span className="muted">hours</span>
             </label>
+            {!WINDOWS.some((option) => Number(form.hours) === option.hours) && (
+              <span className="muted grant-hint">= {windowLabel}</span>
+            )}
           </div>
           <div className="release-row">
             <label className="field">
@@ -365,17 +493,29 @@ function IssueDialog({ open, onClose, catalog, onIssued }) {
                 onChange={(event) => setForm((f) => ({ ...f, tools: event.target.value }))} />
             </label>
           </div>
-          <p className="muted release-hint">Window: {humanWindow(form.hours)}</p>
           <label className="field">
             <span>justification (audited)</span>
             <input value={form.justification}
-              placeholder="why this range and this window"
+              placeholder="why this target and this window"
               onChange={(event) => {
                 setForm((f) => ({ ...f, justification: event.target.value }))
                 setError('')
               }} />
           </label>
         </fieldset>
+
+        <p className="grant-summary">
+          <strong>{form.principal.trim() || 'nobody'}</strong> may run{' '}
+          <strong>{form.capabilities.length
+            ? form.capabilities.map((cap) => cap.replace(/_/g, ' ')).join(' + ')
+            : 'nothing'}</strong>{' '}
+          against <strong>{targets.length || 'no'} target{targets.length === 1 ? '' : 's'}</strong>{' '}
+          for <strong>{windowLabel}</strong>, issued by <strong>{form.issued_by.trim() || 'nobody'}</strong>.
+          {form.capabilities.some((cap) => catalog.find((entry) => entry.id === cap)?.invasive)
+            && form.principal.trim() === form.issued_by.trim()
+            ? ' Invasive capabilities cannot be self-authorized: the backend will refuse this.'
+            : ''}
+        </p>
 
         {error && <p role="alert" className="release-error">{error}</p>}
       </div>

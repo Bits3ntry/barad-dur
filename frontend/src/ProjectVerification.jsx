@@ -84,13 +84,11 @@ function PermissionCell({ permission, capability }) {
   return <span className="pill denied" title={permission.reason}>{label} denied</span>
 }
 
-export default function ProjectVerification({ slug, onAdd }) {
+export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState('')
-  const [grantOpen, setGrantOpen] = useState(false)
-  const [grantError, setGrantError] = useState('')
   const [excludeRow, setExcludeRow] = useState(null)
   const [reason, setReason] = useState('')
   const [excludeError, setExcludeError] = useState('')
@@ -98,10 +96,6 @@ export default function ProjectVerification({ slug, onAdd }) {
   const [editForm, setEditForm] = useState({ value: '', type: 'domain', notes: '' })
   const [editError, setEditError] = useState('')
   const [restoreRow, setRestoreRow] = useState(null)
-  const [grant, setGrant] = useState({
-    principal: 'console', issued_by: 'console-operator', justification: '',
-    hours: 168, passive: true, active: false,
-  })
 
   function load() {
     setError('')
@@ -213,67 +207,6 @@ export default function ProjectVerification({ slug, onAdd }) {
     } finally { setBusy('') }
   }
 
-  // Returns false to keep the dialog open with its own message: the shared
-  // Dialog closes on confirm unless the handler vetoes it.
-  function submitGrant() {
-    const domains = (data?.assets || []).filter(
-      (row) => row.type === 'domain' || row.type === 'subdomain')
-    if (!domains.length) {
-      setGrantError('This project has no domain to authorize.')
-      return false
-    }
-    if (!grant.passive && !grant.active) {
-      setGrantError('Choose at least one capability — a grant with none permits nothing.')
-      return false
-    }
-    if (grant.principal.trim().length < 2) {
-      setGrantError('Name who will run the collector (at least 2 characters).')
-      return false
-    }
-    if (grant.issued_by.trim().length < 2) {
-      setGrantError('Name who issues the grant (at least 2 characters).')
-      return false
-    }
-    const hours = Number(grant.hours)
-    if (!Number.isFinite(hours) || hours < 1 || hours > 8760) {
-      setGrantError('The window has to be between 1 and 8760 hours.')
-      return false
-    }
-    if (grant.justification.trim().length < 4) {
-      setGrantError('Write why this permission and this window — the audit trail keeps it.')
-      return false
-    }
-    setGrantError('')
-    applyGrant()          // the request closes the dialog only when it succeeds
-    return false
-  }
-
-  async function applyGrant() {
-    const domains = (data?.assets || []).filter(
-      (row) => row.type === 'domain' || row.type === 'subdomain')
-    const capabilities = []
-    if (grant.passive) capabilities.push('passive_discovery')
-    if (grant.active) capabilities.push('active_verification')
-    setBusy('grant')
-    setError('')
-    try {
-      await api.post('/api/v1/authorization/grants', {
-        principal: grant.principal.trim(),
-        capabilities,
-        targets: domains.map((row) => ({ type: 'domain', value: row.value })),
-        issued_by: grant.issued_by.trim(),
-        justification: grant.justification.trim(),
-        hours: Number(grant.hours) || 168,
-      })
-      setGrantOpen(false)
-      setNotice(`Granted ${capabilities.join(' + ')} for ${domains.length} `
-        + `domain${domains.length === 1 ? '' : 's'}, ${grant.hours}h.`)
-      await load()
-    } catch (e) {
-      setGrantError(String(e.message || e))
-    } finally { setBusy('') }
-  }
-
   const summary = data?.summary
   const rows = data?.assets || []
 
@@ -282,10 +215,7 @@ export default function ProjectVerification({ slug, onAdd }) {
       <Card title="Declared assets"
         actions={(
           <div className="row">
-            <button className="mini" disabled={!rows.length}
-              onClick={() => { setGrantError(''); setGrantOpen(true) }}>
-              authorize…
-            </button>
+            <button className="mini" onClick={onOpenGrants}>grants ›</button>
             {onAdd && <button className="mini" onClick={onAdd}>add asset</button>}
           </div>
         )}>
@@ -411,68 +341,11 @@ export default function ProjectVerification({ slug, onAdd }) {
         Collection is read-only: a DNS lookup, and optionally a TLS handshake to read the
         certificate. Nothing is written to the target. A host with no observation is
         <strong> never observed</strong>, not clean and not unreachable.
-        {' '}A grant is permission to run a test against a host you own; <strong>scope</strong>
-        {' '}is a different ledger — the universe automated cycles sweep, declared in
-        {' '}<a href="#scope">Scope</a>. An exclusion is the only scope rule that changes a
-        permission here.
+        {' '}Collection runs only where a grant allows it — grants are issued in
+        {' '}<a href="#grants">Authorization grants</a>, not here: this screen declares,
+        {' '}excludes and verifies. <strong>Scope</strong> is a third ledger, the universe
+        {' '}automated cycles sweep, declared in <a href="#scope">Scope</a>.
       </p>
-
-      <Dialog open={grantOpen} title="Authorize collection"
-        onClose={() => setGrantOpen(false)}
-        onConfirm={submitGrant}
-        confirmLabel={busy === 'grant' ? 'authorizing…' : 'issue grant'}>
-        <div className="stack" style={{ gap: 10 }}>
-          <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
-            One expiring grant for this project&apos;s domains: permission to run, nothing
-            more. It does not add them to the scope that automated cycles sweep — that is
-            declared in Scope — and it never lifts an exclusion.
-          </p>
-          <div className="row" style={{ gap: 16 }}>
-            <label className="row" style={{ gap: 6 }}>
-              <input type="checkbox" checked={grant.passive}
-                onChange={(event) => setGrant((g) => ({ ...g, passive: event.target.checked }))} />
-              DNS collection
-            </label>
-            <label className="row" style={{ gap: 6 }}>
-              <input type="checkbox" checked={grant.active}
-                onChange={(event) => setGrant((g) => ({ ...g, active: event.target.checked }))} />
-              TLS probe
-            </label>
-          </div>
-          <label className="field">
-            <span>principal (who runs the collector)</span>
-            <input value={grant.principal}
-              onChange={(event) => setGrant((g) => ({ ...g, principal: event.target.value }))} />
-          </label>
-          <label className="field">
-            <span>issued by</span>
-            <input value={grant.issued_by}
-              onChange={(event) => setGrant((g) => ({ ...g, issued_by: event.target.value }))} />
-          </label>
-          <label className="field">
-            <span>justification</span>
-            <input value={grant.justification} placeholder="why this range and this window"
-              onChange={(event) => {
-                setGrant((g) => ({ ...g, justification: event.target.value }))
-                setGrantError('')
-              }} />
-          </label>
-          <label className="field">
-            <span>valid for (hours)</span>
-            <input type="number" min="1" max="8760" value={grant.hours}
-              onChange={(event) => setGrant((g) => ({ ...g, hours: event.target.value }))} />
-          </label>
-          <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-            TLS is an invasive capability: the issuer must differ from the principal, and
-            the backend rejects a self-authorized grant.
-          </p>
-          {grantError && (
-            <p role="alert" style={{ margin: 0, fontSize: 12.5, color: 'var(--err-fg)' }}>
-              {grantError}
-            </p>
-          )}
-        </div>
-      </Dialog>
 
       <Dialog open={Boolean(editRow)} title={`Edit ${editRow?.value || ''}`}
         onClose={() => setEditRow(null)} onConfirm={submitEdit}
