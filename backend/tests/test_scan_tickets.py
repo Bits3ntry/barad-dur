@@ -180,6 +180,107 @@ def test_push_may_not_ask_for_network_capabilities(flow):
     assert "push ticket" in response.json()["detail"]
 
 
+def test_verified_secrets_is_never_a_push_action(flow):
+    """Verification presents the credential to its issuer: that is the platform
+    acting alone, so a CI/CLI push may never request it."""
+    response = _mint(flow, action="secrets-verified")
+    assert response.status_code == 422, response.text
+    assert "networked" in response.json()["detail"]
+
+
+def test_verified_secrets_asks_for_the_opt_in_provider_and_egress(flow):
+    grant = flow["client"].post("/api/v1/authorization/grants", json={
+        "principal": "console",
+        "capabilities": ["vulnerability_analysis"],
+        "targets": [{"type": "repository", "value": flow["repository"]}],
+        "issued_by": "santiago",
+        "justification": "verified secret sweep",
+        "actor": "santiago"}, headers=flow["headers"])
+    assert grant.status_code in (200, 201), grant.text
+
+    response = _mint(flow, action="secrets-verified", origin="console",
+                     actor="console")
+    assert response.status_code == 201, response.text
+    ticket = response.json()["ticket"]
+    secrets = next(t for t in ticket["tasks"] if t["task"] == "secrets")
+    # The task is unchanged — only the provider behind it is asked for by name.
+    assert secrets["additional_providers"] == ["trufflehog"]
+    assert secrets["contract"] == "sarif-2.1.0"
+    assert ticket["execution"]["network"] is True
+
+    catalog = flow["client"].get("/api/v1/scans/actions",
+                                 headers=flow["headers"]).json()["data"]
+    entry = next(a for a in catalog if a["name"] == "secrets-verified")
+    assert entry["providers"] == {"secrets": ["trufflehog"]}
+    assert entry["network"] is True
+
+
+def test_the_verified_secrets_ticket_is_accepted_by_the_real_daemon(flow):
+    """The opt-in provider must survive the whole hop: Barad mints it, Shauron's
+    own schema and intake accept it, and the name is one the manifest serves."""
+    grant = flow["client"].post("/api/v1/authorization/grants", json={
+        "principal": "console",
+        "capabilities": ["vulnerability_analysis"],
+        "targets": [{"type": "repository", "value": flow["repository"]}],
+        "issued_by": "santiago", "justification": "verified secrets",
+        "actor": "santiago"}, headers=flow["headers"])
+    assert grant.status_code in (200, 201), grant.text
+    ticket = _mint(flow, action="secrets-verified", origin="console",
+                   actor="console").json()["ticket"]
+    public = flow["client"].get("/api/v1/scans/key", headers=flow["headers"]) \
+        .json()["data"]["public_key"]
+
+    sys.path.insert(0, str(SHAURON_ROOT))
+    from fastapi.testclient import TestClient
+    from shauron import contract as shauron_contract
+    from shauron import manifest as manifest_module
+    from shauron.intake.app import create_app as create_daemon
+    from shauron.intake.store import Store
+
+    assert shauron_contract.validate(ticket, "barad-ticket-v1") == []
+    manifest = manifest_module.load()
+    assert manifest.providers_for("secrets") == ["trivy", "gitleaks", "trufflehog"]
+
+    daemon = TestClient(create_daemon(
+        store=Store(":memory:"), manifest=manifest, public_key=public))
+    accepted = daemon.post("/tickets", json=ticket)
+    assert accepted.status_code == 201, accepted.text
+
+
+def test_a_provider_the_daemon_does_not_serve_is_refused_by_name(flow):
+    """A daemon that quietly ignores a requested provider would report a verified
+    scan it never ran. The refusal names the provider."""
+    grant = flow["client"].post("/api/v1/authorization/grants", json={
+        "principal": "console",
+        "capabilities": ["vulnerability_analysis"],
+        "targets": [{"type": "repository", "value": flow["repository"]}],
+        "issued_by": "santiago", "justification": "verified secrets",
+        "actor": "santiago"}, headers=flow["headers"])
+    assert grant.status_code in (200, 201), grant.text
+    ticket = _mint(flow, action="secrets-verified", origin="console",
+                   actor="console").json()["ticket"]
+    public = flow["client"].get("/api/v1/scans/key", headers=flow["headers"]) \
+        .json()["data"]["public_key"]
+
+    sys.path.insert(0, str(SHAURON_ROOT))
+    from fastapi.testclient import TestClient
+    from shauron import manifest as manifest_module
+    from shauron.intake.app import create_app as create_daemon
+    from shauron.intake.store import Store
+
+    # A daemon that ships without the opt-in provider.
+    raw = json.loads(json.dumps(manifest_module.load().raw))
+    raw["tasks"]["secrets"]["opt_in_providers"] = []
+    trimmed = manifest_module.Manifest(raw=raw, path=Path("manifest.json"))
+
+    daemon = TestClient(create_daemon(
+        store=Store(":memory:"), manifest=trimmed, public_key=public))
+    refused = daemon.post("/tickets", json=ticket)
+    assert refused.status_code == 422, refused.text
+    assert "trufflehog" in refused.text
+    assert "provider" in refused.text.lower()
+
+
 def test_action_without_a_bound_repository_is_refused(flow):
     session = flow["db"]()
     try:

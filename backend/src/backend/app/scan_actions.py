@@ -36,6 +36,21 @@ ACTIONS: dict[str, dict] = {
         "isolation": "container",
         "coverage": "full",
     },
+    # The one action whose tasks leave the machine. Verifying a credential means
+    # presenting it to its issuer, so this is the platform acting alone: console
+    # only, grant required, and never part of a push.
+    "secrets-verified": {
+        "label": "Verified secrets",
+        "description": ("Credential-shaped strings confirmed live against their "
+                        "issuer. Sends the candidate credential to the provider."),
+        "target": "repository",
+        "tasks": ["secrets"],
+        "providers": {"secrets": ["trufflehog"]},
+        "deadline_s": 1800,
+        "network": True,
+        "isolation": "container",
+        "coverage": "full",
+    },
     "supply-chain": {
         "label": "Dependencies and configuration",
         "description": "SBOM, dependency advisories and misconfigurations.",
@@ -74,6 +89,7 @@ def catalog() -> list[dict]:
             "deadline_s": spec["deadline_s"],
             "network": spec["network"],
             "coverage": spec["coverage"],
+            "providers": spec.get("providers") or {},
         }
         for name, spec in ACTIONS.items()
     ]
@@ -86,15 +102,21 @@ def action(name: str) -> dict | None:
 
 def build_tasks(action_name: str) -> list[dict]:
     spec = ACTIONS[action_name]
+    extra = spec.get("providers") or {}
     tasks = []
     for task in spec["tasks"]:
         meta = TASKS[task]
-        tasks.append({
+        row = {
             "task": task,
             "contract": meta["contract"],
             "capability": meta["capability"],
             "required": True,
-        })
+        }
+        if extra.get(task):
+            # Opt-in providers ride in the ticket: the daemon runs them only when
+            # named, and refuses names it does not serve.
+            row["additional_providers"] = list(extra[task])
+        tasks.append(row)
     return tasks
 
 
