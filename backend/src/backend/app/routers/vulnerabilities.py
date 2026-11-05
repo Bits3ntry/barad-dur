@@ -185,7 +185,7 @@ def _groups(session: Session, org: models.Organization,
             bucket = buckets[key] = {
                 "key": key, "vector": vector, "signature": signature,
                 "cve_id": cve_id, "advisory": advisory, "findings": [],
-                "components": {}, "projects": {}, "titles": set(),
+                "components": {}, "projects": {}, "versions": {}, "titles": set(),
             }
         if finding.title:
             bucket["titles"].add(finding.title)
@@ -208,6 +208,11 @@ def _groups(session: Session, org: models.Organization,
             bucket["projects"][project.id] = {
                 "id": project.id, "slug": project.slug, "name": project.name,
                 "assets": len(assets_by_project[finding.project_id])}
+            version = (session.get(models.ProjectVersion, finding.last_seen_version_id)
+                       if finding.last_seen_version_id else None)
+            if version is not None:
+                bucket["versions"].setdefault(
+                    (project.slug, version.component_id, version.version), []).append(finding)
 
     rows = []
     for bucket in buckets.values():
@@ -229,6 +234,15 @@ def _groups(session: Session, org: models.Organization,
         reachable = bool(assets)
         first_seen = min((f.first_seen_at for f in findings if f.first_seen_at), default=None)
         last_seen = max((f.last_seen_at for f in findings if f.last_seen_at), default=None)
+        versions = [
+            {"project": project_slug, "component_id": component_id,
+             "version": version_label, "findings": len(version_findings),
+             "open_findings": sum(1 for f in version_findings if f.status in OPEN_STATUSES),
+             "severity": _worst_severity([f.severity for f in version_findings])}
+            for (project_slug, component_id, version_label),
+            version_findings in bucket["versions"].items()
+        ]
+        versions.sort(key=lambda row: (row["project"], row["version"]))
 
         locations = []
         for finding in sorted(findings, key=lambda f: (severity_vocab.rank(f.severity),
@@ -278,6 +292,7 @@ def _groups(session: Session, org: models.Organization,
             "components": sorted(bucket["components"].values(),
                                  key=lambda row: (row["name"] or "", row["version"] or "")),
             "projects": sorted(bucket["projects"].values(), key=lambda row: row["slug"]),
+            "versions": versions,
             "assets": {"count": len(assets),
                        "sample": [{"id": asset.id, "type": asset.type,
                                    "value": asset.value} for asset in assets[:8]],

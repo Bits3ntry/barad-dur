@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
 import { Card, Dialog, ErrorBanner, Loading, PageHeader, Stat,
-  Tabs } from './ui'
+  SeverityBadge, Tabs } from './ui'
 import ProjectsPortfolio from './ProjectsPortfolio'
 import ProjectRuntimeGraph from './ProjectRuntimeGraph'
 import ProjectVerification from './ProjectVerification'
@@ -40,6 +40,25 @@ function unit(count, singular, pluralForm) {
 
 function plural(count, singular, pluralForm) {
   return `${count} ${count === 1 ? singular : (pluralForm || `${singular}s`)}`
+}
+
+function VersionVulnerabilities({ rows }) {
+  if (!rows.length) return null
+  return (
+    <tr className="version-vulnerabilities"><td colSpan="3">
+      <div className="version-vulnerability-list">
+        <strong>{plural(rows.length, 'vulnerability')}</strong>
+        {rows.map((row) => (
+          <div className="row" key={row.id}>
+            <span className="mono">{row.cve_id || row.signature}</span>
+            <SeverityBadge severity={row.severity} />
+            <span className="muted">{row.title || 'untitled finding'}</span>
+            <span className="count">{plural(row.open_findings, 'open finding')}</span>
+          </div>
+        ))}
+      </div>
+    </td></tr>
+  )
 }
 
 function slugify(value) {
@@ -450,10 +469,14 @@ function ProjectForm({ mode, initial, groups = [], onClose, onSubmit }) {
 
 function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNavigate }) {
   const [data, setData] = useState(null)
+  const [vulnerabilities, setVulnerabilities] = useState([])
   const [tab, setTab] = useState(initialTab)
 
   // Back/forward rewrites the URL; the tab follows it.
   useEffect(() => { setTab(initialTab) }, [initialTab])
+  useEffect(() => {
+    if (initialTab === 'vulnerabilities') onTab?.('components')
+  }, [initialTab, onTab])
 
   function chooseTab(next) {
     setTab(next)
@@ -507,8 +530,13 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
 
   function load() {
     setError('')
-    return api.get(`/api/v1/projects/${encodeURIComponent(refSlug)}/inventory`)
-      .then((r) => setData(r.data))
+    return Promise.all([
+      api.get(`/api/v1/projects/${encodeURIComponent(refSlug)}/inventory`),
+      api.get(`/api/v1/vulnerabilities?project=${encodeURIComponent(refSlug)}&limit=500`),
+    ]).then(([inventory, exposure]) => {
+      setData(inventory.data)
+      setVulnerabilities(exposure.data || [])
+    })
       .catch(fail(setError))
   }
 
@@ -538,6 +566,16 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
 
   const { project, components, repositories, deployments, environments, assets,
     versions = [] } = data
+  const vulnerabilitiesByVersion = new Map()
+  for (const vulnerability of vulnerabilities) {
+    for (const placement of vulnerability.versions || []) {
+      if (placement.project !== project.slug) continue
+      const key = `${placement.component_id || '__wide'}::${placement.version}`
+      const rows = vulnerabilitiesByVersion.get(key) || []
+      rows.push(vulnerability)
+      vulnerabilitiesByVersion.set(key, rows)
+    }
+  }
   const versionsByComponent = new Map(components.map((c) => [c.id, c.versions]))
   const setupComplete = [components, versions, deployments, assets].every((rows) => rows.length > 0)
 
@@ -792,7 +830,8 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                 </thead>
                                 <tbody>
                                   {visible.map((version) => (
-                                    <tr key={version.id}>
+                                    <React.Fragment key={version.id}>
+                                    <tr>
                                       <td className="mono version-label">
                                         {version.version}
                                         {version.sbom_imports ? (
@@ -821,6 +860,9 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                         </button>
                                       </td>
                                     </tr>
+                                    <VersionVulnerabilities rows={vulnerabilitiesByVersion.get(
+                                      `${component.id}::${version.version}`) || []} />
+                                    </React.Fragment>
                                   ))}
                                 </tbody>
                               </table>
@@ -885,7 +927,8 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                         <thead><tr><th>version</th><th>runs in</th><th></th></tr></thead>
                         <tbody>
                           {versions.filter((row) => !row.component_id).map((version) => (
-                            <tr key={version.id}>
+                            <React.Fragment key={version.id}>
+                            <tr>
                               <td className="mono version-label">
                                 {version.version}
                                 {version.sbom_imports ? (
@@ -905,6 +948,9 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                               </td>
                               <td />
                             </tr>
+                            <VersionVulnerabilities rows={vulnerabilitiesByVersion.get(
+                              `__wide::${version.version}`) || []} />
+                            </React.Fragment>
                           ))}
                         </tbody>
                       </table>

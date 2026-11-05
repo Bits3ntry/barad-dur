@@ -141,6 +141,10 @@ def test_a_cve_aggregates_its_findings_and_nothing_from_the_catalog(seeded):
     assert {p["slug"] for p in row["projects"]} == {"aurea", "aurea-web"}
     assert row["assets"]["count"] == 2, "one direct + one through a typed link"
     assert row["components"][0]["name"] == "django"
+    assert row["versions"] == [{
+        "project": "aurea", "component_id": None, "version": "v3",
+        "findings": 1, "open_findings": 1, "severity": "HIGH",
+    }]
 
     assert row["enrichment"]["kev"]["listed"] is True
     assert row["enrichment"]["kev"]["source"] == "cisa.gov"
