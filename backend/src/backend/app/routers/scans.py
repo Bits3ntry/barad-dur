@@ -23,10 +23,13 @@ import urllib.request
 
 from fastapi import (APIRouter, Depends, Header, HTTPException, Query, Request,
                      status)
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.app import authorization, models, scan_actions, scan_flow, shauron_signing
+from backend.app import (authorization, models, pipeline, scan_actions, scan_flow,
+                         shauron_signing)
 from backend.app.routers import findings as findings_router
 from backend.app.auth import require_org
 from backend.app.db import get_session
@@ -147,11 +150,16 @@ def sweep(org: models.Organization = Depends(require_org),
 class ScanIn(BaseModel):
     action: str = Field(min_length=2, max_length=64)
     project: str = Field(min_length=1, max_length=255)
+    component: str | None = Field(default=None, max_length=255)
     version: str | None = Field(default=None, max_length=255)
     repository: str | None = Field(default=None, max_length=2048)
     commit: str | None = Field(default=None, max_length=64)
     branch: str | None = Field(default=None, max_length=255)
     pull_request: str | None = Field(default=None, max_length=64)
+    # Who opened the pull request. The pusher and the author differ on every
+    # fork and on every review re-run, and the console's "who" column is about
+    # the person, not the machine that pressed the button.
+    pull_request_author: str | None = Field(default=None, max_length=255)
     base_commit: str | None = Field(default=None, max_length=64)
     paths: list[str] | None = None
     targets: list[dict] | None = None
@@ -164,6 +172,38 @@ class ScanIn(BaseModel):
     actor: str = Field(default="console", min_length=2, max_length=255)
 
 
+class AttributionAssignmentIn(BaseModel):
+    component: str = Field(min_length=1, max_length=255)
+    version: str | None = Field(default=None, max_length=255)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+def _repository_slug(ref: str | None) -> str | None:
+    """`owner/name` out of whatever remote a CI produced.
+
+    The same repository has many remotes: `https://host/owner/name.git`,
+    `git@host:owner/name` or a bare `owner/name`. The platform registers ONE
+    canonical remote, so a job running against a copy — a sandbox instance, a
+    proxy, a mirror host — would be refused for a hostname it never promised.
+    Owner and name are the identity; the host is transport.
+    """
+    value = (ref or "").strip().rstrip("/")
+    if not value:
+        return None
+    if value.endswith(".git"):
+        value = value[:-4]
+    if "://" in value:
+        rest = value.split("://", 1)[1]
+        value = rest.split("/", 1)[1] if "/" in rest else ""
+    elif "@" in value.split("/", 1)[0] and ":" in value:
+        # scp-like: git@host:owner/name
+        value = value.partition(":")[2]
+    parts = [part for part in value.split("/") if part]
+    if len(parts) < 2:
+        return None
+    return "/".join(parts[-2:])
+
+
 def _resolve_repository(session: Session, org_id: str, ref: str | None,
                         project_id: str) -> models.Repository | None:
     if ref:
@@ -171,9 +211,21 @@ def _resolve_repository(session: Session, org_id: str, ref: str | None,
         if row is None:
             row = (session.query(models.Repository)
                    .filter_by(org_id=org_id, remote_url=ref).one_or_none())
+        if row is None:
+            # A different host for the same `owner/name` is the same repository
+            # (the sandbox Gitea and the real one are the same code); refusing it
+            # on the hostname alone would block every pipeline not cloning from
+            # the canonical URL. Ticket and subject still record the platform's
+            # own remote_url, so nothing downstream inherits the copy's host.
+            slug = _repository_slug(ref)
+            if slug:
+                row = (session.query(models.Repository)
+                       .filter_by(org_id=org_id)
+                       .filter(func.lower(models.Repository.name) == slug.lower())
+                       .one_or_none())
         if row is None or row.org_id != org_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
-                                "repository not found in this organization")
+                                f"repository not found in this organization: {ref}")
         return row
     link = (session.query(models.ProjectRepository)
             .filter_by(project_id=project_id)
@@ -185,7 +237,7 @@ def _resolve_repository(session: Session, org_id: str, ref: str | None,
 @router.post("/scans", status_code=status.HTTP_201_CREATED)
 def create_scan(payload: ScanIn,
                 org: models.Organization = Depends(require_org),
-                session: Session = Depends(get_session)) -> dict:
+                session: Session = Depends(get_session)):
     """Mint one flow: resolve scope, decide authorization once, sign, deliver."""
     action = scan_actions.action(payload.action)
     if action is None:
@@ -202,21 +254,23 @@ def create_scan(payload: ScanIn,
     project = by_ref(session, org.id, payload.project)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
-    version_row = pick_version(session, project.id, payload.version) \
-        if payload.version else None
-    if payload.version and version_row is None:
-        # A pipeline declares the version it just built, so it may introduce it.
-        # A human typing a label in the console may not: a typo would silently
-        # create a version that no evidence ever fills.
-        if payload.origin in {"ci", "cli"}:
-            version_row = models.ProjectVersion(
-                project_id=project.id, version=payload.version)
-            session.add(version_row)
-            session.flush()
-        else:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
-
     repository = _resolve_repository(session, org.id, payload.repository, project.id)
+    component = None
+    candidates: list[models.ApplicationComponent] = []
+    if repository is not None:
+        candidates = (session.query(models.ApplicationComponent)
+                      .join(models.ComponentRepository,
+                            models.ComponentRepository.component_id
+                            == models.ApplicationComponent.id)
+                      .filter(models.ApplicationComponent.project_id == project.id,
+                              models.ComponentRepository.repository_id == repository.id,
+                              models.ComponentRepository.removed_at.is_(None)).all())
+        if payload.component:
+            candidates = [row for row in candidates
+                          if row.id == payload.component or row.slug == payload.component
+                          or row.name == payload.component]
+        if len(candidates) == 1:
+            component = candidates[0]
     if action["target"] == "repository" and repository is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -291,17 +345,53 @@ def create_scan(payload: ScanIn,
             "decision": "allow",
         }
 
+    if action["target"] == "repository" and repository is not None and component is None:
+        intake = models.ScanAttributionIntake(
+            org_id=org.id, project_id=project.id, repository_id=repository.id,
+            reason="repository_has_no_unique_component",
+            subject=json.dumps({
+                "project": project.slug, "repository": repository.remote_url,
+                "component": payload.component, "version": payload.version,
+                "branch": payload.branch, "commit": payload.commit,
+                "base_commit": payload.base_commit, "pull_request": payload.pull_request,
+                "paths": payload.paths, "environment": payload.environment,
+            }, sort_keys=True),
+            candidate_component_ids=json.dumps([row.id for row in candidates]),
+            created_by=principal,
+        )
+        session.add(intake)
+        session.commit()
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"data": {
+            "id": intake.id, "status": "needs_attribution", "reason": intake.reason,
+            "project": project.slug, "repository": repository.remote_url,
+        }})
+
+    version_row = pick_version(session, project.id, payload.version,
+                               component.id if component else None) if payload.version else None
+    if payload.version and version_row is None:
+        if payload.origin in {"ci", "cli"}:
+            version_row = models.ProjectVersion(
+                project_id=project.id, component_id=component.id if component else None,
+                version=payload.version)
+            session.add(version_row)
+            session.flush()
+        else:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "project version not found")
+
     deadline_at = now + datetime.timedelta(seconds=int(action["deadline_s"]))
     upload_token = "ut_" + pysecrets.token_hex(16)
     job_id = models.uuid_hex()
     daemon = (payload.daemon_url or os.environ.get(DAEMON_ENV) or "").rstrip("/") \
         if payload.executor == "shauron" else ""
     subject = {
-        "project": project.slug, "version": version_row.version if version_row else None,
+        "project": project.slug, "component": component.slug if component else None,
+        "component_id": component.id if component else None,
+        "version": version_row.version if version_row else None,
         "repository": repository.remote_url if repository else None,
         "repository_name": repository.name if repository else None,
         "commit": commit or None, "branch": payload.branch,
         "pull_request": payload.pull_request, "base_commit": payload.base_commit,
+        "pull_request_author": payload.pull_request_author,
         "paths": payload.paths or [], "environment": payload.environment,
     }
 
@@ -448,6 +538,67 @@ def list_scans(status_filter: str | None = Query(default=None, alias="status"),
     return {"data": data, "counters": counters}
 
 
+@router.get("/scans/attribution-intakes")
+def list_attribution_intakes(
+        org: models.Organization = Depends(require_org),
+        session: Session = Depends(get_session)) -> dict:
+    rows = (session.query(models.ScanAttributionIntake)
+            .filter(models.ScanAttributionIntake.org_id == org.id)
+            .order_by(models.ScanAttributionIntake.created_at.desc()).all())
+    return {"data": [{
+        "id": row.id,
+        "status": row.status,
+        "reason": row.reason,
+        "subject": json.loads(row.subject),
+        "candidates": json.loads(row.candidate_component_ids),
+        "created_at": row.created_at.isoformat(),
+    } for row in rows]}
+
+
+@router.post("/scans/attribution-intakes/{intake_id}/assign")
+def assign_attribution_intake(
+        intake_id: str,
+        payload: AttributionAssignmentIn,
+        org: models.Organization = Depends(require_org),
+        session: Session = Depends(get_session)) -> dict:
+    intake = (session.query(models.ScanAttributionIntake)
+              .filter_by(id=intake_id, org_id=org.id).one_or_none())
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "attribution intake not found")
+    if intake.status != "needs_attribution":
+        raise HTTPException(status.HTTP_409_CONFLICT, "attribution intake is already assigned")
+    component = (session.query(models.ApplicationComponent)
+                 .filter(models.ApplicationComponent.project_id == intake.project_id)
+                 .filter((models.ApplicationComponent.id == payload.component)
+                         | (models.ApplicationComponent.slug == payload.component)
+                         | (models.ApplicationComponent.name == payload.component)).one_or_none())
+    if component is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "component not found in intake project")
+    if intake.repository_id and not (session.query(models.ComponentRepository)
+                                     .filter_by(component_id=component.id,
+                                                repository_id=intake.repository_id,
+                                                removed_at=None).first()):
+        session.add(models.ComponentRepository(
+            org_id=org.id, component_id=component.id, repository_id=intake.repository_id,
+            added_by="manual attribution"))
+    version_row = None
+    if payload.version:
+        version_row = pick_version(session, intake.project_id, payload.version, component.id)
+        if version_row is None:
+            version_row = models.ProjectVersion(
+                project_id=intake.project_id, component_id=component.id, version=payload.version)
+            session.add(version_row)
+    intake.status = "assigned"
+    intake.assigned_at = datetime.datetime.now(datetime.UTC)
+    intake.assigned_by = "manual attribution"
+    intake.assignment_note = payload.note
+    session.commit()
+    return {"data": {
+        "id": intake.id, "status": intake.status, "component": component.slug,
+        "version": version_row.version if version_row else None,
+    }}
+
+
 @router.get("/scans/{job_id}")
 def get_scan(job_id: str, org: models.Organization = Depends(require_org),
              session: Session = Depends(get_session)) -> dict:
@@ -497,9 +648,9 @@ def scan_state(job_id: str,
                session: Session = Depends(get_session)) -> dict:
     """Executor-scoped read: the one thing a runner may ask about its own ticket.
 
-    It exists so a CLI can notice a cancellation between tasks without holding an
-    organization credential — and it answers nothing else: no finding, no target,
-    no project data.
+    It exists so a CLI can notice a cancellation between tasks without holding
+    an organization credential — and it answers nothing else: no finding, no
+    target, no project data.
     """
     job = _job_by_ticket(session, job_id, x_ticket_token)
     return {"data": {"job_id": job.id, "status": job.status,
@@ -507,6 +658,25 @@ def scan_state(job_id: str,
                      "deadline_at": (scan_flow.aware(job.deadline_at).isoformat()
                                      if job.deadline_at else None),
                      "evidence": job.evidence_state}}
+
+
+@router.get("/scans/{job_id}/gate")
+def scan_gate(job_id: str,
+              x_ticket_token: str = Header(default="", alias=TOKEN_HEADER),
+              session: Session = Depends(get_session)) -> dict:
+    """The flow's own verdict, so a pipeline can fail its build on it.
+
+    Same decision the console renders (findings of this flow, fail-closed, HIGH
+    and above block), read with the ticket token for the same reason `state` is:
+    a runner holds no organization credential and must not need one to learn
+    whether its run passed. Without this the gate is a badge nobody blocks on.
+    """
+    job = _job_by_ticket(session, job_id, x_ticket_token)
+    found = pipeline.summaries(session, [job.id])
+    outcome = pipeline.verdict(job, found.get(job.id))
+    return {"data": {"job_id": job.id, "verdict": outcome["verdict"],
+                     "reason": outcome["reason"],
+                     "status": job.status, "evidence": job.evidence_state}}
 
 
 @router.get("/scans/{job_id}/timeline")
@@ -590,7 +760,9 @@ def _ingest_evidence(session: Session, job: models.ScanJob,
     label = subject.get("version")
     if not label:
         return {"skipped": "the flow carries no version label to attach to"}
-    pv = pick_version(session, project.id, label)
+    component_slug = subject.get("component")
+    pv = (pick_version(session, project.id, label, subject.get("component_id"))
+          or pick_version(session, project.id, label))
     if pv is None:
         return {"skipped": f"project version '{label}' does not exist"}
 
@@ -601,7 +773,12 @@ def _ingest_evidence(session: Session, job: models.ScanJob,
             result = sbom_ingest.ingest_document(
                 session, job.org_id, payload.content.encode(), source="cli",
                 filename="sbom.cyclonedx.json",
-                project_override=project.slug, version_override=label)
+                project_override=project.slug, version_override=label,
+                # The ticket already knows which component this code belongs to;
+                # without it the BOM lands on a product-wide version row and the
+                # project ends up with two 'main' BOMs — the flow's and the
+                # document's — which is how `/sbom/version` started answering 500.
+                component_override=component_slug)
         except Exception as exc:  # a bad SBOM must not swallow the flow
             return {"error": f"sbom ingest failed: {type(exc).__name__}: {exc}"}
         receipt = session.get(models.SbomImport, result["import_id"])

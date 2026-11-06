@@ -112,6 +112,56 @@ def repo_slug(remote_url: str) -> str:
     raise ScmError("remote_url_not_parseable")
 
 
+def raw_file(remote_url: str, ref: str, path: str,
+             creds: dict | None = None, timeout: float = 10.0) -> str | None:
+    """One file, as the repository has it at `ref`.
+
+    The console shows the code a scanner flagged; without this it can only show
+    the snippet the SARIF happened to carry. Public repositories need no token,
+    private ones use the saved connection. Returns None when the host says no —
+    a missing file is a fact the caller has to display, not an exception to leak.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    provider = provider_for(remote_url)
+    slug = repo_slug(remote_url)
+    if not slug:
+        return None
+    quoted_path = urllib.parse.quote(path.lstrip("/"), safe="/")
+    token, base = _tokens(provider, creds)
+    host = urllib.parse.urlparse(remote_url).netloc
+    scheme = urllib.parse.urlparse(remote_url).scheme or "https"
+    headers = {"User-Agent": "barad-dur-console"}
+    if provider == "gitlab":
+        url = (f"{(base or f'{scheme}://{host}')}/api/v4/projects/"
+               f"{urllib.parse.quote(slug, safe='')}/repository/files/"
+               f"{urllib.parse.quote(path.lstrip('/'), safe='')}/raw?ref={ref}")
+        if token:
+            headers["PRIVATE-TOKEN"] = token
+    elif provider == "github" and not base:
+        url = f"https://api.github.com/repos/{slug}/contents/{quoted_path}?ref={ref}"
+        headers["Accept"] = "application/vnd.github.raw"
+        if token:
+            headers["Authorization"] = f"token {token}"
+    else:
+        # Gitea and GitHub Enterprise share the shape: /api/v1/repos/<slug>/raw
+        url = f"{(base or f'{scheme}://{host}')}/api/v1/repos/{slug}/raw/{quoted_path}?ref={ref}"
+        if token:
+            headers["Authorization"] = f"token {token}"
+    try:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(4 * 1024 * 1024)
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
+        return None
+    try:
+        return body.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
 def post_commit_status(slug: str, sha: str, state: str, description: str,
                        context: str = "barad-dur/security",
                        target_url: str | None = None, creds: dict | None = None):
