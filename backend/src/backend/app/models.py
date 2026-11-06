@@ -1176,6 +1176,29 @@ class ScanJob(Base):
         DateTime(timezone=True), nullable=True)
 
 
+class ScanAttributionIntake(Base):
+    """Evidence we received but cannot honestly attach to a component version yet."""
+
+    __tablename__ = "scan_attribution_intakes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True)
+    repository_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("repositories.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="needs_attribution", index=True)
+    reason: Mapped[str] = mapped_column(String(128))
+    subject: Mapped[str] = mapped_column(Text, default="{}")
+    candidate_component_ids: Mapped[str] = mapped_column(Text, default="[]")
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    assigned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    assigned_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    assignment_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class JobArtifact(Base):
     __tablename__ = "job_artifacts"
 
@@ -2176,6 +2199,32 @@ class PlatformSetting(Base):
         DateTime(timezone=True), nullable=True)
     updated_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
 
+
+class InternalRun(Base, TimestampMixin):
+    """One execution of a job the platform runs itself.
+
+    `scan_jobs` is work handed to a worker; the advisory clock runs inside the
+    platform and still needs a record somebody can read afterwards: what it did,
+    how long it took, and why it failed. Without this the console could only say
+    "it ran" — and "it ran" is not evidence.
+    """
+
+    __tablename__ = "internal_runs"
+    __table_args__ = (Index("ix_internal_runs_org_name", "org_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    # What ran: `advisory-clock` today, and the key the console lists by.
+    name: Mapped[str] = mapped_column(String(64), default="advisory-clock")
+    # Why it ran: `schedule` (the clock woke up) or `manual` (somebody pressed it).
+    trigger: Mapped[str] = mapped_column(String(16), default="schedule")
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    counters: Mapped[str] = mapped_column(Text, default="{}")
+    log: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 class ComponentRepository(Base):
     """Component ↔ repository edge. A repository can back several components

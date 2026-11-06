@@ -46,6 +46,14 @@ def flow(tmp_path, monkeypatch):
     session.add(models.ProjectRepository(
         org_id=org.id, project_id=project.id, repository_id=repository.id,
         added_by="santiago"))
+    component = models.ApplicationComponent(
+        org_id=org.id, project_id=project.id, name="Aurea Server",
+        slug="aurea-server", kind="backend")
+    session.add(component)
+    session.flush()
+    session.add(models.ComponentRepository(
+        org_id=org.id, component_id=component.id, repository_id=repository.id,
+        added_by="santiago"))
     session.commit()
 
     from fastapi.testclient import TestClient
@@ -57,6 +65,7 @@ def flow(tmp_path, monkeypatch):
         "org_id": org.id,
         "project": project.slug,
         "repository": repository.remote_url,
+        "component": component.slug,
         "db": lambda: session_factory()(),
     }
     return ctx
@@ -91,6 +100,126 @@ def test_mint_returns_a_ticket_that_shauron_accepts(flow):
     assert verify(ticket, public["data"]["public_key"]) == (True, "ok")
     assert ticket["authorization"]["decision"] == "push"
     assert ticket["tasks"][0]["capability"] == "vulnerability_analysis"
+
+
+def test_ci_version_is_scoped_to_the_repository_component(flow):
+    response = _mint(flow, repository=flow["repository"], version="4.0.0")
+    assert response.status_code == 201, response.text
+    subject = response.json()["data"]["subject"]
+    assert subject["component"] == "aurea-server"
+
+    session = flow["db"]()
+    try:
+        version = session.query(models.ProjectVersion).filter_by(version="4.0.0").one()
+        assert version.component_id is not None
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("remote", [
+    "https://gitea.example/bitsentry/aurea-server.git",
+    "https://gitea.example/bitsentry/aurea-server",
+    "git@gitea.example:bitsentry/aurea-server.git",
+    "ssh://git@gitea.example:2222/bitsentry/aurea-server.git",
+    "http://localhost:3001/bitsentry/aurea-server.git",
+    "bitsentry/aurea-server",
+])
+def test_the_slug_survives_every_remote_shape(remote):
+    assert scans_router._repository_slug(remote) == "bitsentry/aurea-server"
+
+
+def test_a_mirror_host_resolves_to_the_registered_repository(flow):
+    """A job cloning from a copy (sandbox instance, proxy) is the same code.
+
+    The platform registers one canonical remote; refusing the run on the hostname
+    alone blocks every pipeline that does not clone from it, which is what a
+    self-hosted sandbox always does.
+    """
+    session = flow["db"]()
+    try:
+        repo = session.query(models.Repository).one()
+        repo.name = "bitsentry/aurea"
+        session.commit()
+    finally:
+        session.close()
+
+    response = _mint(flow, repository="http://localhost:3001/bitsentry/aurea.git")
+    assert response.status_code == 201, response.text
+    # The ticket carries the platform's own remote, never the copy's host.
+    assert response.json()["ticket"]["target"]["repository"]["remote_url"] == \
+        flow["repository"]
+
+
+def test_an_unknown_repository_is_refused_and_named(flow):
+    response = _mint(flow, repository="http://localhost:3001/nobody/nothing.git")
+    assert response.status_code == 404
+    # The refused value is in the message: "not found" alone sends the reader
+    # hunting through variables instead of at the URL that was wrong.
+    assert "nobody/nothing" in response.json()["detail"]
+
+
+def test_unmapped_ci_repository_waits_for_manual_attribution(flow):
+    session = flow["db"]()
+    try:
+        repo = models.Repository(org_id=flow["org_id"], provider="git", name="orphan",
+                                 remote_url="https://github.com/bitsentry/orphan")
+        session.add(repo)
+        session.flush()
+        project = session.query(models.Project).filter_by(slug=flow["project"]).one()
+        session.add(models.ProjectRepository(
+            org_id=flow["org_id"], project_id=project.id, repository_id=repo.id,
+            added_by="santiago"))
+        session.commit()
+    finally:
+        session.close()
+
+    response = _mint(flow, repository="https://github.com/bitsentry/orphan", version="4.0.0")
+    assert response.status_code == 202, response.text
+    assert response.json()["data"]["status"] == "needs_attribution"
+
+    session = flow["db"]()
+    try:
+        assert session.query(models.ScanAttributionIntake).count() == 1
+        assert session.query(models.ScanJob).count() == 0
+        assert session.query(models.ProjectVersion).count() == 0
+    finally:
+        session.close()
+
+
+def test_operator_can_assign_a_pending_scan_to_a_component_version(flow):
+    session = flow["db"]()
+    try:
+        repo = models.Repository(org_id=flow["org_id"], provider="git", name="orphan",
+                                 remote_url="https://github.com/bitsentry/orphan")
+        component = models.ApplicationComponent(
+            org_id=flow["org_id"], project_id=session.query(models.Project)
+            .filter_by(slug=flow["project"]).one().id, name="Orphan service",
+            slug="orphan-service", kind="service")
+        session.add_all([repo, component])
+        session.flush()
+        project = session.query(models.Project).filter_by(slug=flow["project"]).one()
+        session.add(models.ProjectRepository(
+            org_id=flow["org_id"], project_id=project.id, repository_id=repo.id,
+            added_by="santiago"))
+        session.commit()
+    finally:
+        session.close()
+
+    pending = _mint(flow, repository="https://github.com/bitsentry/orphan", version="4.0.0")
+    intake_id = pending.json()["data"]["id"]
+    response = flow["client"].post(
+        f"/api/v1/scans/attribution-intakes/{intake_id}/assign",
+        json={"component": "orphan-service", "version": "4.0.0", "note": "Verified by owner"},
+        headers=flow["headers"])
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["status"] == "assigned"
+    assert response.json()["data"]["version"] == "4.0.0"
+
+    session = flow["db"]()
+    try:
+        assert session.query(models.ProjectVersion).filter_by(version="4.0.0").one().component_id == component.id
+    finally:
+        session.close()
 
 
 def test_shauron_intake_accepts_the_minted_ticket(flow):
@@ -189,7 +318,10 @@ def test_a_pipeline_may_build_a_sbom(flow):
     response = _mint(flow, action="supply-chain")
     assert response.status_code == 201, response.text
     ticket = response.json()["ticket"]
-    assert [t["task"] for t in ticket["tasks"]] == ["sbom", "misconfig", "secrets"]
+    # `runtime` rides with the BOM: the interpreter is not in any lockfile, and
+    # asking for it separately would mean a second scan of the same checkout.
+    assert [t["task"] for t in ticket["tasks"]] == ["sbom", "runtime", "misconfig",
+                                                    "secrets"]
     assert ticket["execution"]["network"] is False
 
 

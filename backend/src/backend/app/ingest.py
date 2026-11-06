@@ -5,10 +5,18 @@ Identity: a component is keyed by `purl` when present, otherwise by its
 metadata component) and `parent_purl` (the purl of the parent bom-ref). Trivy
 manifest provenance is picked up from any property whose name contains
 `SrcFile`.
+
+Manifest pseudo-components are containers, not packages. Trivy describes the
+file it scanned ("requirements.txt", type application) as a component with no
+purl and no version, and hangs the real packages off it. Treating that node as
+the parent's purl key made the whole edge disappear: 122 packages ended up with
+no parent and not marked direct either, which is why the graph view had nothing
+to draw.
 """
 import hashlib
 import json
 import re
+from urllib.parse import unquote
 
 from backend.app import incidents, lifecycle, models, severity as severity_mod, vulns
 
@@ -18,6 +26,28 @@ class SbomDocumentError(ValueError):
 
 
 REQUIRED_KEYS = {"name"}
+
+
+def purl_name(purl: str | None) -> str | None:
+    """The package name as its purl states it, namespace included.
+
+    Trivy splits a scoped npm package into `name: "node"` plus `group: "@types"`,
+    so storing `name` verbatim left three different packages called "node" in
+    the same table — and made the parent column read "vite via vite". The purl
+    is the identity of record here, so the display name comes from it:
+    `pkg:npm/%40types/node@24.0.14` → `@types/node`.
+    """
+    if not purl or not purl.startswith("pkg:"):
+        return None
+    body = purl[4:].split("?", 1)[0]
+    if "/" not in body:
+        return None
+    path = body.split("/", 1)[1]
+    # A version separator is the last "@"; scopes are percent-encoded in a purl,
+    # so a literal "@" before it would be malformed input.
+    name = path.rsplit("@", 1)[0] if "@" in path else path
+    name = unquote(name).strip()
+    return name or None
 
 
 def identity_key(purl: str | None, name: str | None, version: str | None) -> str:
@@ -77,6 +107,48 @@ def _license_of(component: dict) -> str | None:
     return licenses[0] if licenses else None
 
 
+def _is_container(entry: dict) -> bool:
+    """True for the scanned file itself, which CycloneDX models as a component.
+
+    Trivy emits "requirements.txt" with `type: application`, no purl and no
+    version. Such an entry documents where its children came from; it is not
+    shippable software and must not be counted as a dependency.
+
+    `type` decides, not the missing version: a library with an unknown version
+    (SPDX `NOASSERTION`, an unpinned package) is still a package.
+    """
+    if entry.get("purl"):
+        return False
+    version = entry.get("version")
+    if isinstance(version, str) and version.strip() and version.strip().upper() != "NOASSERTION":
+        return False
+    return str(entry.get("type") or "").strip().lower() in {"application", "file"}
+
+
+def _graph_edges(document: dict) -> dict[str, list[str]]:
+    """child bom-ref → its parent bom-refs, from the CycloneDX `dependencies`.
+
+    A package can be named by two edges at once (a root child that is also pulled
+    in transitively); keeping every parent is what lets the reader answer both
+    "is it direct" and "who is its tree parent".
+    """
+    parents: dict[str, list[str]] = {}
+    for edge in document.get("dependencies") or []:
+        if not isinstance(edge, dict):
+            continue
+        parent_ref = edge.get("ref")
+        children = edge.get("dependsOn")
+        if not isinstance(parent_ref, str) or not isinstance(children, list):
+            continue
+        for child in children:
+            if not isinstance(child, str) or child == parent_ref:
+                continue
+            seen = parents.setdefault(child, [])
+            if parent_ref not in seen:
+                seen.append(parent_ref)
+    return parents
+
+
 def parse(document: dict) -> dict:
     """Validate and normalize; raises SbomDocumentError on unusable input."""
     if not isinstance(document, dict):
@@ -98,24 +170,48 @@ def parse(document: dict) -> dict:
     if not isinstance(components, list):
         raise SbomDocumentError("components must be a list")
 
-    root_ref = root.get("bom-ref")
-    if not isinstance(root_ref, str) or not root_ref:
-        root_ref = None
+    parents_by_ref = _graph_edges(document)
+    by_ref = {entry["bom-ref"]: entry for entry in components
+              if isinstance(entry, dict) and isinstance(entry.get("bom-ref"), str)
+              and entry["bom-ref"]}
 
-    parent_by_ref: dict[str, str] = {}
-    root_children: set[str] = set()
-    for edge in document.get("dependencies") or []:
-        if isinstance(edge, dict) and isinstance(edge.get("ref"), str) \
-                and isinstance(edge.get("dependsOn"), list):
-            is_root = root_ref is not None and edge["ref"] == root_ref
-            for child in edge["dependsOn"]:
-                if isinstance(child, str):
-                    if is_root:
-                        root_children.add(child)
-                    else:
-                        parent_by_ref[child] = edge["ref"]
+    def resolve(ref: str | None) -> tuple[bool, str | None, str | None]:
+        """(is_direct, parent_purl, manifest) for one component bom-ref.
 
-    purl_by_ref: dict[str, str] = {}
+        The nearest *package* above decides both answers: hanging off a manifest
+        container (or off the application itself) is direct and takes the
+        manifest's name as provenance; hanging off another package is transitive
+        and carries that purl as its tree parent.
+        """
+        if not ref:
+            # No bom-ref means the document never placed it in the tree.
+            return False, None, None
+        manifest = None
+        package_parent = None
+        # A component the document gives no edge at all is not a declared direct
+        # dependency: silence is not a claim.
+        direct = False
+        for parent in parents_by_ref.get(ref) or []:
+            hit_package = False
+            cur, seen = parent, {ref}
+            while cur and cur not in seen:
+                seen.add(cur)
+                entry = by_ref.get(cur)
+                if entry is None or _is_container(entry):
+                    if manifest is None and entry is not None and isinstance(entry.get("name"), str):
+                        manifest = entry["name"]
+                    reached = parents_by_ref.get(cur) or []
+                    cur = reached[0] if reached else None
+                    continue
+                hit_package = True
+                purl = entry.get("purl")
+                if package_parent is None and isinstance(purl, str) and purl:
+                    package_parent = purl
+                break
+            if not hit_package:
+                direct = True
+        return direct, package_parent, manifest
+
     rows = []
     for entry in components:
         if not isinstance(entry, dict):
@@ -123,15 +219,12 @@ def parse(document: dict) -> dict:
         name = entry.get("name")
         if not REQUIRED_KEYS <= {"name"} or not isinstance(name, str) or not name:
             raise SbomDocumentError("every component needs a name")
+        if _is_container(entry):
+            continue
         bom_ref = entry.get("bom-ref")
         purl = entry.get("purl") if isinstance(entry.get("purl"), str) and entry["purl"] else None
-        if isinstance(bom_ref, str) and bom_ref and purl:
-            purl_by_ref[bom_ref] = purl
-        parent_ref = parent_by_ref.get(bom_ref) if isinstance(bom_ref, str) and bom_ref else None
-        is_direct = bool(bom_ref and bom_ref in root_children)
-        parent_purl = None
-        if parent_ref and parent_ref != root_ref:
-            parent_purl = purl_by_ref.get(parent_ref)
+        is_direct, parent_purl, manifest = resolve(
+            bom_ref if isinstance(bom_ref, str) and bom_ref else None)
         # A root child that is ALSO a nested child (diamond) keeps its nested
         # parent for the tree view while staying direct in the list view.
         rows.append({
@@ -139,11 +232,13 @@ def parse(document: dict) -> dict:
                 purl, name, entry.get("version") if isinstance(entry.get("version"), str) else None),
             "purl": purl,
             "bom_ref": bom_ref if isinstance(bom_ref, str) and bom_ref else None,
-            "name": name,
+            # The purl wins when it names a namespace: `node` alone is not an
+            # identity, `@types/node` is.
+            "name": purl_name(purl) or name,
             "version": entry.get("version") if isinstance(entry.get("version"), str) else None,
             "license": _license_of(entry),
             "licenses": _licenses_of(entry),
-            "manifest_path": _property_strings(entry),
+            "manifest_path": _property_strings(entry) or manifest,
             "is_direct": is_direct,
             "parent_purl": parent_purl,
         })
@@ -153,6 +248,10 @@ def parse(document: dict) -> dict:
         "project_name": root["name"],
         "project_version": version if isinstance(version, str) and version else None,
         "components": rows,
+        # Named here so the writer can retire the links an older parser created
+        # for them: those rows are files masquerading as packages.
+        "containers": [entry.get("name") for entry in components
+                       if isinstance(entry, dict) and _is_container(entry)],
         "vulnerabilities": parse_vulnerabilities(document, rows),
     }
 
@@ -320,6 +419,21 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
     linked: dict[str, models.VersionComponent] = {}
     by_identity: dict[str, models.Component] = {}
     seen_licenses: set[tuple[str, str]] = set()
+    # A document that names its own manifests also tells us which links an older
+    # parser created for those files: drop them for this version so the
+    # inventory stops counting "requirements.txt" as software.
+    for container_name in parsed.get("containers") or []:
+        if not container_name:
+            continue
+        stale = (session.query(models.VersionComponent)
+                 .join(models.Component, models.Component.id == models.VersionComponent.component_id)
+                 .filter(models.VersionComponent.project_version_id == project_version.id,
+                         models.Component.org_id == org_id,
+                         models.Component.name == container_name,
+                         models.Component.purl.is_(None),
+                         models.Component.version.is_(None)).all())
+        for link in stale:
+            session.delete(link)
     for row in parsed["components"]:
         component = session.query(models.Component).filter_by(
             org_id=org_id, identity_key=row["identity_key"]).one_or_none()
@@ -331,9 +445,14 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
             session.flush()  # assign the id before links reference it
             counters["components_created"] += 1
         else:
-            changed = (component.version, component.license, component.manifest_path) != (
-                row["version"], row["license"], row["manifest_path"])
+            # The name is part of the repair: a document that finally carries the
+            # namespace must be able to rename an old bare "node" row, the same
+            # way a better graph repairs `parent_purl`.
+            changed = (component.name, component.version, component.license,
+                       component.manifest_path) != (
+                row["name"], row["version"], row["license"], row["manifest_path"])
             if changed:
+                component.name = row["name"]
                 component.version = row["version"]
                 component.license = row["license"]
                 component.manifest_path = row["manifest_path"]
@@ -365,9 +484,16 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
                 manifest_path=row["manifest_path"])
             session.add(link)
             counters["links_created"] += 1
-        elif row["is_direct"] and not link.is_direct:
+        else:
             # The same component seen both directly and transitively is direct.
-            link.is_direct = True
+            if row["is_direct"]:
+                link.is_direct = True
+            # A re-ingested document that finally carries a graph has to repair
+            # the link: storing the tree write-once left every version flat
+            # forever, no matter how good the next BOM was.
+            if (link.parent_purl, link.manifest_path) != (row["parent_purl"], row["manifest_path"]):
+                link.parent_purl = row["parent_purl"]
+                link.manifest_path = row["manifest_path"]
         linked[component.id] = link
         by_identity[row["identity_key"]] = component
 
@@ -454,6 +580,13 @@ def _ingest_vulnerabilities(session, org_id: str, project: models.Project,
                 org_id, project.id, identity, advisory.source_id)
             finding = (session.query(models.Finding)
                        .filter_by(org_id=org_id, fingerprint=fingerprint).one_or_none())
+            if finding is None:
+                # The clock may have already reported this CVE under a GHSA id.
+                # One advisory, one finding: the artifact then refreshes that
+                # row (and re-points it at its own advisory, which carries the
+                # fixed version) instead of adding a twin.
+                finding = vulns.finding_for_cve(session, org_id, project.id,
+                                                component.id, advisory.cve_id)
             if finding is None:
                 finding = models.Finding(
                     org_id=org_id, project_id=project.id, kind="vulnerability",

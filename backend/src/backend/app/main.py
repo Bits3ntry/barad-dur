@@ -8,7 +8,7 @@ from backend.app.db import get_session, run_migrations
 from backend.app import models
 from backend.app.routers import authorization as authorization_router
 
-from backend.app.routers import accounts, analysis, artifacts, attack_surface, ci, code_baselines, code_review, ctem, cycles, dashboard, deployment, easm, easm_trivy, exposures, findings, gates as gates_router, identity, impact, intelligence, inventory, inventory_groups, jira, lifecycle, licenses as licenses_router, mfa as mfa_router, notifications, onboarding, orchestration, organization, pentest, projects as projects_router, regression, relationships, sarif, scans as scans_router, schedules, scope, sbom, spdx, vulnerabilities, work
+from backend.app.routers import accounts, advisories, analysis, artifacts, attack_surface, ci, code_baselines, code_review, ctem, cycles, dashboard, deployment, easm, easm_trivy, exposures, findings, gates as gates_router, identity, impact, intelligence, inventory, inventory_groups, jira, lifecycle, licenses as licenses_router, mfa as mfa_router, notifications, onboarding, orchestration, organization, pentest, pipeline, projects as projects_router, regression, relationships, sarif, scans as scans_router, schedules, scope, sbom, spdx, vulnerabilities, work
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 def create_app() -> FastAPI:
     app = FastAPI(title="Barad-dûr platform", version="0.1.0")
     app.include_router(sbom.router)
+    app.include_router(advisories.router)
     app.include_router(inventory.router)
     app.include_router(inventory_groups.router)
     app.include_router(vulnerabilities.router)
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(work.router)
     app.include_router(findings.router)
     app.include_router(ci.router)
+    app.include_router(pipeline.router)
     app.include_router(scope.router)
     app.include_router(lifecycle.router)
     app.include_router(identity.router)
@@ -88,6 +90,24 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+# The advisory clock runs inside this process when the deployment asks for it
+# (`ADVISORIES_AUTORUN=1`, set in compose). One process, no API key to mint for
+# itself, and the due-gate in the settings row decides when it actually sweeps.
+def _start_clock() -> None:
+    from backend.app import advisories as advisories_clock
+    from backend.app.db import session_factory
+
+    advisories_clock.start_worker(
+        # `session_factory()` returns a sessionmaker; the clock needs a session.
+        lambda: session_factory()(),
+        log=lambda counters: print(f"advisories clock: {counters.get('status')} "
+                                   f"versions={counters.get('versions_analyzed')} "
+                                   f"created={counters.get('findings_created')}", flush=True))
+
+
+_start_clock()
 
 
 def initialize() -> None:
