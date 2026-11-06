@@ -12,6 +12,10 @@ from __future__ import annotations
 # for an existing task changes nothing downstream.
 TASKS: dict[str, dict] = {
     "sbom": {"capability": "vulnerability_analysis", "contract": "cyclonedx-1.6"},
+    # The runtime inventory (node/python/go/…) is a bill of materials too: it
+    # answers "what is this build running on", which no lockfile says. Same
+    # contract, same ingestion, separate artifact.
+    "runtime": {"capability": "vulnerability_analysis", "contract": "cyclonedx-1.6"},
     "misconfig": {"capability": "vulnerability_analysis", "contract": "sarif-2.1.0"},
     "secrets": {"capability": "vulnerability_analysis", "contract": "sarif-2.1.0"},
     "sast": {"capability": "vulnerability_analysis", "contract": "sarif-2.1.0"},
@@ -53,9 +57,9 @@ ACTIONS: dict[str, dict] = {
     },
     "supply-chain": {
         "label": "Dependencies and configuration",
-        "description": "SBOM, dependency advisories and misconfigurations.",
+        "description": "SBOM, runtime versions, dependency advisories and misconfigurations.",
         "target": "repository",
-        "tasks": ["sbom", "misconfig", "secrets"],
+        "tasks": ["sbom", "runtime", "misconfig", "secrets"],
         "deadline_s": 1200,
         # `network` is about the SCAN reaching a target, not about the machine
         # fetching a signature database: sbom/misconfig/secrets only read the
@@ -126,6 +130,21 @@ def build_tasks(action_name: str) -> list[dict]:
 
 def capabilities_of(tasks: list[dict]) -> list[str]:
     return sorted({t["capability"] for t in tasks})
+
+
+def action_for_tasks(task_names) -> str | None:
+    """The closed-catalog action a ticket's task set came from.
+
+    A ticket names tasks, not the action a human picked, so the console reads the
+    action back from the set it produced: {sast, secrets} is `code`. An exact
+    match only — a flow whose tasks were extended by a provider is not relabelled
+    as the action it resembles.
+    """
+    wanted = {name for name in task_names if name}
+    for name, spec in ACTIONS.items():
+        if set(spec["tasks"]) == wanted:
+            return name
+    return None
 
 
 def push_allowed(tasks: list[dict], network: bool = False) -> tuple[bool, str]:
