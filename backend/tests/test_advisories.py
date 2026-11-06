@@ -493,6 +493,75 @@ def test_the_bell_rings_without_any_channel(env, monkeypatch):
     assert rows[0].count == 2, "el segundo lote suma al aviso del día"
 
 
+def test_a_run_leaves_a_record_with_its_log(env):
+    """\"You can see the logs\" is a promise about this row."""
+    session, org = env["session"], env["org"]
+    _version(session, org)
+    advisories.run(session, org.id, force=True, trigger="manual", actor="santiago",
+                   kev_fetch=lambda: [], epss_fetch=lambda cve_ids: [],
+                   analyze=lambda *args, **kwargs: {
+                       "components_queried": 3, "findings_created": 2,
+                       "findings_refreshed": 1, "advisories_found": 3,
+                       "components_skipped_unmapped": 0, "truncated": False,
+                       "created_ids": []})
+    session.commit()
+    run = session.query(models.InternalRun).one()
+    assert run.name == "advisory-clock" and run.trigger == "manual"
+    assert run.status == "ok" and run.actor == "santiago"
+    assert run.finished_at is not None and run.duration_ms is not None
+    assert "osv: 3 packages" in run.log and "2 new" in run.log
+    assert json.loads(run.counters)["findings_created"] == 2
+
+
+def test_a_not_due_tick_does_not_pollute_the_history(env):
+    """The worker looks every few minutes; only real sweeps are runs."""
+    session, org = env["session"], env["org"]
+    _version(session, org)
+    advisories.run(session, org.id, analyze=Fake(), kev_fetch=lambda: [],
+                   epss_fetch=lambda cve_ids: [])
+    session.commit()
+    assert session.query(models.InternalRun).count() == 1
+    again = advisories.run(session, org.id, analyze=Fake(), kev_fetch=lambda: [],
+                           epss_fetch=lambda cve_ids: [])
+    session.commit()
+    assert again["status"] == "not_due"
+    assert session.query(models.InternalRun).count() == 1, "un tick que no hace nada no es historia"
+
+
+def test_the_orchestration_surface_lists_the_job_and_can_force_it(env):
+    from fastapi.testclient import TestClient
+
+    client = TestClient(env["app"])
+    headers = {"X-API-Key": env["key"]}
+    listed = client.get("/api/v1/orchestration/internal", headers=headers)
+    assert listed.status_code == 200, listed.text
+    job = listed.json()["data"][0]
+    assert job["label"] == "internal-scan"
+    assert job["schedule"]["interval_hours"] == 24
+    assert job["last_run"] is None, "todavía no corrió"
+
+    forced = client.post("/api/v1/orchestration/internal/advisory-clock/run",
+                         headers=headers, json={"actor": "santiago"})
+    assert forced.status_code == 200, forced.text
+    data = forced.json()["data"]
+    assert data["run"]["trigger"] == "manual"
+    assert "osv:" in data["run"]["log"], "el log viaja con la respuesta"
+
+    after = client.get("/api/v1/orchestration/internal", headers=headers).json()["data"][0]
+    assert after["last_run"]["trigger"] == "manual"
+    assert after["schedule"]["next_due_at"] is not None
+    assert len(after["runs"]) == 1
+
+    log = client.get(f"/api/v1/orchestration/internal/runs/{after['last_run']['id']}",
+                     headers=headers)
+    assert log.status_code == 200
+    assert "status: ok" in log.json()["data"]["log"]
+
+    unknown = client.post("/api/v1/orchestration/internal/nope/run", headers=headers,
+                          json={"actor": "santiago"})
+    assert unknown.status_code == 404
+
+
 def test_a_channel_that_did_not_subscribe_is_not_used(env, monkeypatch):
     from backend.app.routers import notifications
 

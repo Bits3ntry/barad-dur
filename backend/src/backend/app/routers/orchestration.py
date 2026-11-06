@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.versions import pick_version
-from backend.app import auth, authorization, models
+from backend.app import advisories, auth, authorization, models, scan_flow
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
@@ -48,8 +48,13 @@ def _assert_worker_identity(session, worker_token: str, worker_id: str) -> None:
 
 
 def _job_data(row: models.ScanJob) -> dict:
+    subject = json.loads(row.subject or "{}")
     return {"id": row.id, "scanner": row.scanner, "capability": row.capability,
             "principal": row.principal, "environment": row.environment,
+            # Who asked and where it pointed: the two columns an operator reads
+            # before deciding to cancel or retry a run.
+            "origin": row.origin, "actor": row.created_by or row.principal,
+            "subject": subject, "coverage": scan_flow.coverage(row),
             "targets": json.loads(row.targets or "[]"),
             "profile": json.loads(row.profile or "{}"),
             "status": row.status, "priority": row.priority,
@@ -256,7 +261,11 @@ def create_job(payload: JobIn = None,
 def list_jobs(status_filter: str | None = None,
               org: models.Organization = Depends(auth.require_org),
               session: Session = Depends(get_session)):
-    query = session.query(models.ScanJob).filter_by(org_id=org.id)
+    # A CI Action is a pipeline row and is read on its own screen; this list is
+    # the scanner fleet — what a person started from the CLI or the console.
+    query = (session.query(models.ScanJob)
+             .filter(models.ScanJob.org_id == org.id,
+                     models.ScanJob.origin != "ci"))
     if status_filter:
         query = query.filter_by(status=status_filter)
     rows = (query.order_by(models.ScanJob.priority, models.ScanJob.created_at)
@@ -567,3 +576,102 @@ def revoke_worker_token(token_id: str, payload: TokenRevokeIn = None,
                "worker", row.worker_id, (payload.reason or "")[:200])
     session.commit()
     return {"data": _token_data(row)}
+
+
+# ── internal scans: jobs the platform runs itself ────────────────────────────
+# `scan_jobs` is work handed to a worker. The advisory clock runs inside the
+# platform, and still needs the same three answers the console asks of a scan:
+# what ran, when it runs next, and what it did the last time.
+
+INTERNAL_SCANS = {
+    "advisory-clock": {
+        "label": "internal-scan",
+        "title": "Advisory clock",
+        "description": ("Re-asks OSV about every package and NVD about every runtime in the "
+                        "current builds, refreshes KEV/EPSS, and announces what is new."),
+    },
+}
+
+
+class RunNowIn(BaseModel):
+    actor: str = Field(default="console", min_length=2, max_length=255)
+
+
+def _iso(value) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _internal_run_data(row: models.InternalRun, *, with_log: bool = False) -> dict:
+    data = {"id": row.id, "name": row.name, "trigger": row.trigger, "status": row.status,
+            "started_at": _iso(row.started_at), "finished_at": _iso(row.finished_at),
+            "duration_ms": row.duration_ms, "actor": row.actor,
+            "counters": json.loads(row.counters or "{}")}
+    if with_log:
+        data["log"] = row.log or ""
+    return data
+
+
+@router.get("/internal")
+def list_internal_scans(org: models.Organization = Depends(auth.require_org),
+                        session: Session = Depends(get_session)):
+    """The internal jobs, their schedule, their last run and their history."""
+    config = advisories.load(session)
+    next_due = None
+    if config.get("last_tick_at"):
+        try:
+            last = datetime.datetime.fromisoformat(config["last_tick_at"])
+            last = _aware(last)
+            next_due = (last + datetime.timedelta(hours=config["interval_hours"])).isoformat()
+        except (TypeError, ValueError):
+            next_due = None
+    rows = (session.query(models.InternalRun)
+            .filter_by(org_id=org.id, name="advisory-clock")
+            .order_by(models.InternalRun.started_at.desc()).limit(20).all())
+    return {"data": [{
+        **INTERNAL_SCANS["advisory-clock"],
+        "name": "advisory-clock",
+        "enabled": config["enabled"],
+        "autorun": config["autorun"],
+        "sources": {key: config[key] for key in ("osv", "cpe", "kev", "epss")},
+        "schedule": {"interval_hours": config["interval_hours"],
+                     "last_run_at": config.get("last_tick_at"), "next_due_at": next_due,
+                     "max_versions": config["max_versions"]},
+        "last_run": _internal_run_data(rows[0]) if rows else None,
+        "runs": [_internal_run_data(row) for row in rows],
+    }]}
+
+
+@router.post("/internal/{name}/run")
+def run_internal_scan(name: str, payload: RunNowIn = None,
+                      org: models.Organization = Depends(auth.require_admin),
+                      session: Session = Depends(get_session)):
+    """Run an internal job now, whatever the interval says.
+
+    The sweep reaches OSV and NVD, so it is an admin action; the run is recorded
+    with `trigger=manual` so the history never confuses a push with the clock.
+    """
+    if name not in INTERNAL_SCANS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"unknown internal scan; try {sorted(INTERNAL_SCANS)}")
+    payload = payload or RunNowIn()
+    counters = advisories.run(session, org.id, force=True, trigger="manual",
+                              actor=payload.actor)
+    session.commit()
+    row = (session.query(models.InternalRun)
+           .filter_by(org_id=org.id, name=name)
+           .order_by(models.InternalRun.started_at.desc()).first())
+    _audit_log(session, org.id, payload.actor, "orchestration.internal.run", "internal_run",
+               row.id if row else None, f"{name}: {counters.get('status')}")
+    session.commit()
+    return {"data": {"counters": counters,
+                     "run": _internal_run_data(row, with_log=True) if row else None}}
+
+
+@router.get("/internal/runs/{run_id}")
+def internal_run(run_id: str, org: models.Organization = Depends(auth.require_org),
+                 session: Session = Depends(get_session)):
+    """One run, log included: what it touched and what it could not reach."""
+    row = session.get(models.InternalRun, run_id)
+    if row is None or row.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    return {"data": _internal_run_data(row, with_log=True)}

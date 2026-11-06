@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { PageHeader } from './ui'
+import { Dialog, PageHeader, Pager, usePage } from './ui'
 
 const CAPS = ['passive_discovery', 'active_verification', 'vulnerability_analysis', 'intrusive_testing']
 
@@ -17,6 +17,15 @@ export default function Orchestration() {
   const [assets, setAssets] = useState([])
   const [schedule, setSchedule] = useState({ name: '', kind: 'scan', scanner: '', asset_id: '', principal: 'ci', target: '', interval_minutes: 1440 })
   const [tickInfo, setTickInfo] = useState('')
+  const [internal, setInternal] = useState([])
+  const [internalNote, setInternalNote] = useState('')
+  const [internalBusy, setInternalBusy] = useState('')
+  const [logRow, setLogRow] = useState(null)
+
+  // Runs and schedules accumulate for the life of the platform; scanners and
+  // workers are registration lists short enough to read whole.
+  const pagedJobs = usePage(jobs, 25)
+  const pagedSchedules = usePage(schedules, 25)
 
   useEffect(() => { load() }, [])
 
@@ -28,9 +37,10 @@ export default function Orchestration() {
       api.get('/api/v1/orchestration/jobs'),
       api.get('/api/v1/orchestration/schedules'),
       api.get('/api/v1/assets'),
-    ]).then(([s, w, j, sc, a]) => {
+      api.get('/api/v1/orchestration/internal'),
+    ]).then(([s, w, j, sc, a, internalScans]) => {
       setScanners(s.data); setWorkers(w.data); setJobs(j.data)
-      setSchedules(sc.data); setAssets(a.data)
+      setSchedules(sc.data); setAssets(a.data); setInternal(internalScans.data)
     }).catch((e) => setError(String(e.message || e)))
   }
 
@@ -97,6 +107,33 @@ export default function Orchestration() {
     } catch (e) { setError(String(e.message || e)) }
   }
 
+  async function runInternal(row) {
+    setInternalNote('')
+    setInternalBusy(row.name)
+    try {
+      const r = await api.post(`/api/v1/orchestration/internal/${row.name}/run`,
+        { actor: 'console' })
+      const counters = r.data.counters || {}
+      setInternalNote(`${row.name}: ${counters.status} · ${counters.versions_analyzed || 0} builds · `
+        + `${counters.findings_created || 0} new · ${counters.findings_refreshed || 0} refreshed`)
+      if (r.data.run) setLogRow(r.data.run)
+      load()
+    } catch (e) {
+      setInternalNote(`${row.name}: ${String(e.message || e)}`)
+    } finally {
+      setInternalBusy('')
+    }
+  }
+
+  async function openLog(run) {
+    try {
+      const r = await api.get(`/api/v1/orchestration/internal/runs/${run.id}`)
+      setLogRow(r.data)
+    } catch (e) {
+      setInternalNote(String(e.message || e))
+    }
+  }
+
   async function tickNow() {
     try {
       const r = await api.post('/api/v1/orchestration/schedules/tick', { actor: 'console' })
@@ -117,21 +154,100 @@ export default function Orchestration() {
     } catch (e) { setError(String(e.message || e)) }
   }
 
+  const logDialog = (
+    <Dialog open={Boolean(logRow)} size="wide" hideFooter
+      title={logRow ? `${logRow.name || 'internal-scan'} · ${new Date(logRow.started_at).toLocaleString()} · ${logRow.status}` : ''}
+      onClose={() => setLogRow(null)}>
+      {logRow && (
+        <div className="stack">
+          <p className="muted" style={{ margin: 0 }}>
+            trigger {logRow.trigger}{logRow.actor ? ` · by ${logRow.actor}` : ''} ·{' '}
+            {logRow.duration_ms != null ? `${(logRow.duration_ms / 1000).toFixed(1)}s` : '—'}
+          </p>
+          <pre className="code mono" style={{ margin: 0 }}>{logRow.log || 'no log recorded'}</pre>
+        </div>
+      )}
+    </Dialog>
+  )
+
   return (
     <div className="stack">
       <PageHeader title="Orchestration" />
       <div className="toolbar">
         <span className="count">{scanners.length} scanners · {workers.length} workers · {jobs.length} jobs</span>
+        <Pager page={pagedJobs.page} pages={pagedJobs.pages} onChange={pagedJobs.setPage}
+          total={pagedJobs.total} perPage={pagedJobs.perPage} unit="jobs" className="row-end" />
         <button onClick={load}>refresh</button>
         {claimInfo && <span className="muted">{claimInfo}</span>}
       </div>
       {error && <div className="banner banner-error">{error}</div>}
 
+      <h2 className="section">internal scans</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Jobs the platform runs itself, inside this process. Scans handed to a worker stay below;
+        pipelines and git actions live in Pipelines.
+      </p>
+      {internalNote && <p className="muted">{internalNote}</p>}
+      {internal.map((row) => (
+        <div key={row.name} className="stack" style={{ marginBottom: 16 }}>
+          <div className="toolbar" style={{ margin: 0 }}>
+            <span className="count">
+              <strong className="mono">{row.label}</strong> · {row.title}
+              {' '}· every {row.schedule.interval_hours}h
+              {row.schedule.next_due_at
+                ? ` · next ${new Date(row.schedule.next_due_at).toLocaleString()}`
+                : ' · never ran'}
+              {row.autorun ? '' : ' · external clock'}
+            </span>
+            <span className="muted">
+              {(Object.entries(row.sources) || []).filter(([, on]) => on).map(([key]) => key).join(' + ') || 'all sources off'}
+            </span>
+            <span className="row-end">
+              <button className="primary-action" disabled={internalBusy === row.name}
+                onClick={() => runInternal(row)}>
+                {internalBusy === row.name ? 'running…' : 'run now'}
+              </button>
+            </span>
+          </div>
+          <p className="muted" style={{ margin: 0 }}>{row.description}</p>
+          {row.last_run ? (
+            <p className="muted" style={{ margin: 0 }}>
+              last: {row.last_run.status} · {row.last_run.trigger} ·{' '}
+              {row.last_run.duration_ms != null ? `${(row.last_run.duration_ms / 1000).toFixed(1)}s` : '—'} ·{' '}
+              {new Date(row.last_run.started_at).toLocaleString()} ·{' '}
+              {row.last_run.counters.findings_created || 0} new ·{' '}
+              {row.last_run.counters.findings_refreshed || 0} refreshed
+            </p>
+          ) : <p className="empty" style={{ margin: 0 }}>Never ran. Until it does, only what each scanner reported is known.</p>}
+          {row.runs.length > 0 && (
+            <table>
+              <thead><tr><th>when</th><th>trigger</th><th>status</th><th>builds</th>
+                <th>new</th><th>refreshed</th><th>duration</th><th></th></tr></thead>
+              <tbody>
+                {row.runs.map((run) => (
+                  <tr key={run.id}>
+                    <td className="muted">{new Date(run.started_at).toLocaleString()}</td>
+                    <td><span className="pill">{run.trigger}</span></td>
+                    <td><span className={`status st-${run.status}`}>{run.status}</span></td>
+                    <td>{run.counters.versions_analyzed ?? 0}</td>
+                    <td>{run.counters.findings_created ?? 0}</td>
+                    <td>{run.counters.findings_refreshed ?? 0}</td>
+                    <td className="muted">{run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : '—'}</td>
+                    <td><button className="mini" onClick={() => openLog(run)}>log</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ))}
+      {!internal.length && <p className="empty">No internal scans registered.</p>}
+
       <h2 className="section">jobs</h2>
       <table>
         <thead><tr><th>job</th><th>scanner</th><th>status</th><th>attempts</th><th>worker</th><th></th></tr></thead>
         <tbody>
-          {jobs.map((row) => (
+          {pagedJobs.rows.map((row) => (
             <tr key={row.id}>
               <td className="title">{row.id.slice(0, 8)}</td>
               <td>{row.scanner} <span className="muted">({row.capability})</span></td>
@@ -149,6 +265,8 @@ export default function Orchestration() {
           ))}
         </tbody>
       </table>
+      <Pager page={pagedJobs.page} pages={pagedJobs.pages} onChange={pagedJobs.setPage}
+        total={pagedJobs.total} perPage={pagedJobs.perPage} unit="jobs" className="row-end" />
       {!jobs.length && <p className="empty">No jobs queued.</p>}
 
       <h2 className="section">schedules</h2>
@@ -156,11 +274,13 @@ export default function Orchestration() {
         <span className="count">{schedules.length} schedules</span>
         <button onClick={tickNow}>run tick now</button>
         {tickInfo && <span className="muted">{tickInfo}</span>}
+        <Pager page={pagedSchedules.page} pages={pagedSchedules.pages} onChange={pagedSchedules.setPage}
+          total={pagedSchedules.total} perPage={pagedSchedules.perPage} unit="schedules" className="row-end" />
       </div>
       <table>
         <thead><tr><th>name</th><th>kind</th><th>target</th><th>every</th><th>next run</th><th>last</th><th></th></tr></thead>
         <tbody>
-          {schedules.map((row) => (
+          {pagedSchedules.rows.map((row) => (
             <tr key={row.id}>
               <td className="title">{row.name}</td>
               <td><span className="pill">{row.kind}</span></td>
@@ -180,6 +300,8 @@ export default function Orchestration() {
           ))}
         </tbody>
       </table>
+      <Pager page={pagedSchedules.page} pages={pagedSchedules.pages} onChange={pagedSchedules.setPage}
+        total={pagedSchedules.total} perPage={pagedSchedules.perPage} unit="schedules" className="row-end" />
       {!schedules.length && <p className="empty">No schedules yet.</p>}
       <div className="card">
         <input placeholder="schedule name" value={schedule.name}
@@ -282,6 +404,7 @@ export default function Orchestration() {
           onChange={(e) => setWorker((w) => ({ ...w, max_concurrent: Number(e.target.value) }))} />
         <button onClick={addWorker}>add worker</button>
       </div>
+      {logDialog}
     </div>
   )
 }

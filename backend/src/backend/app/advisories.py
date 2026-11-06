@@ -332,6 +332,61 @@ def _in_app(session: Session, org_id: str, payload: dict) -> None:
                                     payload=body))
 
 
+def _open_run(session: Session, org_id: str, trigger: str,
+              actor: str | None) -> models.InternalRun:
+    row = models.InternalRun(org_id=org_id, name="advisory-clock", trigger=trigger,
+                             status="running", started_at=models.utcnow(), actor=actor)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _log_text(counters: dict, config: dict, next_due: str | None = None) -> str:
+    """What the run did, in the order a reader would ask for it."""
+    lines = [f"status: {counters.get('status')}",
+             f"sources: osv={config.get('osv')} nvd={config.get('cpe')} "
+             f"kev={config.get('kev')} epss={config.get('epss')}",
+             f"interval: {counters.get('interval_hours')}h"]
+    # The gate's `next_due_at` is *before* this run; the useful one is when the
+    # next sweep is scheduled now that this one finished.
+    if next_due:
+        lines.append(f"next due: {next_due}")
+    lines.append(f"feeds: kev={counters.get('kev_rows', 0)} rows · "
+                 f"epss={counters.get('epss_rows', 0)} rows")
+    lines.append(f"osv: {counters.get('components_queried', 0)} packages · "
+                 f"{counters.get('advisories_found', 0)} advisories · "
+                 f"{counters.get('findings_created', 0)} new · "
+                 f"{counters.get('findings_refreshed', 0)} refreshed"
+                 + (f" · {counters['components_skipped_unmapped']} unmapped"
+                    if counters.get("components_skipped_unmapped") else ""))
+    lines.append(f"nvd: {counters.get('runtimes_analyzed', 0)} runtimes · "
+                 f"{counters.get('runtime_findings_created', 0)} new runtime CVEs")
+    lines.append(f"builds swept: {counters.get('versions_analyzed', 0)}")
+    if counters.get("notified"):
+        lines.append("notified: " + ", ".join(counters["notified"]))
+    else:
+        lines.append("notified: in-app only" if counters.get("findings_created")
+                     else "notified: nothing new")
+    for item in counters.get("errors") or []:
+        lines.append(f"error: {item.get('source')}"
+                     f"{' ' + item['version'] if item.get('version') else ''}: {item.get('error')}")
+    return "\n".join(lines)
+
+
+def _close_run(session: Session, row: models.InternalRun, counters: dict,
+               config: dict, started: float) -> None:
+    row.status = counters.get("status") or "ok"
+    row.finished_at = models.utcnow()
+    row.duration_ms = int((time.monotonic() - started) * 1000)
+    row.counters = json.dumps(counters, sort_keys=True, default=str)
+    next_due = None
+    if row.finished_at is not None:
+        next_due = (row.finished_at
+                    + datetime.timedelta(hours=config["interval_hours"])).isoformat()
+    row.log = _log_text(counters, config, next_due)
+    session.flush()
+
+
 def _sweep(session: Session, org_id: str, config: dict, counters: dict,
            analyze, runtime_analyze) -> None:
     """Re-ask OSV and NVD about one organization's builds, then say what is new.
@@ -394,7 +449,8 @@ def _finish(session: Session, counters: dict) -> None:
 
 
 def run(session: Session, org_id: str, *, force: bool = False,
-        kev_fetch=None, epss_fetch=None, analyze=None, runtime_analyze=None) -> dict:
+        kev_fetch=None, epss_fetch=None, analyze=None, runtime_analyze=None,
+        trigger: str = "schedule", actor: str | None = None) -> dict:
     """Refresh the feeds and re-ask OSV about one organization's builds.
 
     Every failure is reported and isolated: a catalogue outage must not skip
@@ -404,15 +460,24 @@ def run(session: Session, org_id: str, *, force: bool = False,
     counters = _blank(config)
     if not _gate(config, force, counters):
         return counters
-    _feeds(session, config, counters, kev_fetch, epss_fetch)
-    _sweep(session, org_id, config, counters, analyze or vulns.analyze, runtime_analyze)
-    _finish(session, counters)
+    started = time.monotonic()
+    run_row = _open_run(session, org_id, trigger, actor)
+    try:
+        _feeds(session, config, counters, kev_fetch, epss_fetch)
+        _sweep(session, org_id, config, counters, analyze or vulns.analyze, runtime_analyze)
+        _finish(session, counters)
+    except Exception as error:
+        counters["status"] = "failed"
+        counters["errors"].append({"source": "run", "error": f"{type(error).__name__}: {error}"})
+        _close_run(session, run_row, counters, config, started)
+        raise
+    _close_run(session, run_row, counters, config, started)
     return counters
 
 
 def run_all(session: Session, *, force: bool = False,
             kev_fetch=None, epss_fetch=None, analyze=None,
-            runtime_analyze=None) -> dict:
+            runtime_analyze=None, trigger: str = "schedule") -> dict:
     """Every organization in one pass, with one due-gate.
 
     The settings row is deployment-wide, so `last_tick_at` is too: iterating
@@ -425,10 +490,17 @@ def run_all(session: Session, *, force: bool = False,
     if not _gate(config, force, counters):
         return counters
     _feeds(session, config, counters, kev_fetch, epss_fetch)
+    started = time.monotonic()
+    rows = []
     for org in session.query(models.Organization).all():
         counters["organizations"] += 1
+        run_row = _open_run(session, org.id, trigger, "clock")
+        rows.append((run_row, time.monotonic()))
         _sweep(session, org.id, config, counters, analyze or vulns.analyze,
                runtime_analyze)
+    for run_row, org_started in rows:
+        # Each organization's row carries the sweep it saw, not the whole run.
+        _close_run(session, run_row, counters, config, org_started)
     _finish(session, counters)
     return counters
 
