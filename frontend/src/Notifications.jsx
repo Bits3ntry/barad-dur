@@ -1,7 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { PageHeader, Card, StatusBadge, EmptyState, ErrorBanner, Loading,
-         Dialog, Input, CheckBox, Toggle, Banner, Table } from './ui'
+         Dialog, Input, CheckBox, Toggle, Banner, Table, Pager, usePage } from './ui'
+
+/* What a channel can be subscribed to. Raw event ids stay in the title attribute
+   so an operator can match them against a webhook receiver. */
+const EVENT_LABELS = {
+  'sla.breached': 'SLA breached',
+  'advisory.new': 'New advisories',
+}
+
 
 export default function Notifications() {
   const [notifications, setNotifications] = useState([])
@@ -18,7 +26,12 @@ export default function Notifications() {
   const [channels, setChannels] = useState([])
   const [channelError, setChannelError] = useState('')
   const [channelNote, setChannelNote] = useState('')
-  const [draft, setDraft] = useState({ name: '', kind: 'slack', url: '' })
+  const [draft, setDraft] = useState({ name: '', kind: 'slack', url: '',
+    events: ['sla.breached', 'advisory.new'] })
+
+  // The center keeps one row per event forever; channels are a handful of
+  // configured destinations, so only the feed pages.
+  const paged = usePage(notifications, 25)
 
   useEffect(() => {
     load()
@@ -41,12 +54,14 @@ export default function Notifications() {
     try {
       const { data } = await api.post('/api/v1/notifications/channels', {
         name: draft.name.trim(), kind: draft.kind, url: draft.url.trim(),
-        events: ['sla.breached'], actor: 'console',
+        // Both by default: a channel that only hears about SLAs is a channel
+        // that stays quiet the day a new CVE lands on a shipped build.
+        events: draft.events, actor: 'console',
       })
       setChannelNote(data.secret
         ? `channel created · signing secret (shown once): ${data.secret}`
         : 'channel created')
-      setDraft({ name: '', kind: 'slack', url: '' })
+      setDraft({ name: '', kind: 'slack', url: '', events: ['sla.breached', 'advisory.new'] })
       loadChannels()
     } catch (e) {
       setChannelError(String(e.message || e))
@@ -62,6 +77,20 @@ export default function Notifications() {
       setChannelNote(r.data.delivered
         ? `test delivered to ${row.name} (HTTP ${r.data.http_status})`
         : `test failed for ${row.name}: ${r.data.error}`)
+    } catch (e) {
+      setChannelError(String(e.message || e))
+    }
+  }
+
+  async function toggleEvent(row, event) {
+    const current = row.events || []
+    const next = current.includes(event)
+      ? current.filter((item) => item !== event)
+      : [...current, event]
+    try {
+      await api.patch(`/api/v1/notifications/channels/${row.id}`,
+        { events: next, actor: 'console' })
+      loadChannels()
     } catch (e) {
       setChannelError(String(e.message || e))
     }
@@ -143,12 +172,15 @@ export default function Notifications() {
 
       <div className="grid grid-2">
         {/* Notification center */}
-        <Card title="Notification center">
+        <Card title="Notification center" actions={
+          <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+            total={paged.total} perPage={paged.perPage} unit="notifications" />
+        }>
           {notifications.length === 0 && !loading && (
             <EmptyState title="No notifications"
               hint="Notifications appear here when events occur (SLA breaches, assignments, retest requests, etc.)." />
           )}
-          {notifications.map((n) => (
+          {paged.rows.map((n) => (
             <div key={n.id} className={`notification ${n.read ? 'read' : 'unread'}`}>
               <span className={`pill pill-${n.event.split('.')[0]}`}>{n.event}</span>
               <div className="notification-body">
@@ -171,6 +203,14 @@ export default function Notifications() {
           ))}
           {notifications.length > 0 && notifications.every((n) => n.read) && (
             <p className="muted">All notifications read.</p>
+          )}
+          {/* The card is a grid cell beside preferences, so the second pager
+              stays inside it instead of becoming a third cell under the grid. */}
+          {paged.pages > 1 && (
+            <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+              <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+                total={paged.total} perPage={paged.perPage} unit="notifications" />
+            </div>
           )}
         </Card>
 
@@ -224,8 +264,9 @@ export default function Notifications() {
 
       <Card title="Delivery channels" actions={<span className="muted">{channels.length} configured</span>}>
         <p className="muted" style={{ marginTop: 0 }}>
-          A channel receives the SLA digest and test messages. Slack expects an
-          incoming-webhook URL; webhooks receive a signed JSON envelope.
+          A channel hears what you subscribe it to: SLA breaches, and the new advisories the
+          daily clock finds on your builds. Slack expects an incoming-webhook URL; webhooks
+          receive a signed JSON envelope.
         </p>
         {channelError && <Banner kind="error">{channelError}</Banner>}
         {channelNote && <p className="ok">{channelNote}</p>}
@@ -246,6 +287,16 @@ export default function Notifications() {
             placeholder={draft.kind === 'slack'
               ? 'https://hooks.slack.com/services/…'
               : draft.kind === 'email' ? 'sec@example.com' : 'https://example.com/hook'} />
+          <div className="check" style={{ flexWrap: 'wrap' }}>
+            {Object.entries(EVENT_LABELS).map(([key, label]) => (
+              <label className="check" key={key} title={key}>
+                <input type="checkbox" checked={draft.events.includes(key)}
+                  onChange={() => setDraft((d) => ({ ...d, events: d.events.includes(key)
+                    ? d.events.filter((item) => item !== key) : [...d.events, key] }))} />
+                {label}
+              </label>
+            ))}
+          </div>
           <button className="primary-action" disabled={!draft.name.trim() || !draft.url.trim()}
             onClick={createChannel}>add channel</button>
         </div>
@@ -256,7 +307,15 @@ export default function Notifications() {
                 <td>{row.name}</td>
                 <td><span className="pill">{row.kind}</span></td>
                 <td className="mono muted" style={{ fontSize: 11.5 }}>{row.url}</td>
-                <td className="muted">{(row.events || []).join(', ') || '—'}</td>
+                <td className="muted">
+                  {Object.entries(EVENT_LABELS).map(([key, label]) => (
+                    <button key={key} className={`mini${(row.events || []).includes(key) ? ' primary' : ''}`}
+                      onClick={() => toggleEvent(row, key)}
+                      title={`${key} — click to ${(row.events || []).includes(key) ? 'stop' : 'start'} sending`}>
+                      {label}
+                    </button>
+                  ))}
+                </td>
                 <td><span className={`status st-${row.enabled ? 'active' : 'disabled'}`}>
                   {row.enabled ? 'active' : 'paused'}
                 </span></td>

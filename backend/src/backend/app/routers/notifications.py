@@ -23,7 +23,7 @@ from backend.app.routers.identity import _audit as _audit_log
 
 router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
 
-EVENTS = {"sla.breached", "test"}
+EVENTS = {"sla.breached", "advisory.new", "test"}
 NON_OPEN = {"resolved", "false_positive", "suppressed"}
 
 
@@ -144,8 +144,12 @@ def _deliver_email(channel: models.NotificationChannel, event: str,
     message["Subject"] = f"[Barad-dûr] {event} — {payload.get('count', 1)} item(s)"
     lines = [f"event: {event}", f"channel: {channel.name}", ""]
     for finding in payload.get("findings", [])[:50]:
-        lines.append(f"- {finding.get('severity')} {finding.get('title')} "
-                     f"(deadline {finding.get('sla_deadline')})")
+        line = f"- {finding.get('severity')} {finding.get('title')}"
+        if finding.get("sla_deadline"):
+            line += f" (deadline {finding['sla_deadline']})"
+        if finding.get("url"):
+            line += f" {finding['url']}"
+        lines.append(line)
     if payload.get("message"):
         lines.append(payload["message"])
     message.set_content("\n".join(lines))
@@ -225,6 +229,39 @@ def deliver(channel: models.NotificationChannel, event: str,
         return exc.code, f"http_{exc.code}: {exc.read()[:200].decode(errors='replace')}"
     except urllib.error.URLError as exc:
         return None, f"unreachable: {exc.reason}"
+
+
+def notify(session: Session, org_id: str, event: str, payload: dict,
+           dedupe_suffix: str) -> list[dict]:
+    """Deliver one event to every enabled channel that subscribes to it.
+
+    Dedupe is per channel and suffix, recorded with the delivery: a second sweep
+    in the same day must not send the same news twice, and a crash mid-send must
+    not turn the next tick into a resend loop. A workspace with no channel costs
+    one query.
+    """
+    results: list[dict] = []
+    channels = (session.query(models.NotificationChannel)
+                .filter_by(org_id=org_id, enabled=True).all())
+    for channel in channels:
+        subscribed = set(json.loads(channel.events or "[]"))
+        if event not in subscribed:
+            continue
+        dedupe = f"{event}:{channel.id}:{dedupe_suffix}"
+        if (session.query(models.NotificationDelivery)
+                .filter_by(org_id=org_id, dedupe_key=dedupe).first()):
+            results.append({"channel": channel.name, "result": "already_sent"})
+            continue
+        code, error = deliver(channel, event, payload, session)
+        session.add(models.NotificationDelivery(
+            org_id=org_id, channel_id=channel.id, event=event, dedupe_key=dedupe,
+            payload=json.dumps(payload),
+            status=("sent" if error is None else "failed"),
+            http_status=code, error=error, created_at=models.utcnow()))
+        results.append({"channel": channel.name,
+                        "result": "sent" if error is None else "failed",
+                        "http_status": code, "error": error})
+    return results
 
 
 class TestIn(BaseModel):

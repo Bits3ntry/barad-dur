@@ -4,6 +4,7 @@ These tests never touch the network: the three fetchers are injectable on
 purpose, because a job that only works when OSV is up cannot be verified.
 """
 import datetime
+import json
 import sys
 from pathlib import Path
 
@@ -364,6 +365,122 @@ def test_a_sessionmaker_instead_of_a_session_is_refused_loudly(env):
 
     with pytest.raises(TypeError, match="sessionmaker"):
         advisories.tick_once(session_factory)
+
+
+def _channel(session, org, events, name="ops"):
+    session.add(models.NotificationChannel(
+        org_id=org.id, name=name, kind="webhook", url="https://hooks.example.test/barad",
+        secret="s3cret", events=json.dumps(events), enabled=True))
+    session.commit()
+
+
+def _new_finding(session, org, project, version, component, severity="CRITICAL",
+                 cve="CVE-2026-1"):
+    advisory = models.Vulnerability(source_id=f"GHSA-{cve}", source="osv", cve_id=cve,
+                                    title="rce in a dependency", severity=severity)
+    session.add(advisory)
+    session.flush()
+    finding = models.Finding(org_id=org.id, project_id=project.id, kind="vulnerability",
+                             fingerprint=f"fp-{cve}", source="osv",
+                             title="rce in a dependency", severity=severity,
+                             component_id=component.id, vulnerability_id=advisory.id,
+                             last_seen_version_id=version.id,
+                             first_seen_at=models.utcnow(), last_seen_at=models.utcnow())
+    session.add(finding)
+    session.flush()
+    return finding
+
+
+def test_new_advisories_reach_the_subscribed_channel_once(env, monkeypatch):
+    """The clock's output is only useful if somebody is told."""
+    from backend.app.routers import notifications
+
+    session, org = env["session"], env["org"]
+    project, version = _version(session, org)
+    component = session.query(models.Component).one()
+    _channel(session, org, ["advisory.new"])
+    finding = _new_finding(session, org, project, version, component)
+    session.add(models.KevEntry(cve_id="CVE-2026-1", title="x", fetched_at=models.utcnow()))
+    session.commit()
+
+    sent = []
+    monkeypatch.setattr(notifications, "deliver",
+                        lambda channel, event, payload, session=None: (sent.append(payload) or (200, None)))
+
+    counters = advisories.run(session, org.id, force=True,
+                              kev_fetch=lambda: [], epss_fetch=lambda cve_ids: [],
+                              analyze=lambda *args, **kwargs: {
+                                  "components_queried": 1, "findings_created": 1,
+                                  "findings_refreshed": 0, "advisories_found": 1,
+                                  "components_skipped_unmapped": 0, "truncated": False,
+                                  "created_ids": [finding.id]})
+    session.commit()
+    assert counters["notified"] == ["ops:sent"]
+    assert len(sent) == 1
+    assert sent[0]["count"] == 1
+    assert sent[0]["kev"] == 1, "KEV es un hecho: se cuenta en el aviso"
+    assert sent[0]["worst"] == "CRITICAL"
+    assert "aurea" in sent[0]["builds"]
+    delivery = session.query(models.NotificationDelivery).one()
+    assert delivery.event == "advisory.new" and delivery.status == "sent"
+
+    # A second sweep the same day must not repeat itself.
+    again = advisories.run(session, org.id, force=True,
+                           kev_fetch=lambda: [], epss_fetch=lambda cve_ids: [],
+                           analyze=lambda *args, **kwargs: {
+                               "findings_created": 1, "created_ids": [finding.id],
+                               "components_queried": 1, "findings_refreshed": 0,
+                               "advisories_found": 1, "components_skipped_unmapped": 0,
+                               "truncated": False})
+    session.commit()
+    assert again["notified"] == ["ops:already_sent"]
+    assert session.query(models.NotificationDelivery).count() == 1
+    assert len(sent) == 1
+
+
+def test_a_quiet_sweep_says_nothing(env, monkeypatch):
+    from backend.app.routers import notifications
+
+    session, org = env["session"], env["org"]
+    _version(session, org)
+    _channel(session, org, ["advisory.new"])
+    sent = []
+    monkeypatch.setattr(notifications, "deliver",
+                        lambda *args, **kwargs: (sent.append(args) or (200, None)))
+    counters = advisories.run(session, org.id, force=True,
+                              kev_fetch=lambda: [], epss_fetch=lambda cve_ids: [],
+                              analyze=lambda *args, **kwargs: {
+                                  "findings_created": 0, "created_ids": [],
+                                  "components_queried": 1, "findings_refreshed": 5,
+                                  "advisories_found": 5, "components_skipped_unmapped": 0,
+                                  "truncated": False})
+    session.commit()
+    assert counters["notified"] == []
+    assert sent == [], "sin novedades no se manda nada"
+
+
+def test_a_channel_that_did_not_subscribe_is_not_used(env, monkeypatch):
+    from backend.app.routers import notifications
+
+    session, org = env["session"], env["org"]
+    project, version = _version(session, org)
+    component = session.query(models.Component).one()
+    _channel(session, org, ["sla.breached"], name="sla-only")
+    finding = _new_finding(session, org, project, version, component, cve="CVE-2026-2")
+    session.commit()
+    sent = []
+    monkeypatch.setattr(notifications, "deliver",
+                        lambda *args, **kwargs: (sent.append(args) or (200, None)))
+    counters = advisories.run(session, org.id, force=True,
+                              kev_fetch=lambda: [], epss_fetch=lambda cve_ids: [],
+                              analyze=lambda *args, **kwargs: {
+                                  "findings_created": 1, "created_ids": [finding.id],
+                                  "components_queried": 1, "findings_refreshed": 0,
+                                  "advisories_found": 1, "components_skipped_unmapped": 0,
+                                  "truncated": False})
+    session.commit()
+    assert counters["notified"] == []
+    assert sent == []
 
 
 def test_api_reports_settings_and_runs_a_tick(env):

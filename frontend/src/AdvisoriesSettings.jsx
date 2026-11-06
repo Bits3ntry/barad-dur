@@ -148,7 +148,7 @@ export default function AdvisoriesSettings() {
             <p className="settings-note">Ecosystems to re-check — all of them when none is chosen.</p>
             <div className="settings-link-list">
               {(config.ecosystems_available || []).map((key) => (
-                <button type="button" key={key} className={`mini${form.ecosystems.includes(key) ? ' active' : ''}`}
+                <button type="button" key={key} className={`mini${form.ecosystems.includes(key) ? ' primary' : ''}`}
                   onClick={() => toggleEcosystem(key)}>{key}</button>
               ))}
             </div>

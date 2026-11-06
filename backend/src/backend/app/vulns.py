@@ -175,7 +175,10 @@ def analyze(session, org_id: str, project: models.Project,
 
     counters = {"components_queried": len(rows), "components_skipped_unmapped": len(links) - len(rows),
                 "advisories_found": 0, "findings_created": 0, "findings_refreshed": 0,
-                "details_fetched": 0, "truncated": False}
+                "details_fetched": 0, "truncated": False,
+                # Which rows are new, by id: the caller needs to say *what*
+                # arrived ("12 CVEs, 2 in KEV"), and counting is not enough.
+                "created_ids": []}
     if not queries:
         return counters
 
@@ -238,6 +241,7 @@ def analyze(session, org_id: str, project: models.Project,
                 session.flush()
                 lifecycle.apply_lifecycle(session, org_id, new_finding)
                 counters["findings_created"] += 1
+                counters["created_ids"].append(new_finding.id)
             else:
                 finding.last_seen_at = now
                 finding.last_seen_version_id = project_version.id

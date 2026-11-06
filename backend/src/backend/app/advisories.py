@@ -203,7 +203,10 @@ def _blank(config: dict) -> dict:
             "kev_rows": 0, "epss_rows": 0, "versions_analyzed": 0,
             "components_queried": 0, "components_skipped_unmapped": 0,
             "advisories_found": 0, "findings_created": 0,
-            "findings_refreshed": 0, "truncated": False, "errors": []}
+            "findings_refreshed": 0, "truncated": False, "errors": [],
+            # Who was told, so "found 12 CVEs" and "told nobody" cannot look the
+            # same in the run record.
+            "notified": []}
 
 
 def _gate(config: dict, force: bool, counters: dict) -> bool:
@@ -249,9 +252,61 @@ def _feeds(session: Session, config: dict, counters: dict,
                                        "error": f"{type(error).__name__}: {error}"})
 
 
+SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
+
+
+def _announce(session: Session, org_id: str, created_ids: list[str],
+              builds: set[str], counters: dict) -> None:
+    """Tell the workspace what arrived, once per day per channel.
+
+    Silence is the default: no channel subscribed, or nothing new, costs one
+    query and no message. A notification that fires every sweep regardless would
+    be noise, and noise is how a channel gets muted.
+    """
+    if not created_ids:
+        return
+    from backend.app.routers import notifications
+
+    rows = (session.query(models.Finding, models.Vulnerability)
+            .join(models.Vulnerability, models.Vulnerability.id == models.Finding.vulnerability_id)
+            .filter(models.Finding.id.in_(created_ids)).all())
+    if not rows:
+        return
+    cves = {advisory.cve_id for _finding, advisory in rows if advisory.cve_id}
+    kev = {row.cve_id for row in
+           session.query(models.KevEntry).filter(models.KevEntry.cve_id.in_(cves)).all()} if cves else set()
+    counts = {severity: 0 for severity in SEVERITY_ORDER}
+    for finding, _advisory in rows:
+        key = (finding.severity or "UNKNOWN").upper()
+        counts[key if key in counts else "UNKNOWN"] += 1
+    worst = next((severity for severity in SEVERITY_ORDER if counts[severity]), "UNKNOWN")
+    ordered = sorted(rows, key=lambda pair: SEVERITY_ORDER.index(
+        (pair[0].severity or "UNKNOWN").upper())
+        if (pair[0].severity or "UNKNOWN").upper() in SEVERITY_ORDER else len(SEVERITY_ORDER))
+    where = ", ".join(sorted(builds)) or "the workspace"
+    payload = {
+        "title": f"{len(rows)} new advisories",
+        "count": len(rows),
+        "kev": len(kev),
+        "worst": worst,
+        "by_severity": counts,
+        "builds": where,
+        "message": (f"{len(rows)} new advisor{'y' if len(rows) == 1 else 'ies'} on {where}"
+                    f" · worst {worst} · {len(kev)} in KEV"),
+        "findings": [{"severity": (finding.severity or "UNKNOWN").upper(),
+                      "title": finding.title, "url": finding.url}
+                     for finding, _advisory in ordered[:25]],
+    }
+    results = notifications.notify(session, org_id, "advisory.new", payload,
+                                   dedupe_suffix=models.utcnow().date().isoformat())
+    counters["notified"] = [f"{item['channel']}:{item['result']}" for item in results]
+
+
 def _sweep(session: Session, org_id: str, config: dict, counters: dict,
            analyze) -> None:
-    """Re-ask OSV about one organization's current builds."""
+    """Re-ask OSV about one organization's current builds, then say what is new."""
+    created: list[str] = []
+    builds: set[str] = set()
     for project, version in current_versions(session, org_id, config["max_versions"],
                                              config["ecosystems"]):
         try:
@@ -262,6 +317,9 @@ def _sweep(session: Session, org_id: str, config: dict, counters: dict,
                                        "error": f"{type(error).__name__}: {error}"})
             continue
         counters["versions_analyzed"] += 1
+        created.extend(result.get("created_ids") or [])
+        if result.get("created_ids"):
+            builds.add(f"{project.slug}/{version.version}")
         for key in ("components_queried", "components_skipped_unmapped",
                     "advisories_found", "findings_created", "findings_refreshed"):
             counters[key] += int(result.get(key) or 0)
@@ -270,6 +328,7 @@ def _sweep(session: Session, org_id: str, config: dict, counters: dict,
             counters["errors"].append({"source": "osv",
                                        "version": f"{project.slug}/{version.version}",
                                        "error": str(result["error"])})
+    _announce(session, org_id, created, builds, counters)
 
 
 def _finish(session: Session, counters: dict) -> None:
