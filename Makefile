@@ -94,8 +94,8 @@ clean:
 	find . -name "*.pyc" -delete -o -name "__pycache__" -type d -delete
 
 lint:
-	cd backend && ./.venv/bin/rustfmt --check src/backend/app
-	cd frontend && npm run lint
+	cd backend && ../.venv/bin/python -m compileall -q src/backend/app
+	cd frontend && npm run check:ui
 
 # ---------------------------------------------------------------------------
 # Help

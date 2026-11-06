@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { Card, EmptyState } from './ui'
+import { degrees, hash, radiusFor } from './graphForce'
+import useForceGraph from './useForceGraph'
 
 /* ───────────────────────── the running-now graph ─────────────────────────
 
@@ -11,7 +13,6 @@ import { Card, EmptyState } from './ui'
    the node id rather than drawn from Math.random().
    ──────────────────────────────────────────────────────────────────────── */
 
-const VIEW = { w: 900, h: 520 }
 
 const TYPE_META = {
   project: { title: 'project', column: 0 },
@@ -22,22 +23,6 @@ const TYPE_META = {
   asset: { title: 'asset', column: 4 },
 }
 const TYPE_ORDER = Object.keys(TYPE_META)
-
-const MIN_RADIUS = 5.5
-const MAX_RADIUS = 24
-
-function radiusFor(degree) {
-  return Math.min(MAX_RADIUS, MIN_RADIUS + Math.sqrt(degree) * 4.1)
-}
-
-function hash(text) {
-  let value = 2166136261
-  for (let i = 0; i < text.length; i += 1) {
-    value ^= text.charCodeAt(i)
-    value = Math.imul(value, 16777619)
-  }
-  return Math.abs(value)
-}
 
 function buildGraph(data) {
   const nodes = []
@@ -98,126 +83,9 @@ function buildGraph(data) {
   return { nodes, edges }
 }
 
-function degrees(nodes, edges) {
-  const map = new Map(nodes.map((node) => [node.id, 0]))
-  for (const edge of edges) {
-    map.set(edge.from, (map.get(edge.from) || 0) + 1)
-    map.set(edge.to, (map.get(edge.to) || 0) + 1)
-  }
-  return map
-}
-
 function detail(node) {
   return [node.environment, node.version, node.health, node.kind, node.provider, node.assetType]
     .filter(Boolean).join(' · ')
-}
-
-/* ── physics: seeded columns, then repulsion + springs + gravity ────────── */
-
-const REPULSION = 9000
-const GRAVITY = 0.006
-const STIFFNESS = 0.05
-const DAMPING = 0.58
-
-function seed(nodes, edges) {
-  const columns = new Map()
-  for (const type of TYPE_ORDER) columns.set(type, nodes.filter((node) => node.type === type))
-  const sim = {
-    nodes: [],
-    links: [],
-    index: new Map(),
-    settled: false,
-  }
-  for (const type of TYPE_ORDER) {
-    const rows = columns.get(type)
-    const column = TYPE_META[type].column
-    rows.forEach((node, row) => {
-      const degree = node.degree
-      const entry = {
-        id: node.id,
-        x: (column - 2) * 215 + (hash(node.id) % 41) - 20,
-        y: (row - (rows.length - 1) / 2) * 96 + (hash(`${node.id}y`) % 33) - 16,
-        vx: 0,
-        vy: 0,
-        r: radiusFor(degree),
-        fixed: false,
-      }
-      sim.index.set(node.id, entry)
-      sim.nodes.push(entry)
-    })
-  }
-  for (const edge of edges) {
-    const from = sim.index.get(edge.from)
-    const to = sim.index.get(edge.to)
-    if (!from || !to) continue
-    sim.links.push({ a: from, b: to, rest: 96 + from.r + to.r, relation: edge.relation })
-  }
-  return sim
-}
-
-function step(sim) {
-  const count = sim.nodes.length
-  for (let i = 0; i < count; i += 1) {
-    const a = sim.nodes[i]
-    for (let j = i + 1; j < count; j += 1) {
-      const b = sim.nodes[j]
-      let dx = b.x - a.x
-      let dy = b.y - a.y
-      let squared = dx * dx + dy * dy
-      if (squared < 1) {
-        dx = (hash(a.id) % 7) - 3
-        dy = (hash(b.id) % 7) - 3
-        squared = Math.max(1, dx * dx + dy * dy)
-      }
-      const distance = Math.sqrt(squared)
-      const push = Math.min(REPULSION / squared, 22)
-      const fx = (dx / distance) * push
-      const fy = (dy / distance) * push
-      a.vx -= fx; a.vy -= fy
-      b.vx += fx; b.vy += fy
-
-      const floor = a.r + b.r + 16
-      if (distance < floor) {
-        const overlap = (floor - distance) * 0.3
-        a.vx -= (dx / distance) * overlap
-        a.vy -= (dy / distance) * overlap
-        b.vx += (dx / distance) * overlap
-        b.vy += (dy / distance) * overlap
-      }
-    }
-  }
-  for (const link of sim.links) {
-    const dx = link.b.x - link.a.x
-    const dy = link.b.y - link.a.y
-    const distance = Math.max(1, Math.sqrt(dx * dx + dy * dy))
-    const pull = (distance - link.rest) * STIFFNESS
-    const fx = (dx / distance) * pull
-    const fy = (dy / distance) * pull
-    link.a.vx += fx; link.a.vy += fy
-    link.b.vx -= fx; link.b.vy -= fy
-  }
-  for (const node of sim.nodes) {
-    if (node.fixed) { node.vx = 0; node.vy = 0; continue }
-    node.vx -= node.x * GRAVITY
-    node.vy -= node.y * GRAVITY
-    node.vx *= DAMPING
-    node.vy *= DAMPING
-    const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy)
-    if (speed > 22) {
-      node.vx = (node.vx / speed) * 22
-      node.vy = (node.vy / speed) * 22
-    }
-    node.x += node.vx
-    node.y += node.vy
-  }
-}
-
-function relax(sim, iterations) {
-  for (let i = 0; i < iterations; i += 1) step(sim)
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value))
 }
 
 /* ─────────────────────────────── component ─────────────────────────────── */
@@ -229,19 +97,6 @@ export default function ProjectRuntimeGraph({ data }) {
   const [hiddenTypes, setHiddenTypes] = useState(() => new Set())
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(null)
-  const [hovered, setHovered] = useState(null)
-  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
-  const [, setFrame] = useState(0)
-
-  const wrapRef = useRef(null)
-  const svgRef = useRef(null)
-  const viewRef = useRef(view)
-  // Once the reader pans or zooms, the automatic fit stops fighting them.
-  const touchedRef = useRef(false)
-  const simRef = useRef(null)
-  const dragRef = useRef(null)
-  const panRef = useRef(null)
-  const [awake, setAwake] = useState(false)
 
   const nodes = useMemo(() => graph.nodes.map((node) => ({
     ...node, degree: degree.get(node.id) || 0, r: radiusFor(degree.get(node.id) || 0),
@@ -269,174 +124,37 @@ export default function ProjectRuntimeGraph({ data }) {
     return map
   }, [visibleEdges])
 
+  // One engine for both graphs: `useForceGraph` is what the dependency tab uses
+  // too, so "the same as in projects" is true by construction, not by memory.
+  const position = useMemo(() => {
+    const columns = new Map(TYPE_ORDER.map((type) => [
+      type, visibleNodes.filter((node) => node.type === type),
+    ]))
+    return (node) => {
+      const rows = columns.get(node.type) || []
+      const row = rows.indexOf(node)
+      return {
+        x: (TYPE_META[node.type].column - 2) * 215 + (hash(node.id) % 41) - 20,
+        y: (row - (rows.length - 1) / 2) * 96 + (hash(`${node.id}y`) % 33) - 16,
+      }
+    }
+  }, [visibleNodes])
+
+  const engine = useForceGraph({
+    nodes: visibleNodes,
+    edges: visibleEdges,
+    position,
+    clusterDirection: 'out',
+    onSelect: (id) => setSelected((current) => (
+      id === null ? null : (current === id ? null : id))),
+  })
+  const {
+    view, settled, hovered, setHovered, setAwake, zoomBy, fit, reset: resetLayout,
+  } = engine
+
   const focusId = hovered || selected
   const focusSet = focusId ? new Set([focusId, ...(neighbors.get(focusId) || [])]) : null
 
-  const key = visibleNodes.map((node) => node.id).join('|')
-
-  // Build (and settle) the layout whenever the visible set changes. Nodes that
-  // were already on screen keep their place, so filtering does not reshuffle
-  // the whole drawing. Until the reader pans or zooms, the view re-fits itself
-  // so no node is ever pushed outside the canvas by the physics.
-  useEffect(() => {
-    const previous = simRef.current ? simRef.current.index : new Map()
-    const sim = seed(visibleNodes, visibleEdges)
-    for (const entry of sim.nodes) {
-      const old = previous.get(entry.id)
-      if (old) { entry.x = old.x; entry.y = old.y; entry.fixed = old.fixed }
-    }
-    relax(sim, 260)
-    simRef.current = sim
-    if (!touchedRef.current) fitTo(sim)
-    setFrame((frame) => frame + 1)
-  }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!awake) return undefined
-    let raf = 0
-    let frames = 0
-    const loop = () => {
-      const sim = simRef.current
-      if (!sim || frames > 220) { setAwake(false); return }
-      step(sim)
-      frames += 1
-      setFrame((frame) => frame + 1)
-      raf = requestAnimationFrame(loop)
-    }
-    raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
-  }, [awake])
-
-  function applyView(next) {
-    viewRef.current = next
-    setView(next)
-  }
-
-  function zoomBy(factor, anchor) {
-    const current = viewRef.current
-    const zoom = clamp(current.zoom * factor, 0.3, 2.6)
-    touchedRef.current = true
-    if (!anchor) {
-      applyView({ zoom, x: current.x, y: current.y })
-      return
-    }
-    const scaleChange = zoom / current.zoom
-    applyView({
-      zoom,
-      x: anchor.x - VIEW.w / 2 - ((anchor.x - VIEW.w / 2 - current.x) * scaleChange),
-      y: anchor.y - VIEW.h / 2 - ((anchor.y - VIEW.h / 2 - current.y) * scaleChange),
-    })
-  }
-
-  function fitTo(sim) {
-    if (!sim || !sim.nodes.length) return
-    const xs = sim.nodes.map((node) => node.x)
-    const ys = sim.nodes.map((node) => node.y)
-    const minX = Math.min(...xs); const maxX = Math.max(...xs)
-    const minY = Math.min(...ys); const maxY = Math.max(...ys)
-    // Labels sit to the right of their dot, so the box is padded unevenly.
-    const width = Math.max(140, maxX - minX + 260)
-    const height = Math.max(120, maxY - minY + 130)
-    const zoom = clamp(Math.min(VIEW.w / width, VIEW.h / height), 0.35, 1.1)
-    const centerX = (minX + maxX) / 2
-    const centerY = (minY + maxY) / 2
-    applyView({ zoom, x: -centerX * zoom, y: -centerY * zoom })
-  }
-
-  function fit() {
-    touchedRef.current = false
-    fitTo(simRef.current)
-  }
-
-  function resetLayout() {
-    const sim = seed(visibleNodes, visibleEdges)
-    relax(sim, 260)
-    simRef.current = sim
-    touchedRef.current = false
-    fitTo(sim)
-    setFrame((frame) => frame + 1)
-  }
-
-  // Wheel has to be non-passive to keep the page from scrolling, so it is
-  // attached natively rather than through React's synthetic events.
-  useEffect(() => {
-    const element = wrapRef.current
-    const svg = svgRef.current
-    if (!element || !svg) return undefined
-    const onWheel = (event) => {
-      event.preventDefault()
-      const rect = svg.getBoundingClientRect()
-      const scale = rect.width / VIEW.w
-      zoomBy(Math.exp(-event.deltaY * 0.0016), {
-        x: (event.clientX - rect.left) / scale,
-        y: (event.clientY - rect.top) / scale,
-      })
-    }
-    element.addEventListener('wheel', onWheel, { passive: false })
-    return () => element.removeEventListener('wheel', onWheel)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  function svgMetrics() {
-    const rect = svgRef.current.getBoundingClientRect()
-    return { rect, scale: rect.width / VIEW.w }
-  }
-
-  function startNodeDrag(event, simNode) {
-    event.stopPropagation()
-    if (event.button !== 0) return
-    try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* synthetic events */ }
-    dragRef.current = { node: simNode, lastX: event.clientX, lastY: event.clientY, moved: false }
-    simNode.fixed = true
-  }
-
-  function moveNode(event) {
-    const drag = dragRef.current
-    if (!drag) return
-    const { scale } = svgMetrics()
-    const zoom = viewRef.current.zoom
-    drag.node.x += (event.clientX - drag.lastX) / (scale * zoom)
-    drag.node.y += (event.clientY - drag.lastY) / (scale * zoom)
-    drag.lastX = event.clientX
-    drag.lastY = event.clientY
-    drag.moved = true
-    setAwake(true)
-  }
-
-  function endNode(event, node) {
-    const drag = dragRef.current
-    dragRef.current = null
-    if (!drag) return
-    if (!drag.moved) setSelected((current) => (current === node.id ? null : node.id))
-    event.stopPropagation()
-  }
-
-  function startPan(event) {
-    if (event.button !== 0) return
-    try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* synthetic events */ }
-    touchedRef.current = true
-    panRef.current = {
-      startX: event.clientX, startY: event.clientY,
-      originX: viewRef.current.x, originY: viewRef.current.y, moved: false,
-    }
-  }
-
-  function movePan(event) {
-    const pan = panRef.current
-    if (!pan) return
-    const { scale } = svgMetrics()
-    const dx = (event.clientX - pan.startX) / scale
-    const dy = (event.clientY - pan.startY) / scale
-    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) pan.moved = true
-    applyView({ ...viewRef.current, x: pan.originX + dx, y: pan.originY + dy })
-  }
-
-  function endPan() {
-    const pan = panRef.current
-    panRef.current = null
-    if (pan && !pan.moved) setSelected(null)
-  }
-
-  const sim = simRef.current
   const selectedNode = nodes.find((node) => node.id === selected)
   const selectedLinks = selected ? graph.edges
     .filter((edge) => edge.from === selected || edge.to === selected)
@@ -495,15 +213,14 @@ export default function ProjectRuntimeGraph({ data }) {
         </div>
       </div>
 
-      <div className="project-graph-wrap" ref={wrapRef}>
-        <svg className="project-graph" ref={svgRef} viewBox={`0 0 ${VIEW.w} ${VIEW.h}`}
+      <div className="project-graph-wrap" ref={engine.wrapRef}>
+        <svg className="project-graph" ref={engine.svgRef} viewBox={`0 0 ${engine.VIEW.w} ${engine.VIEW.h}`}
           role="img" aria-label={`Running now graph for ${data.project.name}`}
-          onPointerDown={startPan} onPointerMove={movePan}
-          onPointerUp={endPan} onPointerCancel={endPan}>
-          <g transform={`translate(${VIEW.w / 2 + view.x} ${VIEW.h / 2 + view.y}) scale(${view.zoom})`}>
+          {...engine.svgHandlers}>
+          <g transform={`translate(${engine.VIEW.w / 2 + view.x} ${engine.VIEW.h / 2 + view.y}) scale(${view.zoom})`}>
             {visibleEdges.map((edge) => {
-              const from = sim?.index.get(edge.from)
-              const to = sim?.index.get(edge.to)
+              const from = settled.get(edge.from)
+              const to = settled.get(edge.to)
               if (!from || !to) return null
               const dim = focusSet && !(focusSet.has(edge.from) && focusSet.has(edge.to))
               const hot = focusSet && focusSet.has(edge.from) && focusSet.has(edge.to)
@@ -521,8 +238,8 @@ export default function ProjectRuntimeGraph({ data }) {
                 a click-selection made three "contains" labels compete. */}
             {hovered && visibleEdges.filter((edge) => focusSet.has(edge.from) && focusSet.has(edge.to))
               .map((edge) => {
-                const from = sim?.index.get(edge.from)
-                const to = sim?.index.get(edge.to)
+                const from = settled.get(edge.from)
+                const to = settled.get(edge.to)
                 if (!from || !to) return null
                 return (
                   <text key={`label-${edge.from}->${edge.to}`} className="graph-edge-label"
@@ -533,7 +250,7 @@ export default function ProjectRuntimeGraph({ data }) {
                 )
               })}
             {visibleNodes.map((node) => {
-              const point = sim?.index.get(node.id)
+              const point = settled.get(node.id)
               if (!point) return null
               const dim = focusSet && !focusSet.has(node.id)
               const isFocus = focusId === node.id
@@ -542,16 +259,9 @@ export default function ProjectRuntimeGraph({ data }) {
                   className={`graph-node type-${node.type}${dim ? ' dim' : ''}${isFocus ? ' focus' : ''}${point.fixed ? ' pinned' : ''}`}
                   role="button" tabIndex="0"
                   aria-label={`${TYPE_META[node.type].title} ${node.label}, ${node.degree} connections`}
-                  onPointerDown={(event) => startNodeDrag(event, point)}
-                  onPointerMove={moveNode}
-                  onPointerUp={(event) => endNode(event, node)}
+                  {...engine.nodeHandlers(point, node)}
                   onPointerEnter={() => setHovered(node.id)}
                   onPointerLeave={() => setHovered((current) => (current === node.id ? null : current))}
-                  onDoubleClick={(event) => {
-                    event.stopPropagation()
-                    point.fixed = false
-                    setAwake(true)
-                  }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()

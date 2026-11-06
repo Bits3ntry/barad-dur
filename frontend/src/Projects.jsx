@@ -61,6 +61,134 @@ function VersionVulnerabilities({ rows }) {
   )
 }
 
+/* Eleven builds of one component are read as a column: a 40-character sha in a
+   table cell is noise, so the row shows its first eight and keeps the whole
+   label in the tooltip. A tag or a branch name passes through untouched. */
+const SHA_LABEL = /^[0-9a-f]{7,40}$/i
+
+function shortLabel(value) {
+  return SHA_LABEL.test(value || '') ? String(value).slice(0, 8) : value
+}
+
+/* The mix, not just the total: a build with three criticals and a build with
+   forty lows are not the same Tuesday, and a number alone cannot say which one
+   you are looking at. */
+const BAR_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
+
+function SeverityBar({ counts = {}, width = 96 }) {
+  const shown = BAR_ORDER.filter((severity) => counts[severity] > 0)
+  const total = shown.reduce((sum, severity) => sum + counts[severity], 0)
+  if (!total) return <span className="sev-bar is-empty" style={{ width }} title="no open finding" />
+  return (
+    <span className="sev-bar" style={{ width }}
+      title={shown.map((severity) => `${counts[severity]} ${severity.toLowerCase()}`).join(' · ')}>
+      {shown.map((severity) => (
+        <i key={severity} className={`sev-bar-${severity.toLowerCase()}`}
+          style={{ flexGrow: counts[severity] }} />
+      ))}
+    </span>
+  )
+}
+
+function NeedsAttribution({ intakes, components, versions, busy, onAssign }) {
+  if (!intakes.length) return null
+  return (
+    <Card title="Needs attribution"
+      actions={<span className="count">{plural(intakes.length, 'CI scan')}</span>}>
+      <p className="muted attribution-intro">
+        These scans reached this project through a repository, but could not be tied to one
+        component. Choose the component before the scan can proceed; a version is optional.
+      </p>
+      <div className="attribution-list">
+        {intakes.map((intake) => (
+          <AttributionIntake key={intake.id} intake={intake} components={components}
+            versions={versions} busy={busy === `attribution:${intake.id}`}
+            onAssign={onAssign} />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function AttributionIntake({ intake, components, versions, busy, onAssign }) {
+  const suggested = components.find((component) => intake.candidates?.includes(component.id))
+  const [componentId, setComponentId] = useState(suggested?.id || '')
+  const [versionId, setVersionId] = useState('')
+  const [note, setNote] = useState('')
+  const [localError, setLocalError] = useState('')
+  const subject = intake.subject || {}
+  const componentVersions = versions.filter((version) => version.component_id === componentId)
+
+  async function submit(event) {
+    event.preventDefault()
+    if (!componentId) {
+      setLocalError('Choose the component that owns this scan.')
+      return
+    }
+    setLocalError('')
+    const selectedVersion = componentVersions.find((version) => version.id === versionId)
+    const assigned = await onAssign(intake, {
+      component: componentId,
+      version: selectedVersion?.version,
+      note: note.trim() || undefined,
+    })
+    if (assigned) {
+      setNote('')
+      setVersionId('')
+    }
+  }
+
+  return (
+    <section className="attribution-intake">
+      <div className="attribution-subject">
+        <strong className="mono">{subject.repository || 'repository not recorded'}</strong>
+        <span className="muted">
+          {[subject.branch, subject.commit && String(subject.commit).slice(0, 12),
+            subject.pull_request && `PR ${subject.pull_request}`].filter(Boolean).join(' · ') ||
+            'CI scan awaiting an owner'}
+        </span>
+        {subject.version && <span className="pill mono">reported {subject.version}</span>}
+      </div>
+      <form className="attribution-form" onSubmit={submit}>
+        <label>
+          Component
+          <select value={componentId} disabled={busy} onChange={(event) => {
+            setComponentId(event.target.value)
+            setVersionId('')
+          }}>
+            <option value="">choose component…</option>
+            {components.map((component) => (
+              <option key={component.id} value={component.id}>
+                {component.name}{intake.candidates?.includes(component.id) ? ' · suggested' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Version <span className="onb-optional">optional</span>
+          <select value={versionId} disabled={busy || !componentId}
+            onChange={(event) => setVersionId(event.target.value)}>
+            <option value="">no version</option>
+            {componentVersions.map((version) => (
+              <option key={version.id} value={version.id}>{version.version}</option>
+            ))}
+          </select>
+        </label>
+        <label className="attribution-note">
+          Note <span className="onb-optional">optional</span>
+          <input value={note} disabled={busy} placeholder="Why this component owns the scan"
+            onChange={(event) => setNote(event.target.value)} />
+        </label>
+        <button className="btn-primary" type="submit" disabled={busy || !components.length}>
+          {busy ? 'assigning…' : 'assign'}
+        </button>
+      </form>
+      {!components.length && <p className="attribution-error">Add a component before assigning this scan.</p>}
+      {localError && <p className="attribution-error" role="alert">{localError}</p>}
+    </section>
+  )
+}
+
 function slugify(value) {
   return (value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120)
@@ -90,7 +218,7 @@ function fail(setError) {
 }
 
 export default function Projects({ onNavigate, slug = '', tab = 'summary',
-                                   onOpenProject, onProjectTab, onCloseProject }) {
+                                   onOpenProject, onOpenVersion, onProjectTab, onCloseProject }) {
   const [view, setView] = useState('projects')
   const [list, setList] = useState(null)
   const [pending, setPending] = useState(null)
@@ -154,6 +282,7 @@ export default function Projects({ onNavigate, slug = '', tab = 'summary',
   if (slug) {
     return <ProjectInventory refSlug={slug} initialTab={tab}
       onNavigate={onNavigate}
+      onOpenVersion={onOpenVersion}
       onTab={onProjectTab}
       onBack={() => {
         if (onCloseProject) onCloseProject()
@@ -195,18 +324,13 @@ export default function Projects({ onNavigate, slug = '', tab = 'summary',
       {view === 'projects' && (
         !list ? <Card><Loading rows={4} /></Card> : (
           <>
-            <div className="metrics">
-              <Stat label={unit(projects.length, 'project')} value={projects.length} />
-              <Stat label={unit(sum(projects, 'components'), 'component')}
-                value={sum(projects, 'components')} />
-              <Stat label={unit(new Set(projects.flatMap((p) => p.counts?.environments || [])).size,
-                'environment')}
-                value={new Set(projects.flatMap((p) => p.counts?.environments || [])).size} />
-              <Stat label={unit(sum(projects, 'repositories'), 'repository', 'repositories')}
-                value={sum(projects, 'repositories')} />
-              <Stat label={unit(sum(projects, 'assets'), 'asset')}
-                value={sum(projects, 'assets')} />
-            </div>
+            <p className="inventory-summary">
+              <strong>{projects.length}</strong> {unit(projects.length, 'project')} ·
+              <strong>{sum(projects, 'components')}</strong> {unit(sum(projects, 'components'), 'component')} ·
+              <strong>{new Set(projects.flatMap((p) => p.counts?.environments || [])).size}</strong> {unit(new Set(projects.flatMap((p) => p.counts?.environments || [])).size, 'environment')} ·
+              <strong>{sum(projects, 'repositories')}</strong> {unit(sum(projects, 'repositories'), 'repository', 'repositories')} ·
+              <strong>{sum(projects, 'assets')}</strong> {unit(sum(projects, 'assets'), 'asset')}
+            </p>
 
             {!projects.length ? (
               <Card>
@@ -467,9 +591,9 @@ function ProjectForm({ mode, initial, groups = [], onClose, onSubmit }) {
 
 /* ───────────────────────── one project ───────────────────────── */
 
-function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNavigate }) {
+function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNavigate, onOpenVersion }) {
   const [data, setData] = useState(null)
-  const [vulnerabilities, setVulnerabilities] = useState([])
+  const [attributionIntakes, setAttributionIntakes] = useState([])
   const [tab, setTab] = useState(initialTab)
 
   // Back/forward rewrites the URL; the tab follows it.
@@ -530,12 +654,14 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
 
   function load() {
     setError('')
+    // Each version arrives with the counts of its own findings, so this screen
+    // no longer pulls the whole vulnerability list to count them again.
     return Promise.all([
       api.get(`/api/v1/projects/${encodeURIComponent(refSlug)}/inventory`),
-      api.get(`/api/v1/vulnerabilities?project=${encodeURIComponent(refSlug)}&limit=500`),
-    ]).then(([inventory, exposure]) => {
+      api.get('/api/v1/scans/attribution-intakes'),
+    ]).then(([inventory, intakes]) => {
       setData(inventory.data)
-      setVulnerabilities(exposure.data || [])
+      setAttributionIntakes(intakes.data || [])
     })
       .catch(fail(setError))
   }
@@ -555,6 +681,21 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
     } finally { setBusy('') }
   }
 
+  async function assignAttribution(intake, assignment) {
+    setBusy(`attribution:${intake.id}`)
+    setError('')
+    setNotice('')
+    try {
+      await api.post(`/api/v1/scans/attribution-intakes/${encodeURIComponent(intake.id)}/assign`, assignment)
+      setNotice('CI scan assigned to its component.')
+      await load()
+      return true
+    } catch (e) {
+      setError(String(e.message || e))
+      return false
+    } finally { setBusy('') }
+  }
+
   if (!data) {
     return (
       <div className="stack">
@@ -566,17 +707,8 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
 
   const { project, components, repositories, deployments, environments, assets,
     versions = [] } = data
-  const vulnerabilitiesByVersion = new Map()
-  for (const vulnerability of vulnerabilities) {
-    for (const placement of vulnerability.versions || []) {
-      if (placement.project !== project.slug) continue
-      const key = `${placement.component_id || '__wide'}::${placement.version}`
-      const rows = vulnerabilitiesByVersion.get(key) || []
-      rows.push(vulnerability)
-      vulnerabilitiesByVersion.set(key, rows)
-    }
-  }
-  const versionsByComponent = new Map(components.map((c) => [c.id, c.versions]))
+  const pendingAttributions = attributionIntakes.filter((intake) =>
+    intake.status === 'needs_attribution' && intake.subject?.project === project.slug)
   const setupComplete = [components, versions, deployments, assets].every((rows) => rows.length > 0)
 
   return (
@@ -735,6 +867,8 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
 
       {tab === 'components' && (
         <>
+          <NeedsAttribution intakes={pendingAttributions} components={components} versions={versions}
+            busy={busy} onAssign={assignAttribution} />
           <Card title="Components"
             actions={(
               <div className="row">
@@ -759,10 +893,21 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                 </button>
               </div>
             ) : (
+              <>
+              <p className="version-legend muted">
+                <span className="version-legend-bar" aria-hidden="true">
+                  <i className="sev-bar-critical" /><i className="sev-bar-high" />
+                  <i className="sev-bar-medium" /><i className="sev-bar-low" />
+                </span>
+                bar = that build's open dependency findings, worst first
+                (critical, high, medium, low) · the code and secrets columns are
+                source findings, from SAST and the secret scanner · newest build first
+              </p>
               <div className="component-tree">
                 {components.map((component) => {
                   const componentVersions = versions.filter(
                     (row) => row.component_id === component.id)
+                  const latest = componentVersions[0]
                   const isOpen = openComponents.has(component.id)
                   const shown = shownVersions[component.id] || 5
                   const visible = componentVersions.slice(0, shown)
@@ -788,6 +933,25 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                           </span>
                         </button>
                         <div className="row component-actions">
+                          {latest && (
+                            <span className="component-summary"
+                              title={`newest build: ${latest.version}`}>
+                              {latest.sbom_imports ? (
+                                <>
+                                  <SeverityBar counts={latest.findings?.by_severity} width={72} />
+                                  <span className="muted">
+                                    {shortLabel(latest.version)} · {latest.findings?.vulns || 0} vulns
+                                    {latest.findings?.code ? ` · ${latest.findings.code} code` : ''}
+                                    {latest.findings?.secrets ? ` · ${latest.findings.secrets} secrets` : ''}
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="muted">
+                                  {shortLabel(latest.version)} · not analysed
+                                </span>
+                              )}
+                            </span>
+                          )}
                           <button className="mini"
                             onClick={() => setDialog({ kind: 'version', presetComponent: component.id })}>
                             new version
@@ -826,44 +990,104 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                             <>
                               <table className="version-tree">
                                 <thead>
-                                  <tr><th>version</th><th>runs in</th><th></th></tr>
+                                  <tr>
+                                    <th>version</th>
+                                    <th>deployed</th>
+                                    <th>inventory</th>
+                                    <th title="open dependency findings on this build">vulns</th>
+                                    <th className="num"
+                                      title="code weaknesses reported by a SAST run on this build">code</th>
+                                    <th className="num"
+                                      title="leaked credentials reported by a secret scanner on this build">secrets</th>
+                                    <th className="num"
+                                      title="record which environment this build runs in">deploy</th>
+                                  </tr>
                                 </thead>
                                 <tbody>
-                                  {visible.map((version) => (
-                                    <React.Fragment key={version.id}>
-                                    <tr>
-                                      <td className="mono version-label">
-                                        {version.version}
-                                        {version.sbom_imports ? (
-                                          <span className="version-note">
-                                            {plural(version.sbom_imports, 'SBOM import')}
-                                            {version.baseline ? ' · baseline' : ''}
-                                          </span>
-                                        ) : null}
-                                      </td>
-                                      <td>
-                                        {version.deployments.length
-                                          ? version.deployments.map((dep) => (
-                                            <span className="pill env-pill" key={dep.deployment_id}>
-                                              {dep.environment}
+                                  {visible.map((version) => {
+                                    const counts = version.findings || {}
+                                    return (
+                                      <tr key={version.id}>
+                                        <td className="mono version-label">
+                                          <button className="version-open" title={version.version}
+                                            onClick={() => onOpenVersion?.(
+                                              project.slug, component.slug || component.name,
+                                              version.version)}>
+                                            {shortLabel(version.version)}
+                                          </button>
+                                          {version.baseline && <span className="pill version-baseline">baseline</span>}
+                                        </td>
+                                        <td className="version-envs">
+                                          {version.deployments.length
+                                            ? version.deployments.map((dep) => (
+                                              <span className="pill env-pill" key={dep.deployment_id}>
+                                                {dep.environment}
+                                              </span>
+                                            ))
+                                            : <span className="muted">—</span>}
+                                        </td>
+                                        <td>
+                                          <div className="version-inventory">
+                                            {version.sbom_imports ? (
+                                              <>
+                                                <span>{version.components} components</span>
+                                                <span className="muted">
+                                                  {plural(version.sbom_imports, 'SBOM import')}
+                                                </span>
+                                              </>
+                                            ) : (
+                                              <span className="muted"
+                                                title="no BOM was imported for this label: the build exists, its contents do not">
+                                                no BOM
+                                              </span>
+                                            )}
+                                          </div>
+                                        </td>
+                                        <td>
+                                          {/* A build with no BOM was never analysed:
+                                              a 0 here would read as "clean". */}
+                                          {version.sbom_imports ? (
+                                            <div className="version-findings">
+                                              <SeverityBar counts={counts.by_severity} />
+                                              <span className={counts.vulns ? 'version-count' : 'muted'}>
+                                                {counts.vulns || 0}
+                                              </span>
+                                            </div>
+                                          ) : (
+                                            <span className="muted"
+                                              title="nothing imported for this label, so nothing has been analysed">
+                                              not analysed
                                             </span>
-                                          ))
-                                          : <span className="muted">not deployed</span>}
-                                      </td>
-                                      <td className="row version-actions">
-                                        <button className="mini"
-                                          onClick={() => setDialog({
-                                            kind: 'deployment', presetComponent: component.id,
-                                            presetVersion: version.version,
-                                          })}>
-                                          deploy
-                                        </button>
-                                      </td>
-                                    </tr>
-                                    <VersionVulnerabilities rows={vulnerabilitiesByVersion.get(
-                                      `${component.id}::${version.version}`) || []} />
-                                    </React.Fragment>
-                                  ))}
+                                          )}
+                                          {counts.dismissed > 0 && (
+                                            <div className="muted version-settled"
+                                              title="settled findings are listed on the build, and do not count as open">
+                                              {counts.dismissed} settled · not counted
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td className="num">
+                                          {counts.code
+                                            ? <span className="version-count">{counts.code}</span>
+                                            : <span className="muted">—</span>}
+                                        </td>
+                                        <td className="num">
+                                          {counts.secrets
+                                            ? <span className="version-count">{counts.secrets}</span>
+                                            : <span className="muted">—</span>}
+                                        </td>
+                                        <td className="row version-actions">
+                                          <button className="mini"
+                                            onClick={() => setDialog({
+                                              kind: 'deployment', presetComponent: component.id,
+                                              presetVersion: version.version,
+                                            })}>
+                                            deploy
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    )
+                                  })}
                                 </tbody>
                               </table>
                               {(hidden > 0 || shown > 5) && (
@@ -873,7 +1097,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                       onClick={() => setShownVersions((current) => ({
                                         ...current, [component.id]: shown + 5,
                                       }))}>
-                                      show 5 more ({hidden} hidden)
+                                      show {hidden} more
                                     </button>
                                   )}
                                   {shown > 5 && hidden > 0 && (
@@ -948,8 +1172,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                               </td>
                               <td />
                             </tr>
-                            <VersionVulnerabilities rows={vulnerabilitiesByVersion.get(
-                              `__wide::${version.version}`) || []} />
+
                             </React.Fragment>
                           ))}
                         </tbody>
@@ -958,6 +1181,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                   </section>
                 )}
               </div>
+              </>
             )}
           </Card>
 

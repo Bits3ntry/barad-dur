@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
 import {
-  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Select, Table, Tabs,
+  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Pager, Select, Table,
+  Tabs, usePage,
 } from './ui'
 
 /* Assets answers four different questions, so it has four tabs: what is in the
@@ -16,6 +17,10 @@ const CLASSIFICATIONS = [
   { value: 'external', label: 'external / not ours' },
   { value: 'discarded', label: 'discarded' },
 ]
+
+/* Every list on this screen arrives whole — the search is applied by the
+   platform, not by a limit — so the screen slices what it was given. */
+const PER_PAGE = 25
 
 function certificateTone(days) {
   if (days === null || days === undefined) return ''
@@ -88,6 +93,17 @@ export default function Assets() {
   const [activityAsset, setActivityAsset] = useState('')
   const [edit, setEdit] = useState({ ...EMPTY_EDIT })
   const [projects, setProjects] = useState([])
+
+  // One page state per table, so walking the inventory does not move the
+  // activity page. Each hook clamps itself when a reload shrinks its list.
+  const pagedAssets = usePage(assets, PER_PAGE)
+  const pagedAttention = usePage(attention, PER_PAGE)
+  const pagedGroups = usePage(groups, PER_PAGE)
+  const pagedActivity = usePage(activity, PER_PAGE)
+
+  // A new filter is a new question: page four of the old answer is not it.
+  useEffect(() => { pagedAssets.setPage(0) }, [filters.q, filters.type, filters.classification])
+  useEffect(() => { pagedActivity.setPage(0) }, [activityAsset])
 
   useEffect(() => { load() }, [])
   useEffect(() => {
@@ -370,12 +386,15 @@ export default function Assets() {
             <input id="principal" value={principal} style={{ minWidth: 150 }}
               onChange={(e) => rememberPrincipal(e.target.value)}
               title="The identity grants are issued to; collection is authorized per principal" />
+            <Pager page={pagedAssets.page} pages={pagedAssets.pages}
+              onChange={pagedAssets.setPage} total={pagedAssets.total}
+              perPage={PER_PAGE} unit="assets" className="row-end" />
           </div>
 
           {assets.length ? (
             <Table head={['type', 'value', 'owner · project', 'groups', 'addresses',
               'certificate', 'last observed', '']}>
-              {assets.map((asset) => (
+              {pagedAssets.rows.map((asset) => (
                 <React.Fragment key={asset.id}>
                   <tr className={history?.assetId === asset.id ? 'selected' : ''}>
                     <td><span className="pill">{asset.type}</span></td>
@@ -453,6 +472,10 @@ export default function Assets() {
               hint="Sweep a seed domain to discover hosts, or add one manually below." />
           )}
 
+          <Pager page={pagedAssets.page} pages={pagedAssets.pages}
+            onChange={pagedAssets.setPage} total={pagedAssets.total}
+            perPage={PER_PAGE} unit="assets" className="row-end" />
+
           <div className="toolbar">
             <input placeholder="seed domain, e.g. bitsentry.xyz" value={domain}
               onChange={(e) => setDomain(e.target.value)}
@@ -478,13 +501,20 @@ export default function Assets() {
 
       {tab === 'attention' && (
         <>
-          <p className="muted">
-            Computed from the inventory on every load. Each row names what is missing;
-            &ldquo;never observed&rdquo; is a coverage gap, not a statement that the host is gone.
-          </p>
+          {/* No filter row here, so the sentence that explains the table and the
+              pager share the line above it instead of adding a bar of their own. */}
+          <div className="toolbar">
+            <p className="muted" style={{ margin: 0, flex: '1 1 360px' }}>
+              Computed from the inventory on every load. Each row names what is missing;
+              &ldquo;never observed&rdquo; is a coverage gap, not a statement that the host is gone.
+            </p>
+            <Pager page={pagedAttention.page} pages={pagedAttention.pages}
+              onChange={pagedAttention.setPage} total={pagedAttention.total}
+              perPage={PER_PAGE} unit="assets" className="row-end" />
+          </div>
           {attention.length ? (
             <Table head={['asset', 'why it needs attention', 'fix', '']}>
-              {attention.map((row) => (
+              {pagedAttention.rows.map((row) => (
                 <tr key={row.asset.id}>
                   <td className="title">
                     {row.asset.value}
@@ -510,6 +540,10 @@ export default function Assets() {
             !error && <EmptyState title="Nothing needs attention"
               hint="Every asset has an owner, a project, a confirmed classification and a deployment relation." />
           )}
+
+          <Pager page={pagedAttention.page} pages={pagedAttention.pages}
+            onChange={pagedAttention.setPage} total={pagedAttention.total}
+            perPage={PER_PAGE} unit="assets" className="row-end" />
         </>
       )}
 
@@ -521,10 +555,13 @@ export default function Assets() {
             </span>
             <span className="spacer" />
             <button onClick={() => setGroupDialog(true)}>new group</button>
+            <Pager page={pagedGroups.page} pages={pagedGroups.pages}
+              onChange={pagedGroups.setPage} total={pagedGroups.total}
+              perPage={PER_PAGE} unit="groups" className="row-end" />
           </div>
           {groups.length ? (
             <Table head={['group', 'description', 'members', 'stakeholders', '']}>
-              {groups.map((row) => (
+              {pagedGroups.rows.map((row) => (
                 <tr key={row.id} className={group?.id === row.id ? 'selected' : ''}>
                   <td className="title">
                     {row.name}
@@ -554,6 +591,10 @@ export default function Assets() {
             !error && <EmptyState title="No groups yet"
               hint="Create one for the assets you read together — production domains, a customer estate, an acquisition." />
           )}
+
+          <Pager page={pagedGroups.page} pages={pagedGroups.pages}
+            onChange={pagedGroups.setPage} total={pagedGroups.total}
+            perPage={PER_PAGE} unit="groups" className="row-end" />
 
           {group && (
             <div className="detail" style={{ marginTop: 12 }}>
@@ -633,10 +674,13 @@ export default function Assets() {
             <span className="muted">
               The same ledger the Audit trail reads; every row says who, what and when.
             </span>
+            <Pager page={pagedActivity.page} pages={pagedActivity.pages}
+              onChange={pagedActivity.setPage} total={pagedActivity.total}
+              perPage={PER_PAGE} unit="entries" className="row-end" />
           </div>
           {activity.length ? (
             <Table head={['when', 'actor', 'action', 'resource', 'detail']}>
-              {activity.map((row) => (
+              {pagedActivity.rows.map((row) => (
                 <tr key={row.id}>
                   <td className="muted">{new Date(row.at).toLocaleString()}</td>
                   <td>{row.actor}</td>
@@ -650,6 +694,10 @@ export default function Assets() {
             !error && <EmptyState title="No activity recorded yet"
               hint="Adding an asset, editing ownership or moving it between groups writes a row here." />
           )}
+
+          <Pager page={pagedActivity.page} pages={pagedActivity.pages}
+            onChange={pagedActivity.setPage} total={pagedActivity.total}
+            perPage={PER_PAGE} unit="entries" className="row-end" />
         </>
       )}
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { PageHeader } from './ui'
+import { PageHeader, Pager, usePage } from './ui'
 
 export default function Licenses({ projects }) {
   const [policies, setPolicies] = useState([])
@@ -12,6 +12,13 @@ export default function Licenses({ projects }) {
   const [evalState, setEvalState] = useState({ project: '', version: '', result: null, error: '' })
   const [exForm, setExForm] = useState({ component_identity: '', license_id: '', reason: '', approved_by: 'console' })
   const [error, setError] = useState('')
+
+  // Three tables, three questions: the verdicts of the build just evaluated,
+  // the org's policies, the org's exceptions. They grow independently, so each
+  // keeps its own cursor instead of sharing one page number.
+  const verdictPage = usePage(evalState.result?.results || [], 25)
+  const policyPage = usePage(policies, 25)
+  const exceptionPage = usePage(exceptions, 25)
 
   useEffect(() => { load() }, [])
 
@@ -60,6 +67,9 @@ export default function Licenses({ projects }) {
 
   const project = projects.find((p) => p.name === evalState.project)
   const counts = evalState.result?.counts
+  // The row key includes a position: paging must not hand a row the index its
+  // neighbour had on the previous page.
+  const verdictStart = verdictPage.page * verdictPage.perPage
 
   return (
     <div className="stack">
@@ -89,12 +99,15 @@ export default function Licenses({ projects }) {
             <span className="pill">{counts.unknown} unknown</span>
             <span className="pill">{counts.excepted} excepted</span>
             <span className="pill">{counts.unlicensed} unlicensed</span>
+            <Pager page={verdictPage.page} pages={verdictPage.pages}
+              onChange={verdictPage.setPage} total={verdictPage.total}
+              perPage={verdictPage.perPage} unit="components" className="row-end" />
           </div>
           <table>
             <thead><tr><th>component</th><th>version</th><th>license</th><th>verdict</th><th>reason</th></tr></thead>
             <tbody>
-              {evalState.result.results.map((row, index) => (
-                <tr key={`${row.identity_key}-${row.license}-${index}`} className={row.verdict === 'denied' ? '' : 'muted-row'}>
+              {verdictPage.rows.map((row, index) => (
+                <tr key={`${row.identity_key}-${row.license}-${verdictStart + index}`} className={row.verdict === 'denied' ? '' : 'muted-row'}>
                   <td className="title">{row.component || '—'}</td>
                   <td>{row.version || '—'}</td>
                   <td>{row.license || '—'}</td>
@@ -108,13 +121,21 @@ export default function Licenses({ projects }) {
               ))}
             </tbody>
           </table>
+          <Pager page={verdictPage.page} pages={verdictPage.pages}
+            onChange={verdictPage.setPage} total={verdictPage.total}
+            perPage={verdictPage.perPage} unit="components" className="row-end" />
         </>
       )}
-      <h2 className="section">license policies</h2>
+      <div className="row">
+        <h2 className="section">license policies</h2>
+        <Pager page={policyPage.page} pages={policyPage.pages}
+          onChange={policyPage.setPage} total={policyPage.total}
+          perPage={policyPage.perPage} unit="policies" className="row-end" />
+      </div>
       <table>
         <thead><tr><th>name</th><th>scope</th><th>allow</th><th>deny</th><th>status</th><th></th></tr></thead>
         <tbody>
-          {policies.map((p) => (
+          {policyPage.rows.map((p) => (
             <tr key={p.id} className={p.status === 'disabled' ? 'muted-row' : ''}>
               <td className="title">{p.name}</td>
               <td>{p.scope_type}</td>
@@ -126,6 +147,9 @@ export default function Licenses({ projects }) {
           ))}
         </tbody>
       </table>
+      <Pager page={policyPage.page} pages={policyPage.pages}
+        onChange={policyPage.setPage} total={policyPage.total}
+        perPage={policyPage.perPage} unit="policies" className="row-end" />
       <div className="card">
         <input placeholder="policy name" value={form.name}
           onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
@@ -150,11 +174,16 @@ export default function Licenses({ projects }) {
         </select>
         <button onClick={createPolicy}>create policy</button>
       </div>
-      <h2 className="section">exceptions</h2>
+      <div className="row">
+        <h2 className="section">exceptions</h2>
+        <Pager page={exceptionPage.page} pages={exceptionPage.pages}
+          onChange={exceptionPage.setPage} total={exceptionPage.total}
+          perPage={exceptionPage.perPage} unit="exceptions" className="row-end" />
+      </div>
       <table>
         <thead><tr><th>component identity</th><th>license</th><th>approved by</th><th>expires</th><th>reason</th></tr></thead>
         <tbody>
-          {exceptions.map((x) => (
+          {exceptionPage.rows.map((x) => (
             <tr key={x.id}>
               <td className="muted">{x.component_identity}</td>
               <td>{x.license_id}</td>
@@ -165,6 +194,9 @@ export default function Licenses({ projects }) {
           ))}
         </tbody>
       </table>
+      <Pager page={exceptionPage.page} pages={exceptionPage.pages}
+        onChange={exceptionPage.setPage} total={exceptionPage.total}
+        perPage={exceptionPage.perPage} unit="exceptions" className="row-end" />
       <div className="toolbar">
         <input placeholder="component identity key" value={exForm.component_identity}
           onChange={(e) => setExForm((f) => ({ ...f, component_identity: e.target.value }))} />

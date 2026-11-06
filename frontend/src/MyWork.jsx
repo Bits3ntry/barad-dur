@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import {
-  Dialog, EmptyState, ErrorBanner, Input, PageHeader, SeverityBadge, Table, Tabs,
+  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Pager, SeverityBadge, Table,
+  Tabs, usePage,
 } from './ui'
 
 /* My work is six trays over persisted rows: findings assigned to me, work items
@@ -84,6 +85,14 @@ export default function MyWork() {
   }
 
   const current = trays[tab] || { count: 0, items: [] }
+  // A tray arrives whole — it is one person's queue, not the organization's
+  // findings — so paging it here costs no extra request and no server contract.
+  const paged = usePage(tab === 'assigned_to_me'
+    ? (current.findings || []) : (current.items || []), 25)
+  const pagerNode = (
+    <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+      total={paged.total} perPage={paged.perPage} unit="rows" />
+  )
 
   return (
     <div className="stack">
@@ -104,6 +113,7 @@ export default function MyWork() {
           <span>next 72h (including overdue)</span>
         </label>
         <button className="mini" onClick={load}>refresh</button>
+        <span className="row-end">{pagerNode}</span>
       </div>
 
       {error && <ErrorBanner error={error} />}
@@ -120,7 +130,7 @@ export default function MyWork() {
       {tab === 'assigned_to_me' && (
         (current.findings || []).length ? (
           <Table head={['finding', 'severity', 'status', 'SLA']}>
-            {current.findings.map((row) => (
+            {paged.rows.map((row) => (
               <tr key={row.id}>
                 <td className="title">{row.title || row.id.slice(0, 8)}</td>
                 <td><SeverityBadge severity={row.severity} /></td>
@@ -137,6 +147,9 @@ export default function MyWork() {
             hint="Assign a finding to this identity and it appears here." />
         )
       )}
+      {tab === 'assigned_to_me' && paged.pages > 1 && (
+        <div className="row row-end">{pagerNode}</div>
+      )}
 
       {tab !== 'assigned_to_me' && (
         <>
@@ -148,7 +161,7 @@ export default function MyWork() {
           )}
           {(current.items || []).length ? (
             <Table head={['title', 'kind', 'status', 'due', 'assignee', 'reviewer', '']}>
-              {current.items.map((row) => (
+              {paged.rows.map((row) => (
                 <tr key={row.id}>
                   <td className="title">
                     {row.title}
@@ -185,6 +198,9 @@ export default function MyWork() {
               hint="A tray shows only rows you are entitled to see for this identity." />
           )}
         </>
+      )}
+      {tab !== 'assigned_to_me' && paged.pages > 1 && (
+        <div className="row row-end">{pagerNode}</div>
       )}
 
       <Dialog open={creating} title="New work item"

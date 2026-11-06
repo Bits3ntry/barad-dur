@@ -50,6 +50,23 @@ def _location(result: dict):
     return uri, line
 
 
+def _snippet(result: dict) -> str | None:
+    """The code the scanner pointed at, as it saw it.
+
+    SARIF carries it in region.snippet; keeping it is what lets the console show
+    the offending line without reaching back into the repository, at the commit
+    that was actually scanned. Multi-line regions are kept line by line.
+    """
+    locations = result.get("locations") or []
+    if not locations:
+        return None
+    region = (((locations[0] or {}).get("physicalLocation") or {}).get("region") or {})
+    snippet = (region.get("snippet") or {}).get("text")
+    if not isinstance(snippet, str) or not snippet.strip():
+        return None
+    return snippet.strip("\n")[:4000]
+
+
 class SarifIngestIn(BaseModel):
     run: dict = Field(description="one SARIF run object")
     actor: str | None = None
@@ -60,7 +77,10 @@ class SarifIngestIn(BaseModel):
 TASK_CLASS = {
     "sast": ("code-weakness", "sast"),
     "misconfig": ("code-weakness", "misconfig"),
-    "secrets": ("vulnerability", "credential"),
+    # A leaked key is not a CVE: stored as a vulnerability it landed in the
+    # dependency audit next to Trivy's findings, with no advisory and no
+    # component to fix. Its own kind keeps the two lists honest.
+    "secrets": ("secret", "credential"),
     "sbom": ("vulnerability", "dependency-cve"),
 }
 
@@ -106,6 +126,7 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
         message = ((result.get("message") or {}).get("text")
                    or (rules_index.get(rule_id, {}).get("shortDescription") or {}).get("text")
                    or rule_id)
+        snippet = _snippet(result)
         fingerprint = incidents.recipe_fingerprint(
             kind, org_id, proj.id, rule_id, path)
         finding = (session.query(models.Finding)
@@ -117,6 +138,7 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
                 title=message[:512], severity=severity, url=None,
                 detail=f"SARIF {tool_name} {rule_id}", tool=tool_name,
                 rule_id=rule_id, path=path, line=line,
+                reproduction=snippet,
                 last_seen_version_id=pv.id,
                 last_evaluated_run_id=analysis_run_id,
                 first_seen_at=now, last_seen_at=now, updated_at=now)
@@ -136,6 +158,10 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
             finding.kind = kind
             finding.vector = vector
             finding.line = line
+            # The snippet follows the code: a fix moves the line, and the old
+            # text would then point at something that is no longer there.
+            if snippet:
+                finding.reproduction = snippet
             finding.updated_at = now
             counters["existing"] += 1
         incidents.record_occurrence(

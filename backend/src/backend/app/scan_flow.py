@@ -197,6 +197,22 @@ def indicators(job: models.ScanJob, now: datetime.datetime | None = None) -> dic
     }
 
 
+def coverage(job: models.ScanJob) -> str | None:
+    """What the ticket asked the evidence to cover.
+
+    It lives in the signed ticket, not in a column: `diff` on a pull request and
+    `full` on a branch answer different questions, and the console must show
+    which one it is reading instead of assuming.
+    """
+    if not job.ticket_json:
+        return None
+    try:
+        ticket = json.loads(job.ticket_json)
+    except (TypeError, ValueError):
+        return None
+    return ((ticket.get("execution") or {}).get("coverage")) or None
+
+
 def to_data(session: Session, job: models.ScanJob) -> dict:
     subject = json.loads(job.subject or "{}")
     authorization = json.loads(job.authorization) if job.authorization else {}
@@ -206,6 +222,7 @@ def to_data(session: Session, job: models.ScanJob) -> dict:
         "evidence": job.evidence_state,
         "origin": job.origin,
         "executor": job.executor,
+        "coverage": coverage(job),
         "tasks": json.loads(job.tasks or "[]"),
         "subject": subject,
         "project": subject.get("project"),

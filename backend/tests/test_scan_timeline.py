@@ -44,6 +44,14 @@ def flow(tmp_path, monkeypatch):
     session.add(models.ProjectRepository(
         org_id=org.id, project_id=project.id, repository_id=repository.id,
         added_by="santiago"))
+    component = models.ApplicationComponent(
+        org_id=org.id, project_id=project.id, name="Aurea service",
+        slug="aurea-service", kind="service")
+    session.add(component)
+    session.flush()
+    session.add(models.ComponentRepository(
+        org_id=org.id, component_id=component.id, repository_id=repository.id,
+        added_by="santiago"))
     session.commit()
 
     from fastapi.testclient import TestClient

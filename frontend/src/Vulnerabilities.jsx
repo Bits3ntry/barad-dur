@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { EmptyState, ErrorBanner, PageHeader, SeverityBadge, Table } from './ui'
+import { EmptyState, ErrorBanner, PageHeader, Pager, SeverityBadge, Table,
+         serverPager } from './ui'
 
 /* Vulnerabilities is an aggregate over findings this organization actually has,
    not a catalog browser. Every number links back to concrete finding ids, and
@@ -8,6 +9,7 @@ import { EmptyState, ErrorBanner, PageHeader, SeverityBadge, Table } from './ui'
    with the reason instead of rendering a zero. */
 
 const EMPTY_FILTERS = { q: '', severity: '', kev: false, project: '' }
+const PER_PAGE = 25
 
 function EnrichmentCell({ enrichment }) {
   const kev = enrichment.kev
@@ -47,8 +49,12 @@ export default function Vulnerabilities({ onNavigate }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [offset, setOffset] = useState(0)
+  const pager = serverPager(total, PER_PAGE, offset, setOffset)
 
-  useEffect(() => { load() }, [])
+  // Paging and filtering share the offset: a new question starts at page one,
+  // so `apply` only reloads when it is already there.
+  useEffect(() => { load() }, [offset])
   useEffect(() => {
     api.get('/api/v1/projects').then((r) => setProjects(r.data || [])).catch(() => setProjects([]))
   }, [])
@@ -59,7 +65,9 @@ export default function Vulnerabilities({ onNavigate }) {
     if (filters.severity) params.set('severity', filters.severity)
     if (filters.kev) params.set('kev_only', 'true')
     if (filters.project) params.set('project', filters.project)
-    api.get(`/api/v1/vulnerabilities${params.toString() ? '?' + params : ''}`)
+    params.set('limit', PER_PAGE)
+    params.set('offset', offset)
+    api.get(`/api/v1/vulnerabilities?${params}`)
       .then((r) => { setRows(r.data || []); setTotal(r.total || 0) })
       .catch((e) => setError(String(e.message || e)))
   }
@@ -143,7 +151,11 @@ export default function Vulnerabilities({ onNavigate }) {
             onChange={(e) => setFilters((f) => ({ ...f, kev: e.target.checked }))} />
           <span>KEV only</span>
         </label>
-        <button onClick={load}>apply</button>
+        <button onClick={() => (offset === 0 ? load() : setOffset(0))}>apply</button>
+        <span className="row-end">
+          <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
+            total={pager.total} perPage={PER_PAGE} unit="CVEs" />
+        </span>
       </div>
 
       {error && <ErrorBanner error={error} />}
@@ -267,6 +279,12 @@ export default function Vulnerabilities({ onNavigate }) {
       ) : (
         !error && <EmptyState title="No CVE affects this inventory yet"
           hint="This list fills from findings that carry an advisory. Importing an SBOM alone does not create CVEs — run the analysis that matches a version against advisories." />
+      )}
+      {pager.pages > 1 && (
+        <div className="row row-end" style={{ marginTop: 10 }}>
+          <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
+            total={pager.total} perPage={PER_PAGE} unit="CVEs" />
+        </div>
       )}
     </div>
   )

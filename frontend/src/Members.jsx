@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { PageHeader } from './ui'
+import { Pager, PageHeader, usePage } from './ui'
 import { ROLE_ORDER, roleLabel } from './roles'
 
 const ROLES = ROLE_ORDER
 const CREATABLE = ['admin', 'analyst', 'viewer']
+const PER_PAGE = 25
 
 export default function Members() {
   const [members, setMembers] = useState([])
@@ -17,6 +18,13 @@ export default function Members() {
   const [inviteForm, setInviteForm] = useState({ email: '', role: 'viewer' })
   const [inviteLink, setInviteLink] = useState('')
   const [error, setError] = useState('')
+
+  // Four lists live on this screen and each is bounded by its own endpoint, so
+  // each gets its own page: a long ledger must not bury the invitation form.
+  const accounts = usePage(users, PER_PAGE)
+  const invitations = usePage(invites, PER_PAGE)
+  const named = usePage(members, PER_PAGE)
+  const ledger = usePage(audit.data, PER_PAGE)
 
   useEffect(() => { load() }, [])
 
@@ -104,10 +112,12 @@ export default function Members() {
       <PageHeader title="Members and access" />
       <h2 className="section">accounts (login users)</h2>
       {userError && <div className="banner banner-error">{userError}</div>}
+      <Pager page={accounts.page} pages={accounts.pages} onChange={accounts.setPage}
+        total={accounts.total} perPage={accounts.perPage} unit="accounts" className="row-end" />
       <table>
         <thead><tr><th>email</th><th>role</th><th>status</th><th>last login</th><th></th></tr></thead>
         <tbody>
-          {users.map((row) => (
+          {accounts.rows.map((row) => (
             <tr key={row.id}>
               <td className="title">{row.email}</td>
               <td>
@@ -130,6 +140,8 @@ export default function Members() {
           ))}
         </tbody>
       </table>
+      <Pager page={accounts.page} pages={accounts.pages} onChange={accounts.setPage}
+        total={accounts.total} perPage={accounts.perPage} unit="accounts" className="row-end" />
       {!users.length && !userError && <p className="empty">No accounts yet — bootstrap the first owner from Settings.</p>}
       <div className="card">
         <input placeholder="email" value={user.email}
@@ -146,13 +158,15 @@ export default function Members() {
           here until accepted or revoked, and the single-use link is the only
           way to hand it over when the deployment has no SMTP. */}
       <h2 className="section">invitations</h2>
+      <Pager page={invitations.page} pages={invitations.pages} onChange={invitations.setPage}
+        total={invitations.total} perPage={invitations.perPage} unit="invitations" className="row-end" />
       {invites.length === 0
         ? <p className="empty">No invitations. Create one to add a teammate without setting a password for them.</p>
         : (
           <table>
             <thead><tr><th>email</th><th>role</th><th>team</th><th>status</th><th>sent</th><th></th></tr></thead>
             <tbody>
-              {invites.map((row) => (
+              {invitations.rows.map((row) => (
                 <tr key={row.id}>
                   <td className="title">{row.email}</td>
                   <td>{row.role_label || roleLabel(row.role)}</td>
@@ -179,6 +193,8 @@ export default function Members() {
             </tbody>
           </table>
         )}
+      <Pager page={invitations.page} pages={invitations.pages} onChange={invitations.setPage}
+        total={invitations.total} perPage={invitations.perPage} unit="invitations" className="row-end" />
       <form className="card" onSubmit={invite}>
         <input type="email" placeholder="teammate@example.com" value={inviteForm.email}
           onChange={(e) => setInviteForm((f) => ({ ...f, email: e.target.value }))} />
@@ -209,12 +225,14 @@ export default function Members() {
         </select>
         <button onClick={add}>add member</button>
         <span className="count">{members.length} members</span>
+        <Pager page={named.page} pages={named.pages} onChange={named.setPage}
+          total={named.total} perPage={named.perPage} unit="members" className="row-end" />
       </div>
       {error && <div className="banner banner-error">{error}</div>}
       <table>
         <thead><tr><th>identity</th><th>role</th><th>added by</th><th>status</th><th></th></tr></thead>
         <tbody>
-          {members.map((m) => (
+          {named.rows.map((m) => (
             <tr key={m.id} className={m.role === 'viewer' ? 'muted-row' : ''}>
               <td>{m.identity}</td>
               <td>
@@ -229,11 +247,15 @@ export default function Members() {
           ))}
         </tbody>
       </table>
+      <Pager page={named.page} pages={named.pages} onChange={named.setPage}
+        total={named.total} perPage={named.perPage} unit="members" className="row-end" />
       <h2 className="section">audit ledger {audit.chain_ok === false ? <span className="sev sev-critical">chain broken</span> : <span className="ok">verified</span>}</h2>
+      <Pager page={ledger.page} pages={ledger.pages} onChange={ledger.setPage}
+        total={ledger.total} perPage={ledger.perPage} unit="entries" className="row-end" />
       <table>
         <thead><tr><th>#</th><th>at</th><th>actor</th><th>action</th><th>detail</th><th>hash</th></tr></thead>
         <tbody>
-          {audit.data.map((row) => (
+          {ledger.rows.map((row) => (
             <tr key={row.position}>
               <td>{row.position}</td>
               <td>{new Date(row.at).toLocaleString()}</td>
@@ -245,6 +267,8 @@ export default function Members() {
           ))}
         </tbody>
       </table>
+      <Pager page={ledger.page} pages={ledger.pages} onChange={ledger.setPage}
+        total={ledger.total} perPage={ledger.perPage} unit="entries" className="row-end" />
     </div>
   )
 }

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from backend.app.versions import pick_version
@@ -327,6 +328,8 @@ def list_findings(
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    sort: str | None = Query(default=None,
+                             description="severity — worst first; the default is newest first"),
     org: models.Organization = Depends(auth.require_org),
     session: Session = Depends(get_session),
 ):
@@ -375,11 +378,28 @@ def list_findings(
     if vector:
         query = query.filter(models.Finding.vector == vector)
     total = query.count()
-    rows = (query.order_by(models.Finding.last_seen_at.desc())
-            .offset(offset).limit(limit).all())
+    ordering = [models.Finding.last_seen_at.desc()]
+    if sort == "severity":
+        ordering.insert(0, _severity_order())
+    rows = query.order_by(*ordering).offset(offset).limit(limit).all()
 
     data = [finding_data(session, finding) for finding in rows]
     return {"data": data, "total": total, "limit": limit, "offset": offset}
+
+
+def _severity_order():
+    """Worst first, in SQL.
+
+    The list is paginated, so ordering the page the platform returned would
+    order a slice and call it an order. The CASE is built from the shared
+    vocabulary (severity.py) rather than the stored spelling, because producers
+    do not agree on names and a raw 'MODERATE' must not sort as unknown.
+    """
+    return case(
+        *[(func.upper(models.Finding.severity).in_(severity_vocab.raw_variants(name)), rank)
+          for rank, name in enumerate(severity_vocab.SEVERITIES)],
+        else_=len(severity_vocab.SEVERITIES),
+    )
 
 
 def finding_data(session, finding: models.Finding) -> dict:

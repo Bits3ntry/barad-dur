@@ -1,17 +1,48 @@
 # Barad-dûr operations runbook
 
 Verified against the live deployment (compose project `barad-dur`, loopback
-only). Update this file when the deployment contract changes.
+only except the platform API — see below). Update this file when the deployment
+contract changes.
 
 ## Services and ports
 
-| Service | Port (loopback) | Health |
+| Service | Port / bind | Health |
 |---|---|---|
-| platform-api | 8090 | `GET /healthz` → `{"status":"ok"}` |
+| platform-api | 8090, `PLATFORM_API_BIND` (default `127.0.0.1`) | `GET /healthz` → `{"status":"ok"}` |
 | console (nginx) | 8092 | `GET /` (proxies `/api` to platform-api) |
 | postgres | 15443 | `pg_isready` inside container |
 | dependency-track | 18080 / 18081 | DT UI |
 | defectdojo | 18082 | Dojo UI |
+
+### Why the API is not loopback-only
+
+A CI runner job runs in its own container on another Docker network, where a
+`127.0.0.1` publish does not exist. The Shauron action announces the run before
+scanning, so a loopback-only API fails the job on its first step:
+
+```
+error: platform unreachable at http://<host>:8090/api/v1/scans: [Errno 111] Connection refused
+```
+
+Bind the address the Action's `BARAD_URL` variable uses:
+
+```sh
+PLATFORM_API_BIND=0.0.0.0        # .env; LAN reachable, and 127.0.0.1 still works
+# or the host address alone, which keeps the API off every other interface but
+# loses the http://127.0.0.1:8090 shortcut the runbook examples use:
+# PLATFORM_API_BIND=11.11.11.209
+```
+
+Every call still needs an API key (an unauthenticated `POST /api/v1/scans`
+answers 401). Revert to host-only with `PLATFORM_API_BIND=127.0.0.1` — the runner
+then loses the ability to announce, which is the point of the setting.
+
+Proof that a job container can reach it (same network the runner spawns jobs on):
+
+```sh
+docker run --rm --network gitea-sandbox curlimages/curl:8.10.1 \
+  -s -o /dev/null -w '%{http_code}\n' http://11.11.11.209:8090/healthz   # 200
+```
 
 ## Deploy / upgrade procedure
 

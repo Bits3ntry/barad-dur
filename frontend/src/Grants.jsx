@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
-import { Card, Dialog, EmptyState, Loading, PageHeader } from './ui'
+import { Card, Dialog, EmptyState, Loading, Pager, PageHeader, usePage } from './ui'
 
 /* Authorization grants: the ledger of "who may run what, against which targets,
    until when". It is a record first — issuing and simulating are two deliberate
@@ -10,6 +10,7 @@ const TARGET_TYPES = ['domain', 'wildcard_domain', 'ip', 'cidr', 'url',
   'repository', 'service', 'endpoint']
 const FALLBACK_CAPABILITIES = ['passive_discovery', 'active_verification',
   'vulnerability_analysis', 'intrusive_testing']
+const PER_PAGE = 25
 
 function humanWindow(hours) {
   const value = Number(hours)
@@ -59,7 +60,17 @@ export default function Grants() {
   const [simulateOpen, setSimulateOpen] = useState(false)
   const [revokeGrant, setRevokeGrant] = useState(null)
 
-  useEffect(() => { load() }, [filters])
+  // The endpoint answers with the whole filtered ledger, so paging is a reading
+  // aid: the filters above decide what the list holds, this decides how much of
+  // it is on screen.
+  const paged = usePage(rows || [], PER_PAGE)
+
+  useEffect(() => {
+    // A new filter is a new list: landing halfway down it would hide the newest
+    // grants the filter was asked for.
+    paged.setPage(0)
+    load()
+  }, [filters])
 
   useEffect(() => {
     api.get('/api/v1/authorization/capabilities')
@@ -131,6 +142,8 @@ export default function Grants() {
           <span className="count grant-count">
             {rows === null ? 'loading…' : `${total} grant${total === 1 ? '' : 's'}`}
           </span>
+          <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+            total={paged.total} perPage={paged.perPage} unit="grants" className="row-end" />
         </div>
       </Card>
 
@@ -156,7 +169,7 @@ export default function Grants() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((grant) => {
+              {paged.rows.map((grant) => {
                 const when = expiry(grant.valid_until)
                 return (
                   <tr key={grant.id} className={grant.status === 'revoked' ? 'muted-row' : ''}>
@@ -203,6 +216,9 @@ export default function Grants() {
           </table>
         </Card>
       )}
+
+      <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+        total={paged.total} perPage={paged.perPage} unit="grants" className="row-end" />
 
       <IssueDialog open={issueOpen} onClose={() => setIssueOpen(false)}
         catalog={capabilities} onIssued={() => { setIssueOpen(false); load() }} />

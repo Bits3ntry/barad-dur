@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import Highlight from './highlight'
 import {
-  EmptyState, ErrorBanner, PageHeader, Select, SeverityBadge, Table, Tabs,
+  EmptyState, ErrorBanner, PageHeader, Pager, Select, SeverityBadge, Table, Tabs,
+  serverPager,
 } from './ui'
 
 /* The analysis viewer shows what an imported report plus the supplied code
@@ -11,6 +12,7 @@ import {
    against a comparable baseline. When the report references a file nobody
    supplied, the screen says so instead of drawing an empty file. */
 
+const PER_PAGE = 25
 const CLASS_STYLES = {
   new: 'sev sev-high',
   persistent: 'pill',
@@ -38,12 +40,24 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
   const [diff, setDiff] = useState(null)
   const [findings, setFindings] = useState([])
   const [error, setError] = useState('')
+  const [total, setTotal] = useState(0)
+  const [offset, setOffset] = useState(0)
+  const pager = serverPager(total, PER_PAGE, offset, setOffset)
 
   useEffect(() => {
     if (!project && projects.length) setProject(projects[0].slug)
   }, [projects])
 
-  useEffect(() => { if (project) loadRuns() }, [project])
+  // Another project is another question: it starts at its first page, while a
+  // page change keeps it. The reset keys off the project, not the offset.
+  const lastProject = React.useRef(project)
+  useEffect(() => {
+    if (lastProject.current !== project) {
+      lastProject.current = project
+      if (offset !== 0) { setOffset(0); return }
+    }
+    if (project) loadRuns()
+  }, [project, offset])
 
   // Deep link from a finding: open that run, that file, and scroll to the line.
   useEffect(() => {
@@ -79,8 +93,9 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
   }, [focusRun?.runId])
 
   function loadRuns() {
-    api.get(`/api/v1/analysis/runs?project=${encodeURIComponent(project)}`)
-      .then((r) => setRuns(r.data || []))
+    api.get(`/api/v1/analysis/runs?project=${encodeURIComponent(project)}`
+      + `&limit=${PER_PAGE}&offset=${offset}`)
+      .then((r) => { setRuns(r.data || []); setTotal(r.total || 0) })
       .catch((e) => setError(String(e.message || e)))
   }
 
@@ -154,6 +169,10 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
         <span className="muted">
           Runs are recorded by the import endpoint; nothing here executes code.
         </span>
+        <span className="row-end">
+          <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
+            total={pager.total} perPage={PER_PAGE} unit="runs" />
+        </span>
       </div>
 
       {error && <ErrorBanner error={error} />}
@@ -202,6 +221,12 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
       ) : (
         !error && <EmptyState title="No analysis imported yet"
           hint="POST a SARIF or OpenGrep JSON report to /api/v1/analysis/import with optional code snapshots and a diff. Without a baseline nothing is labelled new or resolved." />
+      )}
+      {pager.pages > 1 && (
+        <div className="row row-end" style={{ marginTop: 10 }}>
+          <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
+            total={pager.total} perPage={PER_PAGE} unit="runs" />
+        </div>
       )}
 
       {run && (

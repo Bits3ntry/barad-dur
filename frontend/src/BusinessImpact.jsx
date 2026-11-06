@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Stat, Table } from './ui'
+import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Pager, Stat, Table, usePage } from './ui'
 
 /* Business impact answers one question per application: how much open work is
    there, how much is late, and what carries it. It is a count of real rows, not
    a score — the API says `criticality: not modelled` and the page repeats it,
    because a weighted number with no source is worse than no number. */
+
+const PER_PAGE = 25
 
 function priorityCells(row) {
   return ['P0', 'P1', 'P2', 'P3'].map((cls) => (
@@ -34,6 +36,9 @@ export default function BusinessImpact({ onNavigate }) {
   const rows = data?.data || []
   const totals = data?.totals || {}
   const coverage = data?.coverage || {}
+  // An org can have hundreds of applications; the ranking is the point, so the
+  // top of the list is what loads, not the whole table.
+  const paged = usePage(rows, PER_PAGE)
 
   return (
     <div className="stack">
@@ -65,6 +70,13 @@ export default function BusinessImpact({ onNavigate }) {
               hint="coverage gap, not a business signal" />
           </div>
 
+          <div className="toolbar">
+            <span className="count">{rows.length} application{rows.length === 1 ? '' : 's'}</span>
+            <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+              total={paged.total} perPage={paged.perPage} unit="applications"
+              className="row-end" />
+          </div>
+
           <Card title="Per application">
             <Table
               head={['PROJECT', 'OPEN', 'P0', 'P1', 'P2', 'P3', 'UNTRIAGED', 'LATE', 'UNASSIGNED',
@@ -78,7 +90,7 @@ export default function BusinessImpact({ onNavigate }) {
                       hint="Impact is counted per project; create one and import findings, assets or deployments." />
                   </td>
                 </tr>
-              ) : rows.map((row) => (
+              ) : paged.rows.map((row) => (
                 <tr key={row.project}>
                   <td>
                     <button className="link" onClick={() => onNavigate && onNavigate('findings')}>
@@ -101,6 +113,10 @@ export default function BusinessImpact({ onNavigate }) {
               ))}
             </Table>
           </Card>
+
+          <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+            total={paged.total} perPage={paged.perPage} unit="applications"
+            className="row-end" />
 
           <Card title="What this page does not claim">
             <p className="muted" style={{ margin: 0 }}>

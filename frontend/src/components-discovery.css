@@ -1,0 +1,31 @@
+/* Discovery Components: a compact deployment evidence tree. */
+.discovery-toolbar input { min-width: min(420px, 100%); }
+.discovery-tree { display: grid; gap: 10px; }
+.discovery-project { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.discovery-project.open { border-color: var(--line-strong); }
+.discovery-project-head { display: flex; align-items: center; gap: 12px; padding: 11px 12px; }
+.discovery-toggle { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 8px; padding: 0; min-height: 0; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.discovery-toggle > span:last-child { display: grid; gap: 2px; min-width: 0; }
+.discovery-toggle strong { color: var(--text); font-size: 13px; }
+.discovery-toggle .muted { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discovery-component-list { border-top: 1px solid var(--line); padding: 3px 12px 10px 29px; }
+.discovery-component { border-top: 1px solid var(--line); padding: 9px 0 0; margin-top: 7px; }
+.discovery-component:first-child { border-top: 0; margin-top: 0; }
+.discovery-component-head { padding: 0 0 9px; }
+.discovery-version-table { width: 100%; margin: 0 0 2px; table-layout: fixed; }
+.discovery-version-table th { padding: 6px 8px; background: var(--bg-soft); font-size: 10.5px; }
+.discovery-version-table td { padding: 8px; vertical-align: middle; font-size: 12px; }
+.discovery-version-table th:nth-child(1) { width: 18%; }
+.discovery-version-table th:nth-child(2) { width: 22%; }
+.discovery-version-table th:nth-child(3) { width: 34%; }
+.discovery-version-table th:nth-child(4), .discovery-version-table th:nth-child(5) { width: 8%; }
+.discovery-severity { display: inline-flex; gap: 3px; margin-left: 5px; flex-wrap: wrap; vertical-align: middle; }
+.discovery-version-table .env-pill { margin: 0 3px 3px 0; }
+.version-open { padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 720px) {
+  .discovery-toolbar input { min-width: 100%; }
+  .discovery-component-list { padding-left: 12px; }
+  .discovery-version-table { table-layout: auto; }
+  .discovery-version-table th:nth-child(4), .discovery-version-table td:nth-child(4),
+  .discovery-version-table th:nth-child(5), .discovery-version-table td:nth-child(5) { display: none; }
+}
