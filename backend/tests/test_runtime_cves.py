@@ -48,16 +48,20 @@ def test_a_declared_range_is_a_window_and_says_so():
     assert not runtime_cves.overlaps(interval, older), "20.x no se solapa con >=22.12"
 
 
-def test_an_image_tag_is_the_major_line():
+def test_an_image_tag_is_the_line_it_names():
     interval, confidence = runtime_cves.declared_interval("22-alpine", tag=True)
-    assert confidence == "major"
+    assert confidence == "line"
     assert runtime_cves.overlaps(interval, runtime_cves.Interval((22, 9, 0), True,
                                                                (22, 10, 0), False))
     assert not runtime_cves.overlaps(interval, runtime_cves.Interval((24, 0, 0), True))
+    line, kind = runtime_cves.declared_interval("3.11-slim", tag=True)
+    assert kind == "line"
+    assert runtime_cves.overlaps(line, runtime_cves.Interval((3, 11, 4), True))
+    assert not runtime_cves.overlaps(line, runtime_cves.Interval((3, 12, 0), True)), \
+        "3.11-slim no es todo python 3"
     exact, kind = runtime_cves.declared_interval("22.14.0-alpine", tag=True)
-    assert kind == "major", "un tag con sufijo no es una versión puntual"
-    pinned, kind = runtime_cves.declared_interval("22.14.0", tag=True)
-    assert kind == "exact"
+    assert kind == "exact", "un tag con patch completo sí pinnea"
+    assert runtime_cves.declared_interval("latest", tag=True) is None
 
 
 def test_an_unparseable_declaration_is_no_claim():

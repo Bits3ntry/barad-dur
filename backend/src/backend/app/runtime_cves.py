@@ -57,7 +57,10 @@ IMAGES = {
 CONFIDENCE_TEXT = {
     "exact": "the pinned version is affected",
     "range": "a version inside the declared range is affected",
-    "major": "the major version this build targets is affected",
+    # A floating image tag names a line, not a patch: `3.11-slim` today pulls the
+    # newest 3.11.x, and NVD cannot say which one. Saying "line" keeps the claim
+    # from pretending to know the digest.
+    "line": "a version in this line is affected — NVD has a range, not your patch level",
 }
 
 _EXACT = re.compile(r"^v?(\d+(?:\.\d+){0,3})(?:[-+][0-9A-Za-z.\-]+)?$")
@@ -117,17 +120,19 @@ def declared_interval(version: str | None, tag: bool = False) -> tuple[Interval,
     if not text:
         return None
     if tag:
-        # An image tag is not a version: `22-alpine` names the 22 line, while
-        # `22.14.0` (or `22`) does pin something. Reading `-alpine` as a semver
-        # pre-release would turn a major line into a false exact match.
-        if re.match(r"^\d+(\.\d+)*$", text):
-            point = parse_version(text)
-            return Interval(point, True, point, True), "exact"
-        line = re.match(r"^(\d+)[-.]", text)
-        if line:
-            major = int(line.group(1))
-            return Interval((major, 0, 0), True, (major + 1, 0, 0), False), "major"
-        return None
+        # An image tag is not a version. `22.14.0-alpine` pins; `22-alpine` names
+        # the 22 line; `3.11-slim` names the 3.11 line. Reading `-slim` as a
+        # version suffix would turn "python 3.11" into "python 3" and match every
+        # CVE of the whole major line.
+        match = re.match(r"^(\d+(?:\.\d+)*)([-+].*)?$", text)
+        if not match:
+            return None
+        parts = tuple(int(part) for part in match.group(1).split("."))
+        if len(parts) >= 3:
+            return Interval(parts, True, parts, True), "exact"
+        if len(parts) == 2:
+            return Interval(parts + (0,), True, (parts[0], parts[1] + 1, 0), False), "line"
+        return Interval((parts[0], 0, 0), True, (parts[0] + 1, 0, 0), False), "line"
     point = parse_version(text)
     if point is not None:
         return Interval(point, True, point, True), "exact"
