@@ -244,7 +244,7 @@ export default function Orchestration() {
                     + `${row.last_run.counters.findings_created ?? 0} new`
                   : 'never'}
               </td>
-              <td>
+              <td style={{ whiteSpace: 'nowrap' }}>
                 <button className="primary-action" disabled={internalBusy === row.name}
                   onClick={() => runInternal(row)}>
                   {internalBusy === row.name ? 'running…' : 'run now'}
@@ -274,7 +274,7 @@ export default function Orchestration() {
                   ? <span className="error small">{row.last_error}</span>
                   : (row.last_run_at ? new Date(row.last_run_at).toLocaleTimeString() : 'never')}
               </td>
-              <td>
+              <td style={{ whiteSpace: 'nowrap' }}>
                 <button className="mini" onClick={() => toggleSchedule(row)}>
                   {row.enabled ? 'pause' : 'resume'}
                 </button>
@@ -343,7 +343,7 @@ export default function Orchestration() {
               <td className="muted">{new Date(row.when).toLocaleString()}</td>
               <td className="muted">{row.what}</td>
               <td className="muted">{row.duration != null ? `${(row.duration / 1000).toFixed(1)}s` : '—'}</td>
-              <td>
+              <td style={{ whiteSpace: 'nowrap' }}>
                 {row.kind === 'internal' && (
                   <button className="mini" onClick={() => openLog(row.raw)}>log</button>
                 )}
