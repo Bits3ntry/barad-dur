@@ -92,5 +92,23 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
+# The advisory clock runs inside this process when the deployment asks for it
+# (`ADVISORIES_AUTORUN=1`, set in compose). One process, no API key to mint for
+# itself, and the due-gate in the settings row decides when it actually sweeps.
+def _start_clock() -> None:
+    from backend.app import advisories as advisories_clock
+    from backend.app.db import session_factory
+
+    advisories_clock.start_worker(
+        # `session_factory()` returns a sessionmaker; the clock needs a session.
+        lambda: session_factory()(),
+        log=lambda counters: print(f"advisories clock: {counters.get('status')} "
+                                   f"versions={counters.get('versions_analyzed')} "
+                                   f"created={counters.get('findings_created')}", flush=True))
+
+
+_start_clock()
+
+
 def initialize() -> None:
     run_migrations()

@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
+import threading
+import time
 
 from sqlalchemy.orm import Session
 
@@ -87,6 +90,10 @@ def load(session: Session) -> dict:
     config["ecosystems_available"] = list(ECOSYSTEMS)
     row = _row(session)
     config["source"] = "database" if row is not None else "defaults"
+    # Whether this process is allowed to run the clock at all, and how often it
+    # looks. The UI must not promise a daily run when nobody started the worker.
+    config["autorun"] = autorun_enabled()
+    config["poll_seconds"] = poll_seconds()
     config["unreadable_row"] = bool(stored.get("_unreadable"))
     config["updated_at"] = row.updated_at.isoformat() if row is not None and row.updated_at else None
     config["updated_by"] = row.updated_by if row is not None else None
@@ -191,28 +198,30 @@ def current_versions(session: Session, org_id: str, limit: int,
     return selected
 
 
-def run(session: Session, org_id: str, *, force: bool = False,
-        kev_fetch=None, epss_fetch=None, analyze=None) -> dict:
-    """Refresh the feeds and re-ask OSV about every current build.
+def _blank(config: dict) -> dict:
+    return {"status": "ok", "interval_hours": config["interval_hours"],
+            "kev_rows": 0, "epss_rows": 0, "versions_analyzed": 0,
+            "components_queried": 0, "components_skipped_unmapped": 0,
+            "advisories_found": 0, "findings_created": 0,
+            "findings_refreshed": 0, "truncated": False, "errors": []}
 
-    Every failure is reported and isolated: a catalogue outage must not skip
-    the OSV pass, and one broken version must not abort the rest of the sweep.
-    """
-    config = load(session)
-    counters: dict = {"status": "ok", "interval_hours": config["interval_hours"],
-                      "kev_rows": 0, "epss_rows": 0, "versions_analyzed": 0,
-                      "components_queried": 0, "components_skipped_unmapped": 0,
-                      "advisories_found": 0, "findings_created": 0,
-                      "findings_refreshed": 0, "truncated": False, "errors": []}
+
+def _gate(config: dict, force: bool, counters: dict) -> bool:
+    """Whether this call should do any work at all."""
     if not config["enabled"]:
         counters["status"] = "disabled"
-        return counters
+        return False
     due, next_due = _due(config)
     counters["next_due_at"] = next_due
     if not due and not force:
         counters["status"] = "not_due"
-        return counters
+        return False
+    return True
 
+
+def _feeds(session: Session, config: dict, counters: dict,
+           kev_fetch, epss_fetch) -> None:
+    """KEV and EPSS are deployment-wide: one fetch serves every organization."""
     now = models.utcnow()
     if config["kev"]:
         from backend.app.routers.intelligence import fetch_kev
@@ -222,8 +231,8 @@ def run(session: Session, org_id: str, *, force: bool = False,
                 session.merge(models.KevEntry(**row, fetched_at=now))
                 counters["kev_rows"] += 1
         except Exception as error:  # noqa: BLE001 — a feed outage is a fact, not a crash
-            counters["errors"].append({"source": "kev", "error": f"{type(error).__name__}: {error}"})
-
+            counters["errors"].append({"source": "kev",
+                                       "error": f"{type(error).__name__}: {error}"})
     if config["epss"]:
         from backend.app.routers.intelligence import fetch_epss
         held = sorted({row.cve_id for row in session.query(models.Vulnerability).all()
@@ -236,30 +245,142 @@ def run(session: Session, org_id: str, *, force: bool = False,
             # An empty catalogue is a state, not a failure: nothing has been
             # resolved against OSV yet, so there is no CVE to score.
         except Exception as error:  # noqa: BLE001
-            counters["errors"].append({"source": "epss", "error": f"{type(error).__name__}: {error}"})
+            counters["errors"].append({"source": "epss",
+                                       "error": f"{type(error).__name__}: {error}"})
 
-    if config["osv"]:
-        analyze = analyze or vulns.analyze
-        for project, version in current_versions(session, org_id, config["max_versions"],
-                                                 config["ecosystems"]):
-            try:
-                result = analyze(session, org_id, project, version)
-            except Exception as error:  # noqa: BLE001
-                counters["errors"].append({"source": "osv",
-                                           "version": f"{project.slug}/{version.version}",
-                                           "error": f"{type(error).__name__}: {error}"})
-                continue
-            counters["versions_analyzed"] += 1
-            for key in ("components_queried", "components_skipped_unmapped",
-                        "advisories_found", "findings_created", "findings_refreshed"):
-                counters[key] += int(result.get(key) or 0)
-            counters["truncated"] = bool(counters["truncated"] or result.get("truncated"))
-            if result.get("error"):
-                counters["errors"].append({"source": "osv",
-                                           "version": f"{project.slug}/{version.version}",
-                                           "error": str(result["error"])})
 
+def _sweep(session: Session, org_id: str, config: dict, counters: dict,
+           analyze) -> None:
+    """Re-ask OSV about one organization's current builds."""
+    for project, version in current_versions(session, org_id, config["max_versions"],
+                                             config["ecosystems"]):
+        try:
+            result = analyze(session, org_id, project, version)
+        except Exception as error:  # noqa: BLE001
+            counters["errors"].append({"source": "osv",
+                                       "version": f"{project.slug}/{version.version}",
+                                       "error": f"{type(error).__name__}: {error}"})
+            continue
+        counters["versions_analyzed"] += 1
+        for key in ("components_queried", "components_skipped_unmapped",
+                    "advisories_found", "findings_created", "findings_refreshed"):
+            counters[key] += int(result.get(key) or 0)
+        counters["truncated"] = bool(counters["truncated"] or result.get("truncated"))
+        if result.get("error"):
+            counters["errors"].append({"source": "osv",
+                                       "version": f"{project.slug}/{version.version}",
+                                       "error": str(result["error"])})
+
+
+def _finish(session: Session, counters: dict) -> None:
     if counters["errors"] and counters["versions_analyzed"] == 0 and not counters["kev_rows"]:
         counters["status"] = "failed"
     _record_run(session, counters)
+
+
+def run(session: Session, org_id: str, *, force: bool = False,
+        kev_fetch=None, epss_fetch=None, analyze=None) -> dict:
+    """Refresh the feeds and re-ask OSV about one organization's builds.
+
+    Every failure is reported and isolated: a catalogue outage must not skip
+    the OSV pass, and one broken build must not abort the rest of the sweep.
+    """
+    config = load(session)
+    counters = _blank(config)
+    if not _gate(config, force, counters):
+        return counters
+    _feeds(session, config, counters, kev_fetch, epss_fetch)
+    if config["osv"]:
+        _sweep(session, org_id, config, counters, analyze or vulns.analyze)
+    _finish(session, counters)
     return counters
+
+
+def run_all(session: Session, *, force: bool = False,
+            kev_fetch=None, epss_fetch=None, analyze=None) -> dict:
+    """Every organization in one pass, with one due-gate.
+
+    The settings row is deployment-wide, so `last_tick_at` is too: iterating
+    organizations *inside* one run is what keeps a multi-org install from
+    treating the first organization as "the" clock.
+    """
+    config = load(session)
+    counters = _blank(config)
+    counters["organizations"] = 0
+    if not _gate(config, force, counters):
+        return counters
+    _feeds(session, config, counters, kev_fetch, epss_fetch)
+    if config["osv"]:
+        worker = analyze or vulns.analyze
+        for org in session.query(models.Organization).all():
+            counters["organizations"] += 1
+            _sweep(session, org.id, config, counters, worker)
+    _finish(session, counters)
+    return counters
+
+
+# ---------------------------------------------------------------- in-process clock
+# A second container plus an API key is two things to lose for a job the platform
+# can run itself. The due-gate in the settings row is what keeps this honest: the
+# poll rate only decides how quickly "due" is noticed, never how often it runs.
+
+def autorun_enabled() -> bool:
+    return os.environ.get("ADVISORIES_AUTORUN", "").strip().lower() in {"1", "true", "yes"}
+
+
+def poll_seconds() -> int:
+    try:
+        value = int(os.environ.get("ADVISORIES_POLL_SECONDS", "300"))
+    except ValueError:
+        return 300
+    return max(5, min(value, 86400))
+
+
+def tick_once(session_factory, log=None) -> dict:
+    """One iteration of the clock: open a session, decide, run, record.
+
+    Split out of the thread so it can be tested: the failure this guards against
+    (a `sessionmaker` handed where a session is expected) only appears at
+    runtime, and a thread that dies silently is the worst possible outcome for a
+    job whose whole promise is "it runs every day".
+    """
+    session = session_factory()
+    if not hasattr(session, "close"):
+        raise TypeError("session_factory must return a Session, not a sessionmaker")
+    try:
+        counters = run_all(session)
+        if counters["status"] in ("ok", "failed"):
+            session.commit()
+            if log is not None:
+                log(counters)
+        else:
+            session.rollback()
+        return counters
+    except Exception as error:  # noqa: BLE001 — the clock must not die
+        session.rollback()
+        counters = {"status": "error", "error": f"{type(error).__name__}: {error}"}
+        if log is not None:
+            log(counters)
+        return counters
+    finally:
+        session.close()
+
+
+def start_worker(session_factory, log=None) -> threading.Thread | None:
+    """Start the clock inside this process; None when autorun is off.
+
+    The poll rate only decides how quickly "due" is noticed — never how often the
+    sweep runs, which the settings row owns.
+    """
+    if not autorun_enabled():
+        return None
+    interval = poll_seconds()
+
+    def loop() -> None:
+        while True:
+            time.sleep(interval)
+            tick_once(session_factory, log)
+
+    thread = threading.Thread(target=loop, name="advisories-clock", daemon=True)
+    thread.start()
+    return thread

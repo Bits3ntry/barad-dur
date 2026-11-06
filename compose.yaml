@@ -246,6 +246,13 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-}
+      # The advisory clock runs inside the API process: KEV/EPSS refreshed and
+      # OSV re-asked about every current build. The interval and the sources
+      # live in Settings → Intelligence; this only says "this process owns the
+      # clock". Set 0 to leave it to an external scheduler calling
+      # /api/v1/advisories/tick.
+      ADVISORIES_AUTORUN: ${ADVISORIES_AUTORUN:-1}
+      ADVISORIES_POLL_SECONDS: ${ADVISORIES_POLL_SECONDS:-300}
     ports:
       # Who has to reach this: the host console/CLI and the CI runner. A runner
       # job lives in its own container on another Docker network, and a loopback

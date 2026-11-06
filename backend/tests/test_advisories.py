@@ -299,6 +299,73 @@ def test_the_same_cve_under_two_advisory_ids_is_one_finding(env):
     assert len(rows) == 1
 
 
+def test_run_all_sweeps_every_organization_in_one_due_window(env):
+    """The settings row is deployment-wide, so `last_tick_at` is too."""
+    session, org = env["session"], env["org"]
+    _version(session, org)
+    second = models.Organization(slug="other", name="Other")
+    session.add(second)
+    session.flush()
+    project = models.Project(org_id=second.id, name="Saria", slug="saria")
+    session.add(project)
+    session.flush()
+    version = models.ProjectVersion(project_id=project.id, version="1.0")
+    session.add(version)
+    session.flush()
+    component = models.Component(org_id=second.id, identity_key="pkg:pypi/django@5.1",
+                                 purl="pkg:pypi/django@5.1", name="django", version="5.1")
+    session.add(component)
+    session.flush()
+    session.add(models.VersionComponent(project_version_id=version.id,
+                                        component_id=component.id))
+    session.commit()
+
+    analyze = Fake()
+    result = advisories.run_all(session, analyze=analyze, kev_fetch=lambda: [],
+                                epss_fetch=lambda cve_ids: [])
+    assert result["organizations"] == 2
+    assert result["versions_analyzed"] == 2
+    assert sorted(analyze.calls) == [("aurea", "1.0"), ("saria", "1.0")]
+    session.commit()
+
+
+def test_the_clock_is_off_unless_the_deployment_starts_it(env, monkeypatch):
+    monkeypatch.delenv("ADVISORIES_AUTORUN", raising=False)
+    assert advisories.autorun_enabled() is False
+    assert advisories.start_worker(lambda: env["session"]) is None
+    assert advisories.load(env["session"])["autorun"] is False
+
+
+def test_poll_seconds_are_bounded(monkeypatch):
+    monkeypatch.setenv("ADVISORIES_POLL_SECONDS", "0")
+    assert advisories.poll_seconds() == 5
+    monkeypatch.setenv("ADVISORIES_POLL_SECONDS", "nonsense")
+    assert advisories.poll_seconds() == 300
+    monkeypatch.setenv("ADVISORIES_POLL_SECONDS", "999999")
+    assert advisories.poll_seconds() == 86400
+
+
+def test_one_clock_iteration_records_the_run(env):
+    """The exact path the thread runs; a `sessionmaker` here would be silent."""
+    from backend.app.db import session_factory
+
+    _version(env["session"], env["org"])
+    # Sources off: this asserts the wiring (open → decide → record → commit),
+    # not the network, so the iteration is instant and repeatable.
+    advisories.save(env["session"], {"kev": False, "epss": False, "osv": False})
+    env["session"].commit()
+    counters = advisories.tick_once(lambda: session_factory()())
+    assert counters["status"] == "ok"
+    assert advisories.load(session_factory()())["last_tick_at"] is not None
+
+
+def test_a_sessionmaker_instead_of_a_session_is_refused_loudly(env):
+    from backend.app.db import session_factory
+
+    with pytest.raises(TypeError, match="sessionmaker"):
+        advisories.tick_once(session_factory)
+
+
 def test_api_reports_settings_and_runs_a_tick(env):
     from fastapi.testclient import TestClient
 

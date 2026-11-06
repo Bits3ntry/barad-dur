@@ -115,6 +115,12 @@ export default function AdvisoriesSettings() {
         </p>
         {error && <Banner kind="error">{error}</Banner>}
         {notice && <Banner kind="ok">{notice}</Banner>}
+        {config.autorun === false && (
+          <Banner kind="info">
+            This deployment runs the clock externally: nothing will happen on its own until the
+            scheduler calls <code>POST /api/v1/advisories/tick</code>. “Run now” still works.
+          </Banner>
+        )}
         <form className="settings-form" onSubmit={save}>
           <label className="settings-span check">
             <input type="checkbox" checked={form.enabled}
@@ -131,7 +137,7 @@ export default function AdvisoriesSettings() {
           <label>Every
             <input type="number" min="1" max="168" value={form.interval_hours}
               onChange={(e) => setForm({ ...form, interval_hours: e.target.value })} />
-            <small>hours. The scheduler ticks every minute; the job decides whether it is due.</small>
+            <small>hours. The platform checks on its own (every {Math.round((config.poll_seconds || 300) / 60) || 1} min) and has this job decide whether it is due.</small>
           </label>
           <label>Builds per sweep
             <input type="number" min="1" max="500" value={form.max_versions}
