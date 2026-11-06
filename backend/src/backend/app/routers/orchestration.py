@@ -601,8 +601,18 @@ def _iso(value) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+STALE_RUN_MINUTES = 60
+
+
 def _internal_run_data(row: models.InternalRun, *, with_log: bool = False) -> dict:
-    data = {"id": row.id, "name": row.name, "trigger": row.trigger, "status": row.status,
+    status = row.status
+    # A process killed mid-sweep leaves its row "running" forever. Saying so is
+    # better than a spinner that never ends; the next run is unaffected.
+    if status == "running" and row.started_at is not None:
+        started = _aware(row.started_at)
+        if (models.utcnow() - started).total_seconds() > STALE_RUN_MINUTES * 60:
+            status = "stale"
+    data = {"id": row.id, "name": row.name, "trigger": row.trigger, "status": status,
             "started_at": _iso(row.started_at), "finished_at": _iso(row.finished_at),
             "duration_ms": row.duration_ms, "actor": row.actor,
             "counters": json.loads(row.counters or "{}")}

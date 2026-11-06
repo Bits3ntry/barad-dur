@@ -462,6 +462,9 @@ def run(session: Session, org_id: str, *, force: bool = False,
         return counters
     started = time.monotonic()
     run_row = _open_run(session, org_id, trigger, actor)
+    # Commit the "running" row before the slow work: a job you cannot see while
+    # it runs is indistinguishable from one that never started.
+    session.commit()
     try:
         _feeds(session, config, counters, kev_fetch, epss_fetch)
         _sweep(session, org_id, config, counters, analyze or vulns.analyze, runtime_analyze)
@@ -495,6 +498,7 @@ def run_all(session: Session, *, force: bool = False,
     for org in session.query(models.Organization).all():
         counters["organizations"] += 1
         run_row = _open_run(session, org.id, trigger, "clock")
+        session.commit()
         rows.append((run_row, time.monotonic()))
         _sweep(session, org.id, config, counters, analyze or vulns.analyze,
                runtime_analyze)

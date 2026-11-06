@@ -113,9 +113,9 @@ export default function Orchestration() {
     try {
       const r = await api.post(`/api/v1/orchestration/internal/${row.name}/run`,
         { actor: 'console' })
-      const counters = r.data.counters || {}
-      setInternalNote(`${row.name}: ${counters.status} · ${counters.versions_analyzed || 0} builds · `
-        + `${counters.findings_created || 0} new · ${counters.findings_refreshed || 0} refreshed`)
+      // The job row and the log are the feedback; a second banner saying the
+      // same thing is noise on a screen that already has a table for it.
+      setInternalNote('')
       if (r.data.run) setLogRow(r.data.run)
       load()
     } catch (e) {
@@ -154,6 +154,36 @@ export default function Orchestration() {
     } catch (e) { setError(String(e.message || e)) }
   }
 
+  // Mientras corre un barrido, la página tiene que mostrarlo: el request del
+  // botón sigue abierto, así que la lista se refresca sola.
+  useEffect(() => {
+    if (!internalBusy) return undefined
+    const timer = setInterval(load, 4000)
+    return () => clearInterval(timer)
+  }, [internalBusy])
+
+  const internalRuns = internal.flatMap((row) => (row.runs || []).map((run) => ({ ...run, source: row.label })))
+  const jobsView = [
+    ...internalRuns.map((run) => ({
+      key: `internal-${run.id}`, kind: 'internal', status: run.status, when: run.started_at,
+      name: run.source, trigger: run.trigger,
+      what: `${run.counters?.versions_analyzed ?? 0} builds · `
+        + `${run.counters?.findings_created ?? 0} new · ${run.counters?.findings_refreshed ?? 0} refreshed`,
+      duration: run.duration_ms, raw: run,
+    })),
+    ...jobs.map((job) => ({
+      key: `job-${job.id}`, kind: 'scan', status: job.status, when: job.created_at,
+      name: job.scanner, trigger: job.principal || 'worker',
+      what: `${job.capability}${job.worker_id ? ` · worker ${job.worker_id.slice(0, 8)}` : ''}`
+        + `${job.attempts ? ` · attempt ${job.attempts}/${job.max_attempts}` : ''}`
+        + `${job.error ? ` · ${job.error}` : ''}`,
+      duration: null, raw: job,
+    })),
+  ].sort((a, b) => new Date(b.when) - new Date(a.when))
+  const running = jobsView.filter((row) => ['running', 'leased'].includes(row.status)).length
+  const nextInternal = internal[0]?.schedule?.next_due_at
+  const scheduleCount = schedules.length + internal.length
+
   const logDialog = (
     <Dialog open={Boolean(logRow)} size="wide" hideFooter
       title={logRow ? `${logRow.name || 'internal-scan'} · ${new Date(logRow.started_at).toLocaleString()} · ${logRow.status}` : ''}
@@ -172,238 +202,244 @@ export default function Orchestration() {
 
   return (
     <div className="stack">
-      <PageHeader title="Orchestration" />
+      <PageHeader title="Orchestration"
+        subtitle="What is scheduled, what is running, and who runs it. Pipelines and git actions live in Pipelines." />
       <div className="toolbar">
-        <span className="count">{scanners.length} scanners · {workers.length} workers · {jobs.length} jobs</span>
-        <Pager page={pagedJobs.page} pages={pagedJobs.pages} onChange={pagedJobs.setPage}
-          total={pagedJobs.total} perPage={pagedJobs.perPage} unit="jobs" className="row-end" />
+        <span className="count">
+          {scheduleCount} scheduled · {running} running · {workers.length} workers
+          {nextInternal ? ` · next sweep ${new Date(nextInternal).toLocaleString()}` : ''}
+        </span>
         <button onClick={load}>refresh</button>
         {claimInfo && <span className="muted">{claimInfo}</span>}
       </div>
       {error && <div className="banner banner-error">{error}</div>}
+      {internalNote && <div className="banner banner-info">{internalNote}</div>}
 
-      <h2 className="section">internal scans</h2>
-      <p className="muted" style={{ marginTop: 0 }}>
-        Jobs the platform runs itself, inside this process. Scans handed to a worker stay below;
-        pipelines and git actions live in Pipelines.
+      <h2 className="section">schedules</h2>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        What will run on its own. A schedule fires a job; the job appears below while it runs.
       </p>
-      {internalNote && <p className="muted">{internalNote}</p>}
-      {internal.map((row) => (
-        <div key={row.name} className="stack" style={{ marginBottom: 16 }}>
-          <div className="toolbar" style={{ margin: 0 }}>
-            <span className="count">
-              <strong className="mono">{row.label}</strong> · {row.title}
-              {' '}· every {row.schedule.interval_hours}h
-              {row.schedule.next_due_at
-                ? ` · next ${new Date(row.schedule.next_due_at).toLocaleString()}`
-                : ' · never ran'}
-              {row.autorun ? '' : ' · external clock'}
-            </span>
-            <span className="muted">
-              {(Object.entries(row.sources) || []).filter(([, on]) => on).map(([key]) => key).join(' + ') || 'all sources off'}
-            </span>
-            <span className="row-end">
-              <button className="primary-action" disabled={internalBusy === row.name}
-                onClick={() => runInternal(row)}>
-                {internalBusy === row.name ? 'running…' : 'run now'}
-              </button>
-            </span>
-          </div>
-          <p className="muted" style={{ margin: 0 }}>{row.description}</p>
-          {row.last_run ? (
-            <p className="muted" style={{ margin: 0 }}>
-              last: {row.last_run.status} · {row.last_run.trigger} ·{' '}
-              {row.last_run.duration_ms != null ? `${(row.last_run.duration_ms / 1000).toFixed(1)}s` : '—'} ·{' '}
-              {new Date(row.last_run.started_at).toLocaleString()} ·{' '}
-              {row.last_run.counters.findings_created || 0} new ·{' '}
-              {row.last_run.counters.findings_refreshed || 0} refreshed
-            </p>
-          ) : <p className="empty" style={{ margin: 0 }}>Never ran. Until it does, only what each scanner reported is known.</p>}
-          {row.runs.length > 0 && (
-            <table>
-              <thead><tr><th>when</th><th>trigger</th><th>status</th><th>builds</th>
-                <th>new</th><th>refreshed</th><th>duration</th><th></th></tr></thead>
-              <tbody>
-                {row.runs.map((run) => (
-                  <tr key={run.id}>
-                    <td className="muted">{new Date(run.started_at).toLocaleString()}</td>
-                    <td><span className="pill">{run.trigger}</span></td>
-                    <td><span className={`status st-${run.status}`}>{run.status}</span></td>
-                    <td>{run.counters.versions_analyzed ?? 0}</td>
-                    <td>{run.counters.findings_created ?? 0}</td>
-                    <td>{run.counters.findings_refreshed ?? 0}</td>
-                    <td className="muted">{run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : '—'}</td>
-                    <td><button className="mini" onClick={() => openLog(run)}>log</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      ))}
-      {!internal.length && <p className="empty">No internal scans registered.</p>}
-
-      <h2 className="section">jobs</h2>
       <table>
-        <thead><tr><th>job</th><th>scanner</th><th>status</th><th>attempts</th><th>worker</th><th></th></tr></thead>
+        <thead><tr><th>schedule</th><th>what</th><th>every</th><th>next run</th>
+          <th>last</th><th></th></tr></thead>
         <tbody>
-          {pagedJobs.rows.map((row) => (
-            <tr key={row.id}>
-              <td className="title">{row.id.slice(0, 8)}</td>
-              <td>{row.scanner} <span className="muted">({row.capability})</span></td>
-              <td><span className={`status st-${row.status}`}>{row.status}</span>
-                {row.error && <div className="muted small">{row.error}</div>}</td>
-              <td>{row.attempts}/{row.max_attempts}</td>
-              <td>{(row.worker_id || '—').slice(0, 8)}</td>
+          {internal.map((row) => (
+            <tr key={row.name}>
+              <td className="title mono">{row.label}</td>
               <td>
-                {['queued', 'leased', 'running'].includes(row.status) &&
-                  <button className="mini" onClick={() => act(row, 'cancel')}>cancel</button>}
-                {['failed', 'cancelled'].includes(row.status) &&
-                  <button className="mini" onClick={() => act(row, 'retry')}>retry</button>}
+                {row.title}
+                <div className="muted small">
+                  {Object.entries(row.sources).filter(([, on]) => on).map(([key]) => key).join(' + ') || 'all sources off'}
+                  {row.autorun ? '' : ' · external clock'}
+                </div>
+              </td>
+              <td>{row.schedule.interval_hours}h</td>
+              <td>{row.schedule.next_due_at
+                ? new Date(row.schedule.next_due_at).toLocaleString()
+                : 'never ran'}</td>
+              <td className="muted">
+                {row.last_run
+                  ? `${row.last_run.status} · ${row.last_run.duration_ms != null
+                    ? `${(row.last_run.duration_ms / 1000).toFixed(1)}s` : '—'} · `
+                    + `${row.last_run.counters.findings_created ?? 0} new`
+                  : 'never'}
+              </td>
+              <td>
+                <button className="primary-action" disabled={internalBusy === row.name}
+                  onClick={() => runInternal(row)}>
+                  {internalBusy === row.name ? 'running…' : 'run now'}
+                </button>
+                {row.last_run && (
+                  <button className="mini" onClick={() => openLog(row.last_run)}>log</button>
+                )}
               </td>
             </tr>
           ))}
-        </tbody>
-      </table>
-      <Pager page={pagedJobs.page} pages={pagedJobs.pages} onChange={pagedJobs.setPage}
-        total={pagedJobs.total} perPage={pagedJobs.perPage} unit="jobs" className="row-end" />
-      {!jobs.length && <p className="empty">No jobs queued.</p>}
-
-      <h2 className="section">schedules</h2>
-      <div className="toolbar">
-        <span className="count">{schedules.length} schedules</span>
-        <button onClick={tickNow}>run tick now</button>
-        {tickInfo && <span className="muted">{tickInfo}</span>}
-        <Pager page={pagedSchedules.page} pages={pagedSchedules.pages} onChange={pagedSchedules.setPage}
-          total={pagedSchedules.total} perPage={pagedSchedules.perPage} unit="schedules" className="row-end" />
-      </div>
-      <table>
-        <thead><tr><th>name</th><th>kind</th><th>target</th><th>every</th><th>next run</th><th>last</th><th></th></tr></thead>
-        <tbody>
           {pagedSchedules.rows.map((row) => (
             <tr key={row.id}>
               <td className="title">{row.name}</td>
-              <td><span className="pill">{row.kind}</span></td>
-              <td className="muted">
-                {row.kind === 'easm'
-                  ? (assets.find((a) => a.id === row.asset_id)?.value || row.asset_id?.slice(0, 8))
-                  : (row.targets[0]?.value || '—')}
+              <td>
+                {row.kind === 'easm' ? 'surface collection' : 'scan job'}
+                <div className="muted small">
+                  {row.kind === 'easm'
+                    ? (assets.find((a) => a.id === row.asset_id)?.value || row.asset_id?.slice(0, 8))
+                    : (row.targets[0]?.value || '—')}
+                  {row.enabled ? '' : ' · paused'}
+                </div>
               </td>
               <td>{row.interval_minutes}m</td>
               <td>{new Date(row.next_run_at).toLocaleString()}{row.due ? ' (due)' : ''}</td>
-              <td>{row.last_error ? <span className="error small">{row.last_error}</span>
-                : (row.last_run_at ? new Date(row.last_run_at).toLocaleTimeString() : 'never')}</td>
-              <td><button className="mini" onClick={() => toggleSchedule(row)}>
-                {row.enabled ? 'disable' : 'enable'}
-              </button></td>
+              <td className="muted">
+                {row.last_error
+                  ? <span className="error small">{row.last_error}</span>
+                  : (row.last_run_at ? new Date(row.last_run_at).toLocaleTimeString() : 'never')}
+              </td>
+              <td>
+                <button className="mini" onClick={() => toggleSchedule(row)}>
+                  {row.enabled ? 'pause' : 'resume'}
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
-      <Pager page={pagedSchedules.page} pages={pagedSchedules.pages} onChange={pagedSchedules.setPage}
-        total={pagedSchedules.total} perPage={pagedSchedules.perPage} unit="schedules" className="row-end" />
-      {!schedules.length && <p className="empty">No schedules yet.</p>}
-      <div className="card">
-        <input placeholder="schedule name" value={schedule.name}
-          onChange={(e) => setSchedule((s) => ({ ...s, name: e.target.value }))} />
-        <select value={schedule.kind} onChange={(e) => setSchedule((s) => ({ ...s, kind: e.target.value }))}>
-          <option value="scan">scan job</option>
-          <option value="easm">easm collection</option>
-        </select>
-        {schedule.kind === 'scan' ? (
-          <>
-            <select value={schedule.scanner}
-              onChange={(e) => setSchedule((s) => ({ ...s, scanner: e.target.value }))}>
-              <option value="">scanner</option>
-              {scanners.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
-            </select>
-            <input placeholder="repository target" value={schedule.target}
-              onChange={(e) => setSchedule((s) => ({ ...s, target: e.target.value }))} />
-          </>
-        ) : (
-          <select value={schedule.asset_id}
-            onChange={(e) => setSchedule((s) => ({ ...s, asset_id: e.target.value }))}>
-            <option value="">domain asset</option>
-            {assets.filter((a) => ['domain', 'subdomain'].includes(a.type))
-              .map((a) => <option key={a.id} value={a.id}>{a.value}</option>)}
-          </select>
-        )}
-        <input type="number" min="15" value={schedule.interval_minutes}
-          onChange={(e) => setSchedule((s) => ({ ...s, interval_minutes: e.target.value }))} />
-        <input placeholder="principal" value={schedule.principal}
-          onChange={(e) => setSchedule((s) => ({ ...s, principal: e.target.value }))} />
-        <button onClick={addSchedule}>add schedule</button>
+      {scheduleCount === 0 && <p className="empty">Nothing scheduled.</p>}
+      <div className="toolbar">
+        <Pager page={pagedSchedules.page} pages={pagedSchedules.pages} onChange={pagedSchedules.setPage}
+          total={pagedSchedules.total} perPage={pagedSchedules.perPage} unit="schedules" />
+        <span className="row-end">
+          {tickInfo && <span className="muted">{tickInfo}</span>}
+          <button onClick={tickNow}>evaluate schedules now</button>
+        </span>
       </div>
+      <details className="card">
+        <summary>add a scan schedule</summary>
+        <div className="card">
+          <input placeholder="schedule name" value={schedule.name}
+            onChange={(e) => setSchedule((s) => ({ ...s, name: e.target.value }))} />
+          <select value={schedule.kind} onChange={(e) => setSchedule((s) => ({ ...s, kind: e.target.value }))}>
+            <option value="scan">scan job</option>
+            <option value="easm">easm collection</option>
+          </select>
+          {schedule.kind === 'scan' ? (
+            <>
+              <select value={schedule.scanner}
+                onChange={(e) => setSchedule((s) => ({ ...s, scanner: e.target.value }))}>
+                <option value="">scanner</option>
+                {scanners.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
+              <input placeholder="repository target" value={schedule.target}
+                onChange={(e) => setSchedule((s) => ({ ...s, target: e.target.value }))} />
+            </>
+          ) : (
+            <select value={schedule.asset_id}
+              onChange={(e) => setSchedule((s) => ({ ...s, asset_id: e.target.value }))}>
+              <option value="">domain asset</option>
+              {assets.filter((a) => ['domain', 'subdomain'].includes(a.type))
+                .map((a) => <option key={a.id} value={a.id}>{a.value}</option>)}
+            </select>
+          )}
+          <input type="number" min="15" value={schedule.interval_minutes}
+            onChange={(e) => setSchedule((s) => ({ ...s, interval_minutes: e.target.value }))} />
+          <input placeholder="principal" value={schedule.principal}
+            onChange={(e) => setSchedule((s) => ({ ...s, principal: e.target.value }))} />
+          <button onClick={addSchedule}>add schedule</button>
+        </div>
+      </details>
+
+      <h2 className="section">jobs</h2>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        Every run, newest first: the platform's own sweeps and the scans handed to a worker.
+      </p>
+      <table>
+        <thead><tr><th>job</th><th>source</th><th>status</th><th>started</th>
+          <th>what it did</th><th>duration</th><th></th></tr></thead>
+        <tbody>
+          {jobsView.map((row) => (
+            <tr key={row.key}>
+              <td className="title mono">{row.name}</td>
+              <td className="muted">{row.kind === 'internal' ? row.trigger : 'worker'}</td>
+              <td><span className={`status st-${row.status}`}>{row.status}</span></td>
+              <td className="muted">{new Date(row.when).toLocaleString()}</td>
+              <td className="muted">{row.what}</td>
+              <td className="muted">{row.duration != null ? `${(row.duration / 1000).toFixed(1)}s` : '—'}</td>
+              <td>
+                {row.kind === 'internal' && (
+                  <button className="mini" onClick={() => openLog(row.raw)}>log</button>
+                )}
+                {row.kind === 'scan' && ['queued', 'leased', 'running'].includes(row.status) && (
+                  <button className="mini" onClick={() => act(row.raw, 'cancel')}>cancel</button>
+                )}
+                {row.kind === 'scan' && ['failed', 'cancelled'].includes(row.status) && (
+                  <button className="mini" onClick={() => act(row.raw, 'retry')}>retry</button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!jobsView.length && (
+        <p className="empty">
+          Nothing has run yet. The sweep starts when its schedule fires, or when you press run now.
+        </p>
+      )}
+      <Pager page={pagedJobs.page} pages={pagedJobs.pages} onChange={pagedJobs.setPage}
+        total={pagedJobs.total} perPage={pagedJobs.perPage} unit="scan jobs" className="row-end" />
 
       <h2 className="section">workers</h2>
-      <table>
-        <thead><tr><th>worker</th><th>capabilities</th><th>active</th><th>status</th><th></th></tr></thead>
-        <tbody>
-          {workers.map((w) => (
-            <tr key={w.id}>
-              <td className="title">{w.name}</td>
-              <td className="muted">{w.capabilities.join(', ') || 'any'}</td>
-              <td>{w.active_jobs}/{w.max_concurrent}</td>
-              <td><span className={`status st-${w.status}`}>{w.status}</span></td>
-              <td><button className="mini" onClick={() => claim(w)}>claim next</button></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {!workers.length && <p className="empty">No workers registered.</p>}
-
-      <h2 className="section">scanners</h2>
-      <table>
-        <thead><tr><th>scanner</th><th>capability</th><th>version</th><th>enabled</th></tr></thead>
-        <tbody>
-          {scanners.map((s) => (
-            <tr key={s.id}>
-              <td className="title">{s.name}</td>
-              <td><span className="pill">{s.capability}</span></td>
-              <td>{s.version || '—'}</td>
-              <td>{s.enabled ? 'yes' : 'no'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <h2 className="section">queue a job</h2>
-      <p className="muted small">
-        Queueing requires an active authorization grant for the target; the decision is
-        stored with the job and revalidated when a worker claims it.
+      <p className="muted small" style={{ marginTop: 0 }}>
+        A worker is a container or tool that registers itself and claims jobs. Nothing here means
+        nobody is claiming work — the platform's own sweeps do not need one.
       </p>
-      <div className="card">
-        <select value={job.scanner} onChange={(e) => setJob((j) => ({ ...j, scanner: e.target.value }))}>
-          <option value="">scanner</option>
-          {scanners.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
-        </select>
-        <input placeholder="repository target (e.g. acme/saria)" value={job.target}
-          onChange={(e) => setJob((j) => ({ ...j, target: e.target.value }))} />
-        <input placeholder="principal" value={job.principal}
-          onChange={(e) => setJob((j) => ({ ...j, principal: e.target.value }))} />
-        <input placeholder="environment" value={job.environment}
-          onChange={(e) => setJob((j) => ({ ...j, environment: e.target.value }))} />
-        <button onClick={queueJob}>queue</button>
-      </div>
+      {workers.length ? (
+        <table>
+          <thead><tr><th>worker</th><th>capabilities</th><th>active</th><th>status</th><th></th></tr></thead>
+          <tbody>
+            {workers.map((w) => (
+              <tr key={w.id}>
+                <td className="title">{w.name}</td>
+                <td className="muted">{w.capabilities.join(', ') || 'any'}</td>
+                <td>{w.active_jobs}/{w.max_concurrent}</td>
+                <td><span className={`status st-${w.status}`}>{w.status}</span></td>
+                <td><button className="mini" onClick={() => claim(w)}>claim next</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <p className="empty">No worker registered.</p>}
 
-      <h2 className="section">register</h2>
-      <div className="card">
-        <input placeholder="scanner name" value={scanner.name}
-          onChange={(e) => setScanner((s) => ({ ...s, name: e.target.value }))} />
-        <select value={scanner.capability} onChange={(e) => setScanner((s) => ({ ...s, capability: e.target.value }))}>
-          {CAPS.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <input placeholder="version" value={scanner.version}
-          onChange={(e) => setScanner((s) => ({ ...s, version: e.target.value }))} />
-        <button onClick={addScanner}>add scanner</button>
-      </div>
-      <div className="card">
-        <input placeholder="worker name" value={worker.name}
-          onChange={(e) => setWorker((w) => ({ ...w, name: e.target.value }))} />
-        <input type="number" min="1" max="32" value={worker.max_concurrent}
-          onChange={(e) => setWorker((w) => ({ ...w, max_concurrent: Number(e.target.value) }))} />
-        <button onClick={addWorker}>add worker</button>
-      </div>
+      <details className="card">
+        <summary>setup: scanners, workers and manual jobs</summary>
+        <p className="muted small">
+          Queueing a scan requires an active authorization grant for the target; the decision is
+          stored with the job and revalidated when a worker claims it.
+        </p>
+        <h3 className="section">scanners</h3>
+        <table>
+          <thead><tr><th>scanner</th><th>capability</th><th>version</th><th>enabled</th></tr></thead>
+          <tbody>
+            {scanners.map((s) => (
+              <tr key={s.id}>
+                <td className="title">{s.name}</td>
+                <td><span className="pill">{s.capability}</span></td>
+                <td>{s.version || '—'}</td>
+                <td>{s.enabled ? 'yes' : 'no'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!scanners.length && <p className="empty">No scanner registered.</p>}
+        <div className="card">
+          <select value={job.scanner} onChange={(e) => setJob((j) => ({ ...j, scanner: e.target.value }))}>
+            <option value="">scanner</option>
+            {scanners.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+          </select>
+          <input placeholder="repository target (e.g. acme/saria)" value={job.target}
+            onChange={(e) => setJob((j) => ({ ...j, target: e.target.value }))} />
+          <input placeholder="principal" value={job.principal}
+            onChange={(e) => setJob((j) => ({ ...j, principal: e.target.value }))} />
+          <input placeholder="environment" value={job.environment}
+            onChange={(e) => setJob((j) => ({ ...j, environment: e.target.value }))} />
+          <button onClick={queueJob}>queue</button>
+        </div>
+        <div className="card">
+          <input placeholder="scanner name" value={scanner.name}
+            onChange={(e) => setScanner((s) => ({ ...s, name: e.target.value }))} />
+          <select value={scanner.capability} onChange={(e) => setScanner((s) => ({ ...s, capability: e.target.value }))}>
+            {CAPS.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <input placeholder="version" value={scanner.version}
+            onChange={(e) => setScanner((s) => ({ ...s, version: e.target.value }))} />
+          <button onClick={addScanner}>add scanner</button>
+        </div>
+        <div className="card">
+          <input placeholder="worker name" value={worker.name}
+            onChange={(e) => setWorker((w) => ({ ...w, name: e.target.value }))} />
+          <input type="number" min="1" max="32" value={worker.max_concurrent}
+            onChange={(e) => setWorker((w) => ({ ...w, max_concurrent: Number(e.target.value) }))} />
+          <button onClick={addWorker}>add worker</button>
+        </div>
+      </details>
       {logDialog}
     </div>
   )
