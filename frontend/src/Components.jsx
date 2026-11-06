@@ -1,139 +1,188 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
-import { Card, Dialog, EmptyState, ErrorBanner, Loading, PageHeader, Stat } from './ui'
+import { Card, Dialog, EmptyState, ErrorBanner, Loading, PageHeader, Pager, Stat, usePage } from './ui'
+import Sbom from './Sbom'
 
-/* Inventory per project version, joined with the findings of that version.
+const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN']
 
-   The screen used to be pinned to whatever project came first in the nav data,
-   with no selector and no search: 1.125 rows of purl nobody could narrow down.
-   Dependency-Track's useful trick is the join — a component is interesting
-   because of what it carries — so the findings of the selected version are
-   fetched once and folded in by purl. */
-
-const SEVERITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN']
-
-function worstOf(counts) {
-  return SEVERITY_ORDER.find((severity) => counts[severity])
+function SeverityStrip({ counts = {} }) {
+  const shown = SEVERITIES.filter((severity) => counts[severity] > 0)
+  if (!shown.length) return <span className="muted">none</span>
+  return <span className="discovery-severity">
+    {shown.map((severity) => (
+      <span key={severity} className={`sev sev-${severity.toLowerCase()}`}>
+        {severity[0]}{counts[severity]}
+      </span>
+    ))}
+  </span>
 }
 
-export default function Components({ projects, onChanged }) {
-  const [projectSlug, setProjectSlug] = useState('')
-  const [version, setVersion] = useState('')
-  const [search, setSearch] = useState('')
-  const [onlyVulnerable, setOnlyVulnerable] = useState(false)
-  const [rows, setRows] = useState([])
-  const [profile, setProfile] = useState(null)
-  const [carried, setCarried] = useState({})
+function deployedTree(inventories, profiles) {
+  return inventories.map((inventory) => {
+    const versions = new Map((inventory.versions || []).map((row) => [row.id, row]))
+    const components = (inventory.components || []).map((component) => {
+      const deployed = new Map()
+      for (const deployment of component.deployments || []) {
+        if (!deployment.version_id || !deployment.version_label) continue
+        const version = versions.get(deployment.version_id)
+        if (!version) continue
+        const record = deployed.get(version.id) || {
+          ...version,
+          environments: [],
+          deployments: [],
+          profile: profiles.get(`${inventory.project.slug}:${version.id}`),
+        }
+        record.environments.push(deployment.environment)
+        record.deployments.push(deployment)
+        deployed.set(version.id, record)
+      }
+      return { ...component, versions: [...deployed.values()] }
+    }).filter((component) => component.versions.length)
+    return { project: inventory.project, components }
+  }).filter((project) => project.components.length)
+}
+
+/* One deployed component's versions. The project and component headers above
+   it are the summary; this table is the list that actually grows, a row per
+   release, so it gets its own pager — a single long history must not bury the
+   component that follows it in the tree. */
+function VersionTable({ project, component, onOpenVersion }) {
+  const paged = usePage(component.versions, 10)
+  return (
+    <>
+      <table className="discovery-version-table"><thead><tr><th>version</th><th>environments</th><th>security</th><th>critical</th><th>KEV</th><th></th></tr></thead><tbody>
+        {paged.rows.map((version) => {
+          const profile = version.profile
+          const findings = profile?.findings
+          return <tr key={version.id}>
+            <td className="mono title"><button className="version-open" onClick={() => onOpenVersion?.(project.slug, component.slug || component.name, version.version)}>{version.version}</button></td>
+            <td>{version.environments.map((environment) => <span className="pill env-pill" key={environment}>{environment}</span>)}</td>
+            <td>{profile ? <><span className={findings.total ? 'sev sev-high' : 'pill'}>{findings.total} finding{findings.total === 1 ? '' : 's'}</span><SeverityStrip counts={findings.by_severity} /></> : <span className="muted">unavailable</span>}</td>
+            <td>{profile ? findings.by_severity.CRITICAL : '—'}</td>
+            <td>{profile ? findings.kev : '—'}</td>
+            <td className="row-action"><button className="mini" onClick={() => onOpenVersion?.(project.slug, component.slug || component.name, version.version)}>details</button></td>
+          </tr>
+        })}
+      </tbody></table>
+      <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+        total={paged.total} perPage={paged.perPage} unit="versions"
+        className="row-end" />
+    </>
+  )
+}
+
+export default function Components({ projects, focus = {}, onChanged, onOpenProject, onOpenVersion, onBack }) {
+  const [tree, setTree] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [receipt, setReceipt] = useState(null)
-  const [impact, setImpact] = useState({ id: null, data: null, error: '' })
+  const [query, setQuery] = useState('')
+  const [onlyRisk, setOnlyRisk] = useState(false)
+  const [openProjects, setOpenProjects] = useState(() => new Set())
+  const [openComponents, setOpenComponents] = useState(() => new Set())
   const [importOpen, setImportOpen] = useState(false)
   const [importProject, setImportProject] = useState('')
   const [importVersion, setImportVersion] = useState('')
   const [importFile, setImportFile] = useState(null)
   const [importBusy, setImportBusy] = useState(false)
   const [importNote, setImportNote] = useState('')
+  const [receipt, setReceipt] = useState(null)
   const fileInput = useRef(null)
 
-  const project = projects.find((p) => p.slug === projectSlug)
-  const versions = project?.versions || []
-
-  // First render: land on the project with the largest inventory, which is the
-  // one worth looking at, instead of whichever the API listed first.
-  useEffect(() => {
-    if (projectSlug || !projects.length) return
-    setProjectSlug(projects[0].slug)
-    setVersion(projects[0].versions?.[0] || '')
-  }, [projects, projectSlug])
-
-  useEffect(() => {
-    if (!projectSlug || !version) return
-    let cancelled = false
+  async function load() {
+    if (!projects.length) { setTree([]); return }
     setLoading(true); setError('')
-    const query = `project=${encodeURIComponent(projectSlug)}&version=${encodeURIComponent(version)}`
-    Promise.all([
-      api.get(`/api/v1/components?${query}`),
-      api.get(`/api/v1/inventory/profile?${query}`).catch(() => null),
-      api.get(`/api/v1/findings?${query}`).catch(() => ({ data: [] })),
-    ])
-      .then(([components, versionProfile, findings]) => {
-        if (cancelled) return
-        setRows(components.data || [])
-        setProfile(versionProfile?.data || null)
-        const byPurl = {}
-        for (const finding of findings.data || []) {
-          if (!finding.component_purl) continue
-          const bucket = byPurl[finding.component_purl]
-            || (byPurl[finding.component_purl] = { total: 0 })
-          bucket.total += 1
-          const severity = finding.severity || 'UNKNOWN'
-          bucket[severity] = (bucket[severity] || 0) + 1
-        }
-        setCarried(byPurl)
-      })
-      .catch((problem) => { if (!cancelled) setError(String(problem.message || problem)) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [projectSlug, version])
-
-  const visible = useMemo(() => {
-    const needle = search.trim().toLowerCase()
-    return rows
-      .map((row) => {
-        const findings = carried[row.purl] || null
-        return { ...row, findings, worst: findings ? worstOf(findings) : null }
-      })
-      .filter((row) => {
-        if (onlyVulnerable && !row.findings) return false
-        if (!needle) return true
-        return `${row.name} ${row.version || ''} ${row.purl || ''} ${row.license || ''}`
-          .toLowerCase().includes(needle)
-      })
-      .sort((left, right) => {
-        if (onlyVulnerable || (left.findings || right.findings)) {
-          const delta = (right.findings?.total || 0) - (left.findings?.total || 0)
-          if (delta) return delta
-        }
-        return left.name.localeCompare(right.name)
-      })
-  }, [rows, carried, search, onlyVulnerable])
-
-  async function showImpact(row) {
-    if (impact.id === row.id) { setImpact({ id: null, data: null, error: '' }); return }
     try {
-      const response = await api.get(`/api/v1/components/impact?component_id=${row.id}`)
-      setImpact({ id: row.id, data: response.data, error: '' })
+      const inventories = await Promise.all(projects.map(async (project) => {
+        const response = await api.get(`/api/v1/projects/${encodeURIComponent(project.slug)}/inventory`)
+        return response.data
+      }))
+      const deployedVersions = inventories.flatMap((inventory) => (inventory.versions || [])
+        .filter((version) => (version.deployments || []).length && version.component_id))
+      const profiles = new Map()
+      const results = await Promise.allSettled(deployedVersions.map(async (version) => {
+        const project = inventories.find((inventory) => inventory.versions
+          ?.some((entry) => entry.id === version.id))?.project
+        if (!project) return null
+        const params = new URLSearchParams({ project: project.slug, version: version.version,
+          component_id: version.component_id })
+        const response = await api.get(`/api/v1/inventory/profile?${params}`)
+        return { key: `${project.slug}:${version.id}`, data: response.data }
+      }))
+      const failed = results.filter((result) => result.status === 'rejected')
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          profiles.set(result.value.key, result.value.data)
+        }
+      }
+      const nextTree = deployedTree(inventories, profiles)
+      setTree(nextTree)
+      setOpenProjects(new Set(nextTree.map((entry) => entry.project.slug)))
+      if (failed.length) {
+        setError(`${failed.length} deployed version security profile${failed.length === 1 ? '' : 's'} could not be loaded.`)
+      }
     } catch (problem) {
-      setImpact({ id: row.id, data: null, error: String(problem.message || problem) })
-    }
+      setError(String(problem.message || problem))
+      setTree([])
+    } finally { setLoading(false) }
   }
 
-  async function pickFile(file) {
-    if (!file) return
-    setImportFile(file)
-    setImportNote('')
-    try {
-      const document = JSON.parse(await file.text())
-      const component = document?.metadata?.component || {}
-      // The version the SBOM itself declares wins: that is the project's own
-      // version (pyproject/package.json version captured at scan time).
-      if (component.version) setImportVersion(String(component.version))
-      const name = component.name
-      if (!importProject && typeof name === 'string' && !name.startsWith('/')) {
-        setImportProject(name)
-      }
-    } catch {
-      setImportNote('That file is not JSON; the upload will be rejected.')
+  useEffect(() => { load() }, [projects])
+
+  const visibleTree = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    return tree.map((project) => {
+      const components = project.components.map((component) => {
+        const versions = component.versions.filter((version) => {
+          const risky = (version.profile?.findings?.total || 0) > 0
+          if (onlyRisk && !risky) return false
+          if (!needle) return true
+          return [project.project.name, project.project.slug, component.name, component.kind,
+            version.version, ...version.environments].join(' ').toLowerCase().includes(needle)
+        })
+        return { ...component, versions }
+      }).filter((component) => component.versions.length)
+      return { ...project, components }
+    }).filter((project) => project.components.length)
+  }, [tree, query, onlyRisk])
+
+  const totals = useMemo(() => {
+    const versions = visibleTree.flatMap((project) => project.components.flatMap((component) => component.versions))
+    return {
+      projects: visibleTree.length,
+      components: visibleTree.reduce((count, project) => count + project.components.length, 0),
+      versions: versions.length,
+      findings: versions.reduce((count, version) => count + (version.profile?.findings?.total || 0), 0),
+      critical: versions.reduce((count, version) => count + (version.profile?.findings?.by_severity?.CRITICAL || 0), 0),
     }
+  }, [visibleTree])
+
+  function toggle(setter, key) {
+    setter((current) => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
   }
 
   function openImport() {
-    setImportProject(projectSlug)
+    setImportProject(projects[0]?.slug || '')
     setImportVersion('')
     setImportFile(null)
     setImportNote('')
     setImportOpen(true)
+  }
+
+  async function pickFile(file) {
+    if (!file) return
+    setImportFile(file); setImportNote('')
+    try {
+      const document = JSON.parse(await file.text())
+      const component = document?.metadata?.component || {}
+      if (component.version) setImportVersion(String(component.version))
+      if (!importProject && component.name && !String(component.name).startsWith('/')) {
+        setImportProject(String(component.name))
+      }
+    } catch { setImportNote('That file is not JSON; the upload will be rejected.') }
   }
 
   async function submitImport() {
@@ -143,186 +192,96 @@ export default function Components({ projects, onChanged }) {
     }
     setImportBusy(true); setImportNote('')
     try {
-      const params = new URLSearchParams({
-        source: 'web', project: importProject.trim(),
+      const params = new URLSearchParams({ source: 'web', project: importProject.trim(),
         version: importVersion.trim(), filename: importFile.name })
-      const response = await api.postRaw(`/api/v1/sbom?${params.toString()}`,
-        await importFile.arrayBuffer())
-      const counts = response.receipt?.counts || {}
+      const response = await api.postRaw(`/api/v1/sbom?${params}`, await importFile.arrayBuffer())
       setReceipt(response)
       setImportOpen(false)
-      setProjectSlug(importProject.trim())
-      setVersion(importVersion.trim())
-      setSearch(''); setOnlyVulnerable(false)
-      // The sidebar's project list is owned by App; ask it to re-read so the
-      // freshly created version shows up in the selector.
       if (onChanged) await onChanged()
-    } catch (problem) {
-      setImportNote(String(problem.message || problem))
-    }
-    setImportBusy(false)
+      await load()
+    } catch (problem) { setImportNote(String(problem.message || problem)) }
+    finally { setImportBusy(false) }
+  }
+
+  if (focus.projectSlug && focus.version) {
+    // The version view lives here when the route carries a version, so it needs
+    // the same "open that other build" callback the standalone screen gets.
+    return <Sbom focus={focus} embedded onOpen={onOpenVersion} onBack={onBack} />
   }
 
   return (
     <div className="stack">
-      <PageHeader
-        title="Components"
-        subtitle={project ? `${project.name}${version ? ` · ${version}` : ''}` : 'Pick a project version'}
-        actions={(
-          <>
-            <select value={projectSlug} aria-label="project"
-              onChange={(event) => {
-                const next = projects.find((p) => p.slug === event.target.value)
-                setProjectSlug(event.target.value)
-                setVersion(next?.versions?.[0] || '')
-                setImpact({ id: null, data: null, error: '' })
-              }}>
-              {projects.map((entry) => (
-                <option key={entry.slug} value={entry.slug}>{entry.name}</option>
-              ))}
-            </select>
-            <select value={version} aria-label="version" disabled={!versions.length}
-              onChange={(event) => setVersion(event.target.value)}>
-              {versions.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
-            </select>
-            <button onClick={openImport}>import SBOM…</button>
-          </>
-        )}
-      />
+      <PageHeader title="Components"
+        subtitle="Deployed application versions only. Projects remains the full ownership catalog."
+        actions={<><button className="mini" onClick={openImport}>import SBOM…</button><button className="mini" onClick={load}>refresh</button></>} />
 
-      {profile && (
-        <Card>
-          <div className="metrics">
-            <Stat label="components" value={profile.components.total} />
-            <Stat label="vulnerable" value={profile.findings.vulnerable_components}
-              tone={profile.findings.vulnerable_components ? 'warn' : ''} />
-            <Stat label="findings" value={profile.findings.total} />
-            <Stat label="critical" value={profile.findings.by_severity.CRITICAL}
-              tone={profile.findings.by_severity.CRITICAL ? 'bad' : ''} />
-            <Stat label="licenses" value={profile.licenses.distinct} />
-          </div>
-        </Card>
-      )}
+      <Card tight>
+        <div className="metrics">
+          <Stat label="projects deployed" value={totals.projects} />
+          <Stat label="components deployed" value={totals.components} />
+          <Stat label="versions running" value={totals.versions} />
+          <Stat label="open findings" value={totals.findings} tone={totals.findings ? 'warn' : ''} />
+          <Stat label="critical" value={totals.critical} tone={totals.critical ? 'bad' : ''} />
+        </div>
+      </Card>
 
-      <div className="toolbar">
-        <input placeholder="search name, purl or license" value={search}
-          onChange={(event) => setSearch(event.target.value)} style={{ minWidth: 260 }} />
+      <div className="toolbar discovery-toolbar">
+        <input value={query} placeholder="filter project, component, version or environment"
+          onChange={(event) => setQuery(event.target.value)} />
         <label className="row" style={{ gap: 6 }}>
-          <input type="checkbox" checked={onlyVulnerable}
-            onChange={(event) => setOnlyVulnerable(event.target.checked)} />
-          only with findings
+          <input type="checkbox" checked={onlyRisk} onChange={(event) => setOnlyRisk(event.target.checked)} />
+          only versions with findings
         </label>
         <span className="spacer" />
-        <span className="count">
-          {loading ? 'loading…' : `${visible.length} / ${rows.length} shown`}
-        </span>
+        <span className="count">{loading ? 'loading…' : `${totals.versions} deployed version${totals.versions === 1 ? '' : 's'}`}</span>
       </div>
 
-      {error && <ErrorBanner error={error} />}
-      {receipt && (
-        <div className="banner banner-ok">
-          import {receipt.status} — {receipt.receipt.counts.components_created} created,
-          {' '}{receipt.receipt.counts.components_updated} updated,
-          {' '}{receipt.receipt.counts.links_created} links
-        </div>
-      )}
+      {error && <ErrorBanner error={error} onRetry={load} />}
+      {receipt && <div className="banner banner-ok">import {receipt.status} — {receipt.receipt.counts.components_created} created, {receipt.receipt.counts.components_updated} updated</div>}
+      {loading && !tree.length && <Loading rows={6} label="Loading deployed components" />}
+      {!loading && !visibleTree.length && !error && <EmptyState title="No deployed component versions"
+        hint={tree.length ? 'Clear the filters to see deployed versions.' : 'Record a component version and link it to an environment in Projects. Un-deployed catalog entries stay in Projects.'} />}
 
-      {loading && !rows.length ? <Loading rows={6} /> : null}
+      <div className="discovery-tree">
+        {visibleTree.map(({ project, components }) => {
+          const projectKey = project.slug
+          const projectOpen = openProjects.has(projectKey)
+          return <section key={projectKey} className={`discovery-project${projectOpen ? ' open' : ''}`}>
+            <header className="discovery-project-head">
+              <button className="discovery-toggle" type="button" onClick={() => toggle(setOpenProjects, projectKey)} aria-expanded={projectOpen}>
+                <span className="caret" aria-hidden="true">{projectOpen ? '▾' : '▸'}</span>
+                <span><strong>{project.name}</strong><span className="muted">{project.slug} · {components.length} deployed component{components.length === 1 ? '' : 's'}</span></span>
+              </button>
+              <button className="mini" onClick={() => onOpenProject?.(project.slug, 'components')}>view project</button>
+            </header>
+            {projectOpen && <div className="discovery-component-list">
+              {components.map((component) => {
+                const componentKey = `${project.slug}:${component.id}`
+                const componentOpen = openComponents.has(componentKey)
+                return <section key={component.id} className="discovery-component">
+                  <button className="discovery-toggle discovery-component-head" type="button" onClick={() => toggle(setOpenComponents, componentKey)} aria-expanded={componentOpen}>
+                    <span className="caret" aria-hidden="true">{componentOpen ? '▾' : '▸'}</span>
+                    <span><strong>{component.name}</strong><span className="muted">{component.kind} · {component.versions.length} running version{component.versions.length === 1 ? '' : 's'}</span></span>
+                  </button>
+                  {componentOpen && <VersionTable project={project} component={component}
+                    onOpenVersion={onOpenVersion} />}
+                </section>
+              })}
+            </div>}
+          </section>
+        })}
+      </div>
 
-      {!loading && !visible.length && !error && (
-        <EmptyState title="No components match"
-          hint={rows.length
-            ? 'Clear the search or the "only with findings" filter.'
-            : 'Upload an SBOM for this version to create its inventory.'} />
-      )}
-
-      {!!visible.length && (
-        <table>
-          <thead>
-            <tr>
-              <th>name</th><th>version</th><th>license</th><th>findings</th>
-              <th>manifest</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((row) => (
-              <React.Fragment key={row.id}>
-                <tr>
-                  <td className="title">
-                    {row.name}
-                    {row.purl && <div className="muted mono" style={{ fontSize: 11 }}>{row.purl}</div>}
-                  </td>
-                  <td>{row.version || '—'}</td>
-                  <td className="muted">{row.license || '—'}</td>
-                  <td>
-                    {row.findings
-                      ? <span className={`sev sev-${(row.worst || 'unknown').toLowerCase()}`}>
-                        {row.findings.total}
-                      </span>
-                      : <span className="muted">—</span>}
-                  </td>
-                  <td className="muted mono" style={{ fontSize: 11.5 }}>
-                    {row.manifest_path || '—'}
-                  </td>
-                  <td>
-                    <button className="mini" onClick={() => showImpact(row)}>
-                      {impact.id === row.id ? 'hide' : 'impact'}
-                    </button>
-                  </td>
-                </tr>
-                {impact.id === row.id && (
-                  <tr className="detail-row"><td colSpan={6}>
-                    <div className="detail">
-                      {impact.error && <ErrorBanner error={impact.error} />}
-                      {impact.data && (
-                        <>
-                          <p className="muted">
-                            used by {impact.data.projects_using} project versions ·
-                            {' '}{impact.data.total_findings} findings
-                            {' '}({impact.data.open_findings} open)
-                          </p>
-                          {impact.data.usages.map((usage) => (
-                            <div key={`${usage.project}@${usage.version}`} className="occ-row">
-                              <strong>{usage.project}@{usage.version}</strong>
-                              {' '}— {usage.open_findings} open / {usage.findings} total
-                              {' '}{Object.entries(usage.by_severity)
-                                .filter(([, count]) => count)
-                                .map(([sev, count]) => `${sev}:${count}`).join(' ')}
-                            </div>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  </td></tr>
-                )}
-              </React.Fragment>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      <Dialog open={importOpen} title="Import an SBOM" confirmLabel="import"
-        onClose={() => setImportOpen(false)} onConfirm={submitImport}>
+      <Dialog open={importOpen} title="Import an SBOM" confirmLabel="import" onClose={() => setImportOpen(false)} onConfirm={submitImport}>
         <div className="stack">
           <label className="field-label" htmlFor="sbom-file">CycloneDX JSON</label>
-          <input id="sbom-file" ref={fileInput} type="file" accept=".json,application/json"
-            onChange={(event) => pickFile(event.target.files[0])} />
+          <input id="sbom-file" ref={fileInput} type="file" accept=".json,application/json" onChange={(event) => pickFile(event.target.files[0])} />
           <label className="field-label" htmlFor="sbom-project">project</label>
-          <input id="sbom-project" value={importProject} list="sbom-projects"
-            placeholder="existing project, or type a new name"
-            onChange={(event) => setImportProject(event.target.value)} />
-          <datalist id="sbom-projects">
-            {projects.map((entry) => <option key={entry.slug} value={entry.slug} />)}
-          </datalist>
+          <input id="sbom-project" value={importProject} list="sbom-projects" onChange={(event) => setImportProject(event.target.value)} />
+          <datalist id="sbom-projects">{projects.map((project) => <option key={project.slug} value={project.slug} />)}</datalist>
           <label className="field-label" htmlFor="sbom-version">version</label>
-          <input id="sbom-version" value={importVersion}
-            placeholder="taken from the SBOM when it declares one"
-            onChange={(event) => setImportVersion(event.target.value)} />
-          <p className="muted" style={{ fontSize: 12 }}>
-            A new version is created for the project if it does not exist yet;
-            re-importing the same file into the same version is a no-op.
-            {importBusy ? ' importing…' : ''}
-          </p>
+          <input id="sbom-version" value={importVersion} onChange={(event) => setImportVersion(event.target.value)} />
+          <p className="muted" style={{ fontSize: 12 }}>{importBusy ? 'importing…' : 'The SBOM is attached to the named project version.'}</p>
           {importNote && <div className="banner banner-error">{importNote}</div>}
         </div>
       </Dialog>
