@@ -18,6 +18,7 @@ const SOURCES = [
   { key: 'osv', label: 'OSV.dev', hint: 'Re-asks the advisory database about every current build — this is what finds a CVE published after the scan.' },
   { key: 'kev', label: 'CISA KEV', hint: 'Known exploited vulnerabilities. A fact, so it outranks any score.' },
   { key: 'epss', label: 'EPSS', hint: 'Exploitation probability, refreshed for the advisories this workspace already holds.' },
+  { key: 'cpe', label: 'NVD — runtime CVEs', hint: 'Node, Python, Go… matched by version range from NVD. OSV has no ecosystem for an interpreter, so this is the only source that answers for it.' },
 ]
 
 function when(iso) {
@@ -33,7 +34,7 @@ function when(iso) {
 export default function AdvisoriesSettings() {
   const [config, setConfig] = useState(null)
   const [form, setForm] = useState({ enabled: true, kev: true, epss: true, osv: true,
-    interval_hours: 24, max_versions: 25, ecosystems: [] })
+    cpe: true, interval_hours: 24, max_versions: 25, ecosystems: [] })
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
@@ -43,7 +44,7 @@ export default function AdvisoriesSettings() {
     setConfig(data)
     setForm({
       enabled: Boolean(data.enabled), kev: Boolean(data.kev), epss: Boolean(data.epss),
-      osv: Boolean(data.osv), interval_hours: data.interval_hours || 24,
+      osv: Boolean(data.osv), cpe: data.cpe !== false, interval_hours: data.interval_hours || 24,
       max_versions: data.max_versions || 25, ecosystems: data.ecosystems || [],
     })
   }
@@ -62,6 +63,7 @@ export default function AdvisoriesSettings() {
     try {
       const r = await api.put('/api/v1/advisories/settings', {
         enabled: form.enabled, kev: form.kev, epss: form.epss, osv: form.osv,
+        cpe: form.cpe,
         interval_hours: Number(form.interval_hours) || 24,
         max_versions: Number(form.max_versions) || 25,
         ecosystems: form.ecosystems,

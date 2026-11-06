@@ -30,6 +30,13 @@ def env(tmp_path, monkeypatch):
     session.flush()
     key = create_key(session, org.id, "clock")
     session.commit()
+    # The runtime/NVD pass is exercised in test_runtime_cves.py; here it must not
+    # reach the network, so every test starts with it answering "nothing".
+    monkeypatch.setattr(advisories.runtime_cves, "analyze",
+                        lambda *args, **kwargs: {"runtimes": 0, "runtimes_matched": 0,
+                                                 "runtimes_skipped": 0, "findings_created": 0,
+                                                 "findings_refreshed": 0, "created_ids": [],
+                                                 "errors": []})
     yield {"app": app, "session": session, "org": org, "key": key}
     session.close()
 

@@ -24,7 +24,7 @@ import time
 
 from sqlalchemy.orm import Session
 
-from backend.app import models, vulns
+from backend.app import models, runtime_cves, vulns
 
 ROW_NAME = "advisories"
 
@@ -36,6 +36,9 @@ DEFAULTS = {
     "kev": True,
     "epss": True,
     "osv": True,
+    # Runtime CVEs come from NVD's CPE data: OSV has no ecosystem for an
+    # interpreter, and a Node/Python CVE is exactly what users expect to see.
+    "cpe": True,
     "interval_hours": 24,
     "max_versions": 25,
     "ecosystems": [],
@@ -66,7 +69,7 @@ def _stored(session: Session) -> dict:
 def _normalise(raw: dict) -> dict:
     """Clamp a stored/requested payload into the shape the job can trust."""
     config = dict(DEFAULTS)
-    for key in ("enabled", "kev", "epss", "osv"):
+    for key in ("enabled", "kev", "epss", "osv", "cpe"):
         if isinstance(raw.get(key), bool):
             config[key] = raw[key]
     for key in ("interval_hours", "max_versions"):
@@ -204,6 +207,7 @@ def _blank(config: dict) -> dict:
             "components_queried": 0, "components_skipped_unmapped": 0,
             "advisories_found": 0, "findings_created": 0,
             "findings_refreshed": 0, "truncated": False, "errors": [],
+            "runtimes_analyzed": 0, "runtime_findings_created": 0,
             # Who was told, so "found 12 CVEs" and "told nobody" cannot look the
             # same in the run record.
             "notified": []}
@@ -303,31 +307,57 @@ def _announce(session: Session, org_id: str, created_ids: list[str],
 
 
 def _sweep(session: Session, org_id: str, config: dict, counters: dict,
-           analyze) -> None:
-    """Re-ask OSV about one organization's current builds, then say what is new."""
+           analyze, runtime_analyze) -> None:
+    """Re-ask OSV and NVD about one organization's builds, then say what is new.
+
+    Two sources for two different questions: OSV answers for packages, NVD's CPE
+    data answers for the interpreter. They share one notification and one set of
+    counters, because the reader cares about "what landed", not about who found
+    it.
+    """
     created: list[str] = []
     builds: set[str] = set()
+    runtime_analyze = runtime_analyze or runtime_cves.analyze
+    nvd_cache: dict = {}
     for project, version in current_versions(session, org_id, config["max_versions"],
                                              config["ecosystems"]):
-        try:
-            result = analyze(session, org_id, project, version)
-        except Exception as error:  # noqa: BLE001
-            counters["errors"].append({"source": "osv",
-                                       "version": f"{project.slug}/{version.version}",
-                                       "error": f"{type(error).__name__}: {error}"})
-            continue
-        counters["versions_analyzed"] += 1
-        created.extend(result.get("created_ids") or [])
-        if result.get("created_ids"):
-            builds.add(f"{project.slug}/{version.version}")
-        for key in ("components_queried", "components_skipped_unmapped",
-                    "advisories_found", "findings_created", "findings_refreshed"):
-            counters[key] += int(result.get(key) or 0)
-        counters["truncated"] = bool(counters["truncated"] or result.get("truncated"))
-        if result.get("error"):
-            counters["errors"].append({"source": "osv",
-                                       "version": f"{project.slug}/{version.version}",
-                                       "error": str(result["error"])})
+        label = f"{project.slug}/{version.version}"
+        if config["osv"]:
+            try:
+                result = analyze(session, org_id, project, version)
+            except Exception as error:  # noqa: BLE001
+                counters["errors"].append({"source": "osv", "version": label,
+                                           "error": f"{type(error).__name__}: {error}"})
+                result = None
+            if result is not None:
+                counters["versions_analyzed"] += 1
+                created.extend(result.get("created_ids") or [])
+                if result.get("created_ids"):
+                    builds.add(label)
+                for key in ("components_queried", "components_skipped_unmapped",
+                            "advisories_found", "findings_created", "findings_refreshed"):
+                    counters[key] += int(result.get(key) or 0)
+                counters["truncated"] = bool(counters["truncated"] or result.get("truncated"))
+                if result.get("error"):
+                    counters["errors"].append({"source": "osv", "version": label,
+                                               "error": str(result["error"])})
+        if config["cpe"]:
+            try:
+                runtime = runtime_analyze(session, org_id, project, version, cache=nvd_cache)
+            except Exception as error:  # noqa: BLE001
+                counters["errors"].append({"source": "nvd", "version": label,
+                                           "error": f"{type(error).__name__}: {error}"})
+                continue
+            counters["runtimes_analyzed"] += int(runtime.get("runtimes") or 0)
+            counters["runtime_findings_created"] += int(runtime.get("findings_created") or 0)
+            counters["findings_created"] += int(runtime.get("findings_created") or 0)
+            counters["findings_refreshed"] += int(runtime.get("findings_refreshed") or 0)
+            if runtime.get("created_ids"):
+                created.extend(runtime["created_ids"])
+                builds.add(label)
+            for item in runtime.get("errors") or []:
+                counters["errors"].append({"source": "nvd", "version": label,
+                                           "error": item.get("error")})
     _announce(session, org_id, created, builds, counters)
 
 
@@ -338,7 +368,7 @@ def _finish(session: Session, counters: dict) -> None:
 
 
 def run(session: Session, org_id: str, *, force: bool = False,
-        kev_fetch=None, epss_fetch=None, analyze=None) -> dict:
+        kev_fetch=None, epss_fetch=None, analyze=None, runtime_analyze=None) -> dict:
     """Refresh the feeds and re-ask OSV about one organization's builds.
 
     Every failure is reported and isolated: a catalogue outage must not skip
@@ -349,14 +379,14 @@ def run(session: Session, org_id: str, *, force: bool = False,
     if not _gate(config, force, counters):
         return counters
     _feeds(session, config, counters, kev_fetch, epss_fetch)
-    if config["osv"]:
-        _sweep(session, org_id, config, counters, analyze or vulns.analyze)
+    _sweep(session, org_id, config, counters, analyze or vulns.analyze, runtime_analyze)
     _finish(session, counters)
     return counters
 
 
 def run_all(session: Session, *, force: bool = False,
-            kev_fetch=None, epss_fetch=None, analyze=None) -> dict:
+            kev_fetch=None, epss_fetch=None, analyze=None,
+            runtime_analyze=None) -> dict:
     """Every organization in one pass, with one due-gate.
 
     The settings row is deployment-wide, so `last_tick_at` is too: iterating
@@ -369,11 +399,10 @@ def run_all(session: Session, *, force: bool = False,
     if not _gate(config, force, counters):
         return counters
     _feeds(session, config, counters, kev_fetch, epss_fetch)
-    if config["osv"]:
-        worker = analyze or vulns.analyze
-        for org in session.query(models.Organization).all():
-            counters["organizations"] += 1
-            _sweep(session, org.id, config, counters, worker)
+    for org in session.query(models.Organization).all():
+        counters["organizations"] += 1
+        _sweep(session, org.id, config, counters, analyze or vulns.analyze,
+               runtime_analyze)
     _finish(session, counters)
     return counters
 
