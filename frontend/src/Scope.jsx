@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import {
-  Banner, CheckBox, Dialog, EmptyState, ErrorBanner, Input, PageHeader, Select,
-  Table, Tabs,
+  Banner, CheckBox, Dialog, EmptyState, ErrorBanner, Input, PageHeader, Pager, Select,
+  Table, Tabs, usePage,
 } from './ui'
 
 /* Scope is a declaration screen, not an inventory: it lists only what somebody
@@ -47,6 +47,11 @@ export default function Scope() {
   const [checkType, setCheckType] = useState('')
   const [checkCapability, setCheckCapability] = useState('passive_discovery')
   const [decision, setDecision] = useState(null)
+
+  // Nobody imports a scope: rows arrive one declaration at a time, so the whole
+  // list is already here. Paging is a reading aid, not a limit on what is shown.
+  const pagedTargets = usePage(targets, 25)
+  const pagedExclusions = usePage(exclusions, 25)
 
   useEffect(() => { load() }, [])
 
@@ -170,84 +175,94 @@ export default function Scope() {
 
       {tab === 'targets' && (
         targets.length ? (
-          <Table className="scope-table"
-            head={['value', 'capabilities', 'owner · reason', 'validity', 'asset', '']}>
-            {targets.map((row) => (
-              <tr key={row.id}>
-                <td>
-                  <div className="scope-value">
-                    <span className="scope-type">{row.target_type}</span>
-                    <span className="title mono scope-target" title={row.value}>{row.value}</span>
-                    {row.is_pattern && (
-                      <button className={`pill pill-toggle ${row.include_apex ? 'on' : ''}`}
-                        title={row.include_apex
-                          ? 'the apex is covered — click to exclude it'
-                          : 'the apex is not covered — click to include it'}
-                        onClick={() => patchTarget(row, { include_apex: !row.include_apex },
-                          `apex ${row.include_apex ? 'excluded' : 'included'}`)}>
-                        apex
+          <>
+            <div className="toolbar">
+              <Pager page={pagedTargets.page} pages={pagedTargets.pages}
+                onChange={pagedTargets.setPage} total={pagedTargets.total}
+                perPage={pagedTargets.perPage} unit="targets" className="row-end" />
+            </div>
+            <Table className="scope-table"
+              head={['value', 'capabilities', 'owner · reason', 'validity', 'asset', '']}>
+              {pagedTargets.rows.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <div className="scope-value">
+                      <span className="scope-type">{row.target_type}</span>
+                      <span className="title mono scope-target" title={row.value}>{row.value}</span>
+                      {row.is_pattern && (
+                        <button className={`pill pill-toggle ${row.include_apex ? 'on' : ''}`}
+                          title={row.include_apex
+                            ? 'the apex is covered — click to exclude it'
+                            : 'the apex is not covered — click to include it'}
+                          onClick={() => patchTarget(row, { include_apex: !row.include_apex },
+                            `apex ${row.include_apex ? 'excluded' : 'included'}`)}>
+                          apex
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    {(row.capabilities || []).length
+                      ? row.capabilities.map((c) => (
+                        <button key={c} className="pill pill-toggle on"
+                          title={row.status === 'active'
+                            ? `this row permits ${c} — click to withdraw it`
+                            : 'the row is disabled, so nothing here runs'}
+                          onClick={() => patchTarget(row, {
+                            capabilities: row.capabilities.filter((x) => x !== c),
+                          }, `${c} withdrawn`)}>
+                          {c}
+                        </button>
+                      ))
+                      : <span className="muted">none — declares nothing actionable</span>}
+                    {row.status === 'active' && (row.capabilities || []).length > 0
+                      && !row.capabilities.includes('active_verification') && (
+                      <button className="pill pill-toggle"
+                        title="add active verification: this row then also allows probing, not just discovery"
+                        onClick={() => patchTarget(row, {
+                          capabilities: [...row.capabilities, 'active_verification'],
+                        }, 'active verification added')}>
+                        + verification
                       </button>
                     )}
-                  </div>
-                </td>
-                <td>
-                  {(row.capabilities || []).length
-                    ? row.capabilities.map((c) => (
-                      <button key={c} className="pill pill-toggle on"
-                        title={row.status === 'active'
-                          ? `this row permits ${c} — click to withdraw it`
-                          : 'the row is disabled, so nothing here runs'}
-                        onClick={() => patchTarget(row, {
-                          capabilities: row.capabilities.filter((x) => x !== c),
-                        }, `${c} withdrawn`)}>
-                        {c}
-                      </button>
-                    ))
-                    : <span className="muted">none — declares nothing actionable</span>}
-                  {row.status === 'active' && (row.capabilities || []).length > 0
-                    && !row.capabilities.includes('active_verification') && (
-                    <button className="pill pill-toggle"
-                      title="add active verification: this row then also allows probing, not just discovery"
-                      onClick={() => patchTarget(row, {
-                        capabilities: [...row.capabilities, 'active_verification'],
-                      }, 'active verification added')}>
-                      + verification
-                    </button>
-                  )}
-                </td>
-                <td>
-                  <div className="stack" style={{ gap: 2 }}>
-                    <span className={row.owner ? '' : 'muted'}>{row.owner || 'no owner'}</span>
-                    <span className="muted" style={{ fontSize: 11.5 }}>
-                      {row.reason || 'no reason recorded'}
-                    </span>
-                  </div>
-                </td>
-                <td>
-                  <span className={row.status === 'active' ? 'pill' : 'sev sev-medium'}>
-                    {row.status}
-                  </span>
-                  {row.valid_until && (
-                    <div className="muted" style={{ fontSize: 11.5 }}>
-                      until {new Date(row.valid_until).toLocaleDateString()}
+                  </td>
+                  <td>
+                    <div className="stack" style={{ gap: 2 }}>
+                      <span className={row.owner ? '' : 'muted'}>{row.owner || 'no owner'}</span>
+                      <span className="muted" style={{ fontSize: 11.5 }}>
+                        {row.reason || 'no reason recorded'}
+                      </span>
                     </div>
-                  )}
-                </td>
-                <td>
-                  {row.asset
-                    ? <span className="mono">{row.asset.value}</span>
-                    : <span className="muted">—</span>}
-                </td>
-                <td className="row-action">
-                  <button className="mini" onClick={() => patchTarget(
-                    row, { status: row.status === 'active' ? 'disabled' : 'active' },
-                    row.status === 'active' ? 'disabled' : 're-enabled')}>
-                    {row.status === 'active' ? 'disable' : 'enable'}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </Table>
+                  </td>
+                  <td>
+                    <span className={row.status === 'active' ? 'pill' : 'sev sev-medium'}>
+                      {row.status}
+                    </span>
+                    {row.valid_until && (
+                      <div className="muted" style={{ fontSize: 11.5 }}>
+                        until {new Date(row.valid_until).toLocaleDateString()}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    {row.asset
+                      ? <span className="mono">{row.asset.value}</span>
+                      : <span className="muted">—</span>}
+                  </td>
+                  <td className="row-action">
+                    <button className="mini" onClick={() => patchTarget(
+                      row, { status: row.status === 'active' ? 'disabled' : 'active' },
+                      row.status === 'active' ? 'disabled' : 're-enabled')}>
+                      {row.status === 'active' ? 'disable' : 'enable'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </Table>
+            <Pager page={pagedTargets.page} pages={pagedTargets.pages}
+              onChange={pagedTargets.setPage} total={pagedTargets.total}
+              perPage={pagedTargets.perPage} unit="targets" className="row-end" />
+          </>
         ) : (
           !error && <EmptyState title="Nothing declared yet"
             hint="Declare the domains, IP ranges and repositories the organization owns. Until you do, the honest answer to “may I test this?” is no." />
@@ -256,36 +271,46 @@ export default function Scope() {
 
       {tab === 'exclusions' && (
         exclusions.length ? (
-          <Table head={['type', 'value', 'reason', 'expires', 'status', '']}>
-            {exclusions.map((row) => (
-              <tr key={row.id}>
-                <td><span className="pill">{row.target_type}</span></td>
-                <td className="title mono">{row.value}</td>
-                <td className="muted">{row.reason}</td>
-                <td className="muted">
-                  {row.expires_at ? new Date(row.expires_at).toLocaleDateString() : 'no expiry'}
-                </td>
-                <td>
-                  <span className={row.status === 'active' ? 'pill' : 'sev sev-medium'}>
-                    {row.status}
-                  </span>
-                </td>
-                <td>
-                  <button className="mini" onClick={async () => {
-                    try {
-                      await api.patch(`/api/v1/scope/exclusions/${row.id}`, {
-                        status: row.status === 'active' ? 'disabled' : 'active',
-                        actor: principal,
-                      })
-                      load()
-                    } catch (e) { setError(String(e.message || e)) }
-                  }}>
-                    {row.status === 'active' ? 'disable' : 'enable'}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </Table>
+          <>
+            <div className="toolbar">
+              <Pager page={pagedExclusions.page} pages={pagedExclusions.pages}
+                onChange={pagedExclusions.setPage} total={pagedExclusions.total}
+                perPage={pagedExclusions.perPage} unit="exclusions" className="row-end" />
+            </div>
+            <Table head={['type', 'value', 'reason', 'expires', 'status', '']}>
+              {pagedExclusions.rows.map((row) => (
+                <tr key={row.id}>
+                  <td><span className="pill">{row.target_type}</span></td>
+                  <td className="title mono">{row.value}</td>
+                  <td className="muted">{row.reason}</td>
+                  <td className="muted">
+                    {row.expires_at ? new Date(row.expires_at).toLocaleDateString() : 'no expiry'}
+                  </td>
+                  <td>
+                    <span className={row.status === 'active' ? 'pill' : 'sev sev-medium'}>
+                      {row.status}
+                    </span>
+                  </td>
+                  <td>
+                    <button className="mini" onClick={async () => {
+                      try {
+                        await api.patch(`/api/v1/scope/exclusions/${row.id}`, {
+                          status: row.status === 'active' ? 'disabled' : 'active',
+                          actor: principal,
+                        })
+                        load()
+                      } catch (e) { setError(String(e.message || e)) }
+                    }}>
+                      {row.status === 'active' ? 'disable' : 'enable'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </Table>
+            <Pager page={pagedExclusions.page} pages={pagedExclusions.pages}
+              onChange={pagedExclusions.setPage} total={pagedExclusions.total}
+              perPage={pagedExclusions.perPage} unit="exclusions" className="row-end" />
+          </>
         ) : (
           !error && <EmptyState title="No exclusions"
             hint="Exclusions cover a value or a pattern and always beat a target that would include it." />

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import {
-  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Table, Tabs,
+  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Pager, Table, Tabs, usePage,
 } from './ui'
 
 /* A cycle is a time-boxed evaluation: charter, explicit selection, a frozen
@@ -32,6 +32,9 @@ export default function Cycles() {
   const [review, setReview] = useState({ results: '', learnings: '', criteria: [] })
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+
+  // A cycle closes but is never deleted, so the index only grows: it pages.
+  const paged = usePage(cycles, 25)
 
   useEffect(() => { load() }, [])
 
@@ -170,36 +173,44 @@ export default function Cycles() {
       <PageHeader
         title="Cycles"
         subtitle="Time-boxed evaluations · a cycle freezes a reference and grants no authorization"
-        actions={<button className="primary-action" onClick={() => setCreating(true)}>new cycle</button>}
+        actions={<>
+          <button className="primary-action" onClick={() => setCreating(true)}>new cycle</button>
+          <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+            total={paged.total} perPage={paged.perPage} unit="cycles" />
+        </>}
       />
 
       {error && <ErrorBanner error={error} />}
       {notice && <div className="banner banner-ok">{notice}</div>}
 
       {cycles.length ? (
-        <Table head={['name', 'state', 'owner', 'window', 'members', 'findings', '']}>
-          {cycles.map((row) => (
-            <tr key={row.id} className={cycle?.id === row.id ? 'selected' : ''}>
-              <td className="title">{row.name}
-                <div className="muted" style={{ fontSize: 11.5 }}>{row.description}</div>
-              </td>
-              <td><span className={row.state === 'active' ? 'pill' : 'muted'}>{row.state}</span></td>
-              <td className="muted">{row.owner || '—'}</td>
-              <td className="muted">
-                {row.starts_on ? new Date(row.starts_on).toLocaleDateString() : '—'}
-                {' → '}
-                {row.ends_on ? new Date(row.ends_on).toLocaleDateString() : '—'}
-              </td>
-              <td>{row.members}</td>
-              <td>{row.linked_findings}</td>
-              <td>
-                <button className="mini" onClick={() => openCycle(row.id)}>
-                  {cycle?.id === row.id ? 'hide' : 'open'}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </Table>
+        <>
+          <Table head={['name', 'state', 'owner', 'window', 'members', 'findings', '']}>
+            {paged.rows.map((row) => (
+              <tr key={row.id} className={cycle?.id === row.id ? 'selected' : ''}>
+                <td className="title">{row.name}
+                  <div className="muted" style={{ fontSize: 11.5 }}>{row.description}</div>
+                </td>
+                <td><span className={row.state === 'active' ? 'pill' : 'muted'}>{row.state}</span></td>
+                <td className="muted">{row.owner || '—'}</td>
+                <td className="muted">
+                  {row.starts_on ? new Date(row.starts_on).toLocaleDateString() : '—'}
+                  {' → '}
+                  {row.ends_on ? new Date(row.ends_on).toLocaleDateString() : '—'}
+                </td>
+                <td>{row.members}</td>
+                <td>{row.linked_findings}</td>
+                <td>
+                  <button className="mini" onClick={() => openCycle(row.id)}>
+                    {cycle?.id === row.id ? 'hide' : 'open'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </Table>
+          <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+            total={paged.total} perPage={paged.perPage} unit="cycles" className="row-end" />
+        </>
       ) : (
         !error && <EmptyState title="No cycles yet"
           hint="Create one with an explicit selection: projects, groups or environments. An empty selection is incomplete, and 'whole organization' must be explicit." />

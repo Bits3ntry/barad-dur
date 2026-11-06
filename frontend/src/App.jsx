@@ -8,6 +8,8 @@ import Lifecycle from './Lifecycle'
 import Members from './Members'
 import Assets from './Assets'
 import Components from './Components'
+import Sbom from './Sbom'
+import PipelineBuilder from './PipelineBuilder'
 import Findings from './Findings'
 import Notifications from './Notifications.jsx'
 import CodeReview from './CodeReview'
@@ -21,7 +23,6 @@ import Setup from './Setup'
 import Startup from './Startup'
 import Invite from './Invite'
 import Projects from './Projects'
-import Sbom from './Sbom'
 import CtemCycle from './CtemCycle'
 import Scope from './Scope'
 import Vulnerabilities from './Vulnerabilities'
@@ -35,7 +36,7 @@ import Icon from './icons'
 import MyWork from './MyWork'
 import { api } from './api'
 import Login, { BrandMark } from './Login'
-import { Modal } from './ui'
+import { getTheme, setTheme } from './ui'
 
 /* Navigation follows the CTEM loop: the five phases are the spine, and the
    screens that feed them sit underneath. Groups collapse, because 20 flat rows
@@ -70,30 +71,18 @@ const NAV = [
       { key: 'business-impact', label: 'Business impact', icon: 'business-impact' },
     ] },
   ] },
-  { group: 'Code security', collapsible: true, defaultOpen: true, items: [
-    { key: 'analysis', label: 'Code analysis', icon: 'analysis' },
-    { key: 'code', label: 'Pull requests', icon: 'code' },
-  ] },
   { group: 'Delivery', collapsible: true, items: [
-    { key: 'pipelines', label: 'Pipelines', icon: 'pipelines' },
+    { key: 'pipeline', label: 'Pipelines', icon: 'pipelines' },
     { key: 'gates', label: 'Quality gates', icon: 'gates' },
     { key: 'pentest', label: 'Pentests', icon: 'pentest' },
     { key: 'regression', label: 'Regression', icon: 'regression' },
   ] },
   { group: 'Supply chain', collapsible: true, items: [
-    { key: 'sbom', label: 'SBOMs', icon: 'components' },
+    { key: 'sbom', label: 'Builds', icon: 'components' },
     { key: 'licenses', label: 'Licenses', icon: 'licenses' },
     { key: 'orchestration', label: 'Orchestration', icon: 'orchestration' },
     { key: 'jira', label: 'Jira', icon: 'jira' },
     { key: 'remediation', label: 'Remediation', icon: 'remediation' },
-  ] },
-  { group: 'Administration', collapsible: true, items: [
-    { key: 'security', label: 'My security', icon: 'grants' },
-    { key: 'notifications', label: 'Notifications', icon: 'notifications' },
-    { key: 'grants', label: 'Grants', icon: 'grants' },
-    { key: 'members', label: 'Members', icon: 'members' },
-    { key: 'audit', label: 'Audit trail', icon: 'audit' },
-    { key: 'setup', label: 'Setup guide', icon: 'setup' },
   ] },
 ]
 
@@ -105,13 +94,36 @@ const LEGACY_KEYS = {
   prioritization: 'ctem',
   validation: 'ctem',
   mobilization: 'ctem',
+  pipelines: 'pipeline',
 }
+
+/* Two screens are no longer in the sidebar because they are reached from the
+   record that needs them: the analysis viewer from a finding, pull requests
+   from a delivery gate. They keep their keys and their names so a bookmark,
+   a pasted link and the crumb above the screen still resolve. */
+const HIDDEN_SCREENS = {
+  analysis: 'Code analysis',
+  code: 'Pull requests',
+  'pipeline-new': 'New pipeline',
+  settings: 'Settings',
+  security: 'My security',
+  notifications: 'Notifications',
+  grants: 'Grants',
+  members: 'Members',
+  audit: 'Audit trail',
+  setup: 'Setup guide',
+}
+const SETTINGS_KEYS = new Set(['security', 'notifications', 'grants', 'members', 'audit', 'setup'])
 
 const NAV_ITEMS = NAV.flatMap((entry) => [
   ...entry.items,
   ...((entry.sections || []).flatMap((section) => section.items)),
 ])
-const ALL_KEYS = [...NAV_ITEMS.map((item) => item.key), ...Object.keys(LEGACY_KEYS)]
+const ALL_KEYS = [
+  ...NAV_ITEMS.map((item) => item.key),
+  ...Object.keys(LEGACY_KEYS),
+  ...Object.keys(HIDDEN_SCREENS),
+]
 
 /* The hash carries an optional focus so one screen can hand a record to
    another: #findings::<finding id> and #analysis::run=<run>&path=…&line=… */
@@ -121,10 +133,22 @@ function parseHash() {
   const tail = rest.join('::')
   const tab = LEGACY_KEYS[key] || (ALL_KEYS.includes(key) ? key : 'dashboard')
   const focus = {}
-  if (tab === 'sbom' && tail) {
-    const [projectSlug, ...rest] = tail.split('/')
+  if (SETTINGS_KEYS.has(tab)) return { tab: 'settings', focus: { settingsSection: tab } }
+  if ((key === 'sbom' || tab === 'components') && tail) {
+    // A label can belong to several components at once (a monorepo ships
+    // backend and web as `main`), so the exact build travels in the link.
+    const [path, versionId] = tail.split('::')
+    const [projectSlug, ...rest] = path.split('/')
     focus.projectSlug = projectSlug
-    focus.version = decodeURIComponent(rest.join('/'))
+    // project/component/version: two builds can share a label, so the component
+    // belongs in the address. A two-segment tail is the old project/version form.
+    if (rest.length >= 2) {
+      focus.component = decodeURIComponent(rest[0])
+      focus.version = decodeURIComponent(rest.slice(1).join('/'))
+    } else {
+      focus.version = decodeURIComponent(rest.join('/'))
+    }
+    if (versionId) focus.versionId = versionId
   }
   if (tab === 'findings' && tail) focus.findingId = tail
   if (tab === 'analysis' && tail) {
@@ -133,6 +157,7 @@ function parseHash() {
     focus.path = params.get('path') || undefined
     focus.line = params.get('line') ? Number(params.get('line')) : undefined
   }
+  if (tab === 'settings' && tail) focus.settingsSection = tail
   return { tab, focus }
 }
 
@@ -153,14 +178,43 @@ function parseProjectPath() {
   }
 }
 
+/* The pipeline and the scanner fleet are things people paste to each other, so
+   they own a real path too. A fragment is invisible to a bookmark, to the
+   server and to anyone reading a link out loud. */
+const SCREEN_PATHS = {
+  pipeline: '/pipeline',
+  'pipeline-new': '/pipeline/new',
+  orchestration: '/orchestration',
+}
+const PATH_SCREENS = Object.fromEntries(
+  Object.entries(SCREEN_PATHS).map(([key, path]) => [path, key]))
+
+/* One resolver for both address shapes: a hash wins, then a real path. A legacy
+   fragment that owns a path is rewritten in place, so the address bar never
+   keeps two spellings of the same screen. */
+function parseRoute() {
+  if (window.location.hash) {
+    const next = parseHash()
+    const path = SCREEN_PATHS[next.tab]
+    if (path) window.history.replaceState({}, '', path)
+    return { tab: next.tab, focus: next.focus, project: null }
+  }
+  const project = parseProjectPath()
+  if (project) return { tab: 'projects', focus: {}, project }
+  const key = PATH_SCREENS[window.location.pathname.replace(/\/+$/, '') || '/']
+  return { tab: key || 'dashboard', focus: {}, project: null }
+}
+
 export default function App() {
-  const [projectRoute, setProjectRoute] = useState(() => parseProjectPath())
-  const [tab, setTab] = useState(() => (parseProjectPath() ? 'projects' : parseHash().tab))
-  const [focus, setFocus] = useState(() => parseHash().focus)
+  // Resolved once; the listeners below re-resolve on every real navigation.
+  const [entry] = useState(parseRoute)
+  const [projectRoute, setProjectRoute] = useState(entry.project)
+  const [tab, setTab] = useState(entry.tab)
+  const [focus, setFocus] = useState(entry.focus)
   const [projects, setProjects] = useState([])
   const [projectsError, setProjectsError] = useState('')
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [session, setSession] = useState(() => api.settings())
+  const [theme, setThemePreference] = useState(() => getTheme())
   const [org, setOrg] = useState(null)
   const [badges, setBadges] = useState({})
   const [query, setQuery] = useState('')
@@ -185,29 +239,19 @@ export default function App() {
   }, [])
 
   const needsKey = !session.key && !session.token
-  const [providerUrl, setProviderUrl] = useState(session.url || '')
 
   useEffect(() => {
-    if (needsKey) return
-    setProviderUrl(api.settings().url || '')
-  }, [needsKey])
-
-  useEffect(() => {
-    const onHash = () => {
-      // The hash names a screen only when the path does not name a project.
-      const project = window.location.hash ? null : parseProjectPath()
-      if (project) { setProjectRoute(project); setTab('projects'); setFocus({}); return }
-      const next = parseHash()
-      setProjectRoute(null)
+    const onRoute = () => {
+      const next = parseRoute()
+      setProjectRoute(next.project)
       setTab(next.tab)
       setFocus(next.focus)
     }
-    const onPop = () => onHash()
-    window.addEventListener('hashchange', onHash)
-    window.addEventListener('popstate', onPop)
+    window.addEventListener('hashchange', onRoute)
+    window.addEventListener('popstate', onRoute)
     return () => {
-      window.removeEventListener('hashchange', onHash)
-      window.removeEventListener('popstate', onPop)
+      window.removeEventListener('hashchange', onRoute)
+      window.removeEventListener('popstate', onRoute)
     }
   }, [])
 
@@ -233,7 +277,7 @@ export default function App() {
         })
       })
       .catch(() => setBadges({}))
-  }, [needsKey, settingsOpen])
+  }, [needsKey])
 
   // Collapsed nav groups, remembered across reloads.
   const [closedGroups, setClosedGroups] = useState(() => {
@@ -252,10 +296,19 @@ export default function App() {
     localStorage.setItem('barad.nav.closed', JSON.stringify([...next]))
   }
 
-  const go = (key) => {
-    setTab(key)
-    setFocus({})
-    if (key === 'projects') {
+  const go = (key, nextFocus = {}) => {
+    const settingsChild = SETTINGS_KEYS.has(key)
+    const destination = settingsChild ? 'settings' : key
+    const destinationFocus = settingsChild ? { ...nextFocus, settingsSection: key } : nextFocus
+    setTab(destination)
+    setFocus(destinationFocus)
+    const path = SCREEN_PATHS[destination]
+    if (path) {
+      window.history.pushState({}, '', path)
+      setProjectRoute(null)
+      return
+    }
+    if (destination === 'projects') {
       window.history.pushState({}, '', '/projects')
       setProjectRoute({ slug: '', tab: 'summary' })
       if (window.location.hash) window.history.replaceState({}, '', '/projects')
@@ -264,13 +317,30 @@ export default function App() {
     setProjectRoute(null)
     // pushState, not location.hash: assigning the hash keeps the current path,
     // which is how /projects/aurea/components#grants ended up as a dead link.
-    window.history.pushState({}, '', `/#${key}`)
+    const tail = destination === 'settings' && destinationFocus.settingsSection
+      ? `::${destinationFocus.settingsSection}`
+      : ''
+    window.history.pushState({}, '', `/#${destination}${tail}`)
   }
 
-  function openBom(slug, version) {
-    setTab('sbom')
-    setFocus({ projectSlug: slug, version })
-    window.history.pushState({}, '', `/#sbom::${slug}/${encodeURIComponent(version)}`)
+  function openSettings(section = 'organization') {
+    go('settings', { settingsSection: section })
+  }
+
+  function toggleTheme() {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    setThemePreference(next)
+  }
+
+  function openComponentVersion(slug, component, version, versionId) {
+    setTab('components')
+    setFocus({ projectSlug: slug, component, version, versionId })
+    const parts = [slug]
+    if (component) parts.push(encodeURIComponent(component))
+    parts.push(encodeURIComponent(version))
+    const hash = `/#components::${parts.join('/')}${versionId ? `::${versionId}` : ''}`
+    window.history.pushState({}, '', hash)
   }
 
   function openProject(slug, nextTab = 'summary') {
@@ -302,7 +372,7 @@ export default function App() {
 
   const title = useMemo(() => {
     const found = NAV_ITEMS.find((item) => item.key === tab)
-    return found ? found.label : 'Dashboard'
+    return found ? found.label : (HIDDEN_SCREENS[tab] || 'Dashboard')
   }, [tab])
 
   // An invitation is opened by someone with no credential yet: it must render
@@ -314,7 +384,6 @@ export default function App() {
   if (needsKey) {
     return <Login onAuthenticated={(context = {}) => {
       setSession(api.settings())
-      setSettingsOpen(false)
       // The first bootstrap lands on /startup, which owns the rest of the
       // walk-through. Sending it to the Setup guide here would overwrite the
       // step hash and drop the owner into the wrong screen.
@@ -338,6 +407,7 @@ export default function App() {
           tab={projectRoute?.tab || 'summary'}
           onNavigate={go}
           onOpenProject={openProject}
+          onOpenVersion={openComponentVersion}
           onProjectTab={switchProjectTab}
           onCloseProject={closeProject} />
       )
@@ -352,9 +422,7 @@ export default function App() {
       )
       case 'code': return <CodeReview projects={projects} />
       case 'gates': return <Gates projects={projects} />
-      case 'sbom': return (
-        <Sbom focus={focus} onOpen={openBom} onBack={() => go('sbom')} />
-      )
+
       case 'licenses': return <Licenses projects={projects} />
       case 'pentest': return <Pentest projects={projects} />
       case 'jira': return <Jira />
@@ -375,10 +443,25 @@ export default function App() {
       case 'attack-surface': return <AttackSurface />
       case 'cycles': return <Cycles />
       case 'my-work': return <MyWork />
-      case 'components': return <Components projects={projects} onChanged={loadProjects} />
-      case 'pipelines': return <Pipelines />
+      case 'sbom': return <Sbom focus={focus} onOpen={openComponentVersion} onBack={() => go('sbom')} />
+      case 'components': return <Components projects={projects} focus={focus} onChanged={loadProjects}
+        onOpenProject={openProject} onOpenVersion={openComponentVersion}
+        onBack={() => go('components')} />
+      case 'pipeline': return <Pipelines
+        onNewPipeline={() => go('pipeline-new')}
+        onOpenFinding={(findingId) => { window.location.hash = `findings::${findingId}` }} />
+      case 'pipeline-new': return <PipelineBuilder
+        onBack={() => go('pipeline')} onDone={() => go('pipeline')} />
       case 'security': return <Security />
       case 'notifications': return <Notifications />
+      case 'settings': return <Settings
+        section={focus.settingsSection || 'organization'}
+        org={org}
+        onOrgChanged={setOrg}
+        onNavigate={go}
+        onBack={() => go('dashboard')}
+        onSessionChanged={() => setSession(api.settings())}
+      />
       default: return <Dashboard projects={projects} onNavigate={go} />
     }
   }
@@ -386,29 +469,40 @@ export default function App() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <div className="brand">
-          {org && org.logo
-            ? <img className="brand-logo" src={org.logo} alt="" />
-            : <BrandMark size={26} />}
-          <span className="brand-text">
-            <span className="brand-name">{org ? org.name : 'BARAD-DÛR'}</span>
-            <span className="brand-sub">continuous exposure</span>
+        <button className="product-brand" onClick={() => go('dashboard')} aria-label="Go to dashboard">
+          <BrandMark size={28} />
+          <span className="product-brand-copy">
+            <span>barad-dûr</span>
+            <small>exposure control</small>
           </span>
-        </div>
+        </button>
+        <button className="org-switcher" onClick={() => openSettings('organization')}>
+          {org?.logo
+            ? <img className="org-avatar" src={org.logo} alt="" />
+            : <span className="org-avatar org-avatar-fallback">{(org?.name || 'O').slice(0, 1)}</span>}
+          <span className="org-switcher-copy">
+            <small>organization</small>
+            <strong>{org?.name || 'Your organization'}</strong>
+          </span>
+          <span className="org-switcher-action">settings</span>
+        </button>
         {(() => {
           const renderNavItem = (item) => {
             const count = item.badge ? badges[item.badge] : 0
             return (
               <button
                 key={item.key}
-                className={`nav-item${tab === item.key ? ' active' : ''}`}
+                className={`nav-item${tab === item.key ? ' active' : ''}${item.disabled ? ' nav-item-disabled' : ''}`}
                 aria-current={tab === item.key ? 'page' : undefined}
-                onClick={() => go(item.key)}
+                aria-disabled={item.disabled || undefined}
+                onClick={() => !item.disabled && go(item.key)}
+                title={item.disabled ? 'Not available in this workspace yet' : undefined}
               >
                 <span className="nav-item-label">
                   <Icon name={item.icon} />
                   <span>{item.label}</span>
                 </span>
+                {item.disabled && <span className="nav-item-state">not ready</span>}
                 {count > 0 && (
                   <span className={`badge-count${item.badge === 'critical' ? ' bad' : ''}`}>
                     {count}
@@ -485,12 +579,20 @@ export default function App() {
             )}
           </div>
           <div className="topbar-actions">
-            <span className="pill">
-              {session.token ? 'signed in' : 'api key'}
-              {providerUrl ? ` · ${providerUrl.replace(/^https?:\/\//, '')}` : ''}
-            </span>
-            <button className="btn-ghost mini" onClick={() => setSettingsOpen(true)}>
-              settings
+            {(() => {
+              const isDark = document.documentElement.dataset.theme === 'dark'
+              const label = theme === 'system' ? 'System' : (isDark ? 'Light' : 'Dark')
+              return (
+            <button className="theme-toggle" onClick={toggleTheme}
+              title={isDark ? 'Use light appearance' : 'Use dark appearance'}>
+              <Icon name={isDark ? 'sun' : 'moon'} size={15} />
+              <span>{label}</span>
+            </button>
+              )
+            })()}
+            <button className="identity-control" onClick={() => openSettings('account')}>
+              <span className="identity-dot" aria-hidden="true" />
+              <span>{session.token ? 'Signed in' : 'API key'}</span>
             </button>
             <button className="btn-ghost mini" onClick={async () => {
               if (session.token) { try { await api.post('/api/v1/auth/logout', {}) } catch { /* session may be gone */ } }
@@ -506,7 +608,7 @@ export default function App() {
             <div className="banner banner-error" role="alert">
               <span>{projectsError}</span>
               <span className="row-end">
-                <button className="mini" onClick={() => setSettingsOpen(true)}>settings</button>
+                <button className="mini" onClick={() => openSettings('connection')}>settings</button>
               </span>
             </div>
           )}
@@ -514,17 +616,7 @@ export default function App() {
         </main>
       </div>
 
-      {settingsOpen && (
-        <Modal title="Connection and identity" onClose={() => {
-          setSettingsOpen(false)
-          setSession(api.settings())
-        }}>
-          <Settings onClose={() => {
-            setSettingsOpen(false)
-            setSession(api.settings())
-          }} />
-        </Modal>
-      )}
+
     </div>
   )
 }

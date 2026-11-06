@@ -1,16 +1,26 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { PageHeader } from './ui'
+import { Pager, PageHeader, usePage } from './ui'
 
 const ACTIONS = ['', 'authorization.', 'member.', 'remediation.', 'asset.',
   'easm.', 'vex.', 'intel.', 'suppression.', 'finding.']
+const PER_PAGE = 25
 
 export default function Audit() {
   const [state, setState] = useState({ rows: [], total: 0, chain_ok: null,
     actor: '', action: '', since: '', until: '', q: '' })
   const [error, setError] = useState('')
 
-  useEffect(() => { load() }, [state.actor, state.action, state.since, state.until, state.q])
+  // The endpoint returns every entry the filters match, so the page is a window
+  // over that answer rather than a second query.
+  const paged = usePage(state.rows, PER_PAGE)
+
+  useEffect(() => {
+    // Narrowing the filters changes the list under the reader: start at its
+    // first page instead of at an offset that only made sense for the old one.
+    paged.setPage(0)
+    load()
+  }, [state.actor, state.action, state.since, state.until, state.q])
 
   function load() {
     setError('')
@@ -44,6 +54,8 @@ export default function Audit() {
           {state.chain_ok === null ? 'checking…' : state.chain_ok ? 'chain verified' : 'CHAIN BROKEN'}
         </span>
         <span className="count">{state.total} entries</span>
+        <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+          total={paged.total} perPage={paged.perPage} unit="entries" className="row-end" />
       </div>
       {error && <div className="banner banner-error">{error}</div>}
       <table>
@@ -51,7 +63,7 @@ export default function Audit() {
           <tr><th>#</th><th>at</th><th>actor</th><th>action</th><th>detail (reason / policy)</th><th>hash</th></tr>
         </thead>
         <tbody>
-          {state.rows.map((r) => (
+          {paged.rows.map((r) => (
             <tr key={r.position}>
               <td>{r.position}</td>
               <td>{new Date(r.at).toLocaleString()}</td>
@@ -67,6 +79,8 @@ export default function Audit() {
           ))}
         </tbody>
       </table>
+      <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
+        total={paged.total} perPage={paged.perPage} unit="entries" className="row-end" />
       {!state.rows.length && !error && <p className="empty">No audit entries for these filters.</p>}
     </div>
   )

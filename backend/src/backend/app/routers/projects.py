@@ -31,12 +31,17 @@ from sqlalchemy.orm import Session
 
 from backend.app import auth, auth_local, models, scm_client
 from backend.app import secrets as secret_store
+from backend.app import severity as severity_vocab
 from backend.app.db import get_session
+from backend.app.gates import NON_OPEN
 from backend.app.projects import by_ref
 from backend.app.routers.identity import _audit as _audit_log
 
 router = APIRouter(prefix="/api/v1", tags=["inventory-projects"])
 
+# A settled finding still happened: it is counted beside the open ones, never
+# dropped, or a build whose only result was dismissed reads as an unscanned one.
+SETTLED_STATUSES = NON_OPEN | {"suppressed"}
 EXPOSURES = {"public", "internal", "unknown"}
 SOURCES = {"manual", "pipeline", "health", "discovery"}
 PROBE_TIMEOUT = 8.0
@@ -417,6 +422,45 @@ def project_inventory(ref: str,
                  (session.query(models.SbomBaseline)
                   .filter(models.SbomBaseline.project_version_id.in_(
                       [row.id for row in version_rows] or [""])).all())}
+    components_by_version = dict(
+        (version_id, count) for version_id, count
+        in (session.query(models.VersionComponent.project_version_id,
+                          func.count(models.VersionComponent.id))
+            .filter(models.VersionComponent.project_version_id.in_(
+                [row.id for row in version_rows] or [""]))
+            .group_by(models.VersionComponent.project_version_id).all()))
+    # What each build came back with, in one query: the components table is read
+    # to answer "which build is in trouble", and that needs the counts beside the
+    # label, not a second request per row.
+    findings_by_version: dict[str, dict] = {}
+    for version_id, kind, finding_status, severity, count in (
+            session.query(models.Finding.last_seen_version_id, models.Finding.kind,
+                          models.Finding.status, models.Finding.severity,
+                          func.count(models.Finding.id))
+            .filter(models.Finding.org_id == org.id,
+                    models.Finding.last_seen_version_id.in_(
+                        [row.id for row in version_rows] or [""]))
+            .group_by(models.Finding.last_seen_version_id, models.Finding.kind,
+                      models.Finding.status, models.Finding.severity).all()):
+        bucket = findings_by_version.setdefault(
+            version_id, {"vulns": 0, "code": 0, "secrets": 0, "dismissed": 0,
+                         "by_severity": {}})
+        if (finding_status or "").lower() in SETTLED_STATUSES:
+            bucket["dismissed"] += count
+            continue
+        if kind == "vulnerability":
+            bucket["vulns"] += count
+            name = severity_vocab.canonical(severity)
+            bucket["by_severity"][name] = bucket["by_severity"].get(name, 0) + count
+        elif kind == "secret":
+            bucket["secrets"] += count
+        else:
+            bucket["code"] += count
+
+    def version_findings(version_id: str) -> dict:
+        return findings_by_version.get(
+            version_id,
+            {"vulns": 0, "code": 0, "secrets": 0, "dismissed": 0, "by_severity": {}})
     return {"data": {
         "project": {"id": project.id, "name": project.name, "slug": project.slug,
                     "versions": project_versions,
@@ -432,8 +476,10 @@ def project_inventory(ref: str,
             "id": row.id, "version": row.version,
             "component_id": row.component_id,
             "component": component_name(row.component_id),
+            "components": components_by_version.get(row.id, 0),
             "sbom_imports": imports_by_version.get(row.id, 0),
             "baseline": row.id in baselines,
+            "findings": version_findings(row.id),
             "deployments": [
                 {"component": dep["component"], "environment": dep["environment"],
                  "deployment_id": dep["id"]}

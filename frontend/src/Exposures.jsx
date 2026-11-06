@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import {
-  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Select, SeverityBadge,
-  Table, Tabs,
+  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Pager, Select, SeverityBadge,
+  Table, Tabs, usePage,
 } from './ui'
 
 /* Exposures manages the condition that needs a decision; Changes is the
@@ -13,6 +13,10 @@ const DECISION_LABEL = {
   resolve: 'resolve', accept: 'accept with validity', false_positive: 'false positive',
   reopen: 'reopen',
 }
+
+/* The endpoints answer these lists whole, so the screen slices them. A page
+   this size keeps the toolbar and the first rows in one glance. */
+const PER_PAGE = 25
 
 export default function Exposures() {
   const [tab, setTab] = useState('overview')
@@ -27,6 +31,14 @@ export default function Exposures() {
   const [filter, setFilter] = useState({ state: 'open', kind: '' })
   const [decide, setDecide] = useState(null)
   const [decision, setDecision] = useState({ action: 'resolve', reason: '', valid_until: '' })
+
+  // Each tab's list is sliced on its own: paging the changes table must not
+  // move the exposures page. The hook clamps itself when a load shrinks a list.
+  const pagedEvents = usePage(events, PER_PAGE)
+  const pagedChanges = usePage(changes, PER_PAGE)
+
+  // A new filter is a new question, not the fourth page of the old answer.
+  useEffect(() => { pagedEvents.setPage(0) }, [filter.state, filter.kind])
 
   useEffect(() => { loadExposures() }, [filter.state, filter.kind])
   useEffect(() => { if (tab === 'changes') loadChanges() }, [tab])
@@ -120,11 +132,14 @@ export default function Exposures() {
               <option value="technology_changed">technology changed</option>
             </select>
             <button className="mini" onClick={loadExposures}>refresh</button>
+            <Pager page={pagedEvents.page} pages={pagedEvents.pages}
+              onChange={pagedEvents.setPage} total={pagedEvents.total}
+              perPage={PER_PAGE} unit="exposures" className="row-end" />
           </div>
 
           {events.length ? (
             <Table head={['kind', 'asset', 'severity', 'seen', 'occurrences', 'state', '']}>
-              {events.map((row) => (
+              {pagedEvents.rows.map((row) => (
                 <tr key={row.id}>
                   <td className="title">
                     {row.kind.replaceAll('_', ' ')}
@@ -159,6 +174,10 @@ export default function Exposures() {
             !error && <EmptyState title="No exposure events"
               hint="Events appear when an imported observation shows a new host, a newly open port, a dangling alias or an expiring certificate." />
           )}
+
+          <Pager page={pagedEvents.page} pages={pagedEvents.pages}
+            onChange={pagedEvents.setPage} total={pagedEvents.total}
+            perPage={PER_PAGE} unit="exposures" className="row-end" />
         </>
       )}
 
@@ -170,10 +189,13 @@ export default function Exposures() {
             ))}
             <span className="spacer" />
             <span className="muted">last 14 days · derived from observations</span>
+            <Pager page={pagedChanges.page} pages={pagedChanges.pages}
+              onChange={pagedChanges.setPage} total={pagedChanges.total}
+              perPage={PER_PAGE} unit="changes" className="row-end" />
           </div>
           {changes.length ? (
             <Table head={['when', 'category', 'asset', 'before', 'after', 'source']}>
-              {changes.map((row, index) => (
+              {pagedChanges.rows.map((row, index) => (
                 <tr key={`${row.asset_id}-${row.category}-${index}`}>
                   <td className="muted">{new Date(row.observed_at).toLocaleString()}</td>
                   <td><span className="pill">{row.category.replaceAll('_', ' ')}</span></td>
@@ -192,6 +214,11 @@ export default function Exposures() {
             !error && <EmptyState title="No changes in the window"
               hint="Import observations twice: the first establishes a baseline, the second produces comparable changes." />
           )}
+
+          <Pager page={pagedChanges.page} pages={pagedChanges.pages}
+            onChange={pagedChanges.setPage} total={pagedChanges.total}
+            perPage={PER_PAGE} unit="changes" className="row-end" />
+
           {notes.length > 0 && (
             <div className="detail">
               <dl>

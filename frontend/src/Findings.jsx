@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
-import { Dialog, EmptyState, ErrorBanner, Input, Loading, PageHeader, Table,
-         Drawer, Tabs, StatusBadge } from './ui'
+import { Dialog, EmptyState, ErrorBanner, Input, Loading, PageHeader, Pager,
+         Table, Drawer, Tabs, StatusBadge, serverPager } from './ui'
 import { VexSection } from './Vex'
 
 const tabs = [
@@ -32,14 +32,14 @@ function Occurrences({ occurrences }) {
   )
 }
 
-const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN', null]
-
 function slaCell(deadline) {
   if (!deadline) return <span className="muted">no policy</span>
   const days = Math.floor((new Date(deadline) - new Date()) / 86400000)
   const cls = days < 0 ? 'sev-critical' : days <= 2 ? 'sev-high' : 'muted'
   return <span className={cls}>{days < 0 ? `${-days}d overdue` : `${days}d left`}</span>
 }
+
+const PER_PAGE = 25
 
 export default function Findings({ projects, focusId, onOpenAnalysis }) {
   const [state, setState] = useState({
@@ -56,6 +56,8 @@ export default function Findings({ projects, focusId, onOpenAnalysis }) {
   })
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
+  const [offset, setOffset] = useState(0)
+  const pager = serverPager(state.total, PER_PAGE, offset, setOffset)
 
   // Deep link from the analysis viewer (#findings::<id>): open that drawer once
   // the row exists in the list.
@@ -76,18 +78,32 @@ export default function Findings({ projects, focusId, onOpenAnalysis }) {
     }
   }, [projects])
 
+  // A filter is a new question, so it starts on the first page; changing page
+  // keeps the question. The reset keys off the filters themselves, because a
+  // page change is also an offset change and must not snap back to page one.
+  const filters = `${state.project}|${state.version}|${state.kind}|${state.includeSuppressed}|${bump}`
+  const lastFilters = React.useRef(filters)
+
+  // Ordering is the platform's: the list is paginated, and a sort applied to the
+  // page would only reorder the slice it can see.
   useEffect(() => {
+    if (lastFilters.current !== filters) {
+      lastFilters.current = filters
+      if (offset !== 0) { setOffset(0); return }
+    }
     const params = new URLSearchParams()
     if (state.project) params.set('project', state.project)
     if (state.version) params.set('version', state.version)
     if (state.kind) params.set('kind', state.kind)
     if (state.includeSuppressed) params.set('include_suppressed', 'true')
-    const query = params.toString() ? `?${params.toString()}` : ''
+    params.set('sort', 'severity')
+    params.set('limit', PER_PAGE)
+    params.set('offset', offset)
     setState((s) => ({ ...s, loading: true, error: '' }))
-    api.get(`/api/v1/findings${query}`)
+    api.get(`/api/v1/findings?${params.toString()}`)
       .then((data) => setState((s) => ({ ...s, rows: data.data, total: data.total, loading: false })))
       .catch((error) => setState((s) => ({ ...s, loading: false, error: String(error.message || error) })))
-  }, [state.project, state.version, state.kind, state.includeSuppressed, bump])
+  }, [filters, offset])
 
   const project = projects.find((p) => p.name === state.project)
 
@@ -265,6 +281,10 @@ export default function Findings({ projects, focusId, onOpenAnalysis }) {
           />
           include suppressed
         </label>
+        <span className="row-end">
+          <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
+            total={pager.total} perPage={PER_PAGE} unit="findings" />
+        </span>
       </div>
       {state.error && <ErrorBanner error={state.error} onRetry={() => setBump((n) => n + 1)} />}
       {state.loading && !state.rows.length && <Loading rows={6} />}
@@ -273,7 +293,7 @@ export default function Findings({ projects, focusId, onOpenAnalysis }) {
           <EmptyState title="No findings for this selection"
             hint="Widen the filters, or ingest a scan to produce findings." />
         )}>
-          {[...state.rows].sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity)).map((row) => (
+          {state.rows.map((row) => (
             <React.Fragment key={row.id}>
               <tr className={state.detail?.id === row.id ? 'selected' : ''} onClick={() => openDetail(row)}>
                 <td><span className={`prio prio-${(row.priority || 'p3').toLowerCase()}`}>{row.priority || 'P3'}</span></td>
@@ -403,6 +423,12 @@ export default function Findings({ projects, focusId, onOpenAnalysis }) {
             </React.Fragment>
           ))}
       </Table>
+      {pager.pages > 1 && (
+        <div className="row row-end" style={{ marginTop: 10 }}>
+          <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
+            total={pager.total} perPage={PER_PAGE} unit="findings" />
+        </div>
+      )}
 
       <Dialog open={createOpen} title="Record a finding"
         onClose={() => setCreateOpen(false)} confirmLabel="create"

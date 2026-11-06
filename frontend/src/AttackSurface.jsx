@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import {
-  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Table, Tabs,
+  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Pager, Table, Tabs, usePage,
 } from './ui'
 
 /* Attack surface shows what was observed and never upgrades it into a claim:
@@ -34,6 +34,13 @@ export default function AttackSurface() {
   const [decision, setDecision] = useState({ action: 'external', reason: '' })
   const [endpointState, setEndpointState] = useState(null)
   const [endpointForm, setEndpointForm] = useState({ state: 'observed', reason: '', finding_id: '' })
+
+  // Each list arrives whole — it is what the last collector import produced, not
+  // a window over something bigger — so the page is a reading aid, and every
+  // table keeps its own place while the reader moves between tabs.
+  const pagedEndpoints = usePage(endpoints, 25)
+  const pagedLookalikes = usePage(lookalikes, 25)
+  const pagedReview = usePage(review, 25)
 
   useEffect(() => {
     if (tab === 'web') loadWeb()
@@ -142,11 +149,14 @@ export default function AttackSurface() {
             <span className="pill">{webCounters.confirmed || 0} confirmed</span>
             <span className="spacer" />
             <button className="mini" onClick={loadWeb}>refresh</button>
+            <Pager page={pagedEndpoints.page} pages={pagedEndpoints.pages}
+              onChange={pagedEndpoints.setPage} total={pagedEndpoints.total}
+              perPage={pagedEndpoints.perPage} unit="endpoints" className="row-end" />
           </div>
           {note && <p className="muted">{note}</p>}
           {endpoints.length ? (
             <Table head={['origin', 'path', 'method', 'status', 'state', 'last observed', '']}>
-              {endpoints.map((row) => (
+              {pagedEndpoints.rows.map((row) => (
                 <tr key={row.id}>
                   <td className="mono">{row.origin}</td>
                   <td className="title mono">{row.path}</td>
@@ -176,6 +186,9 @@ export default function AttackSurface() {
             !error && <EmptyState title="No web paths imported"
               hint="Use POST /api/v1/attack-surface/web-endpoints with a crawler or report output. An empty list means no crawling has been imported." />
           )}
+          <Pager page={pagedEndpoints.page} pages={pagedEndpoints.pages}
+            onChange={pagedEndpoints.setPage} total={pagedEndpoints.total}
+            perPage={pagedEndpoints.perPage} unit="endpoints" className="row-end" />
         </>
       )}
 
@@ -189,10 +202,13 @@ export default function AttackSurface() {
             <span className="muted">
               passive only: DNS/CT evidence, never an HTTP contact
             </span>
+            <Pager page={pagedLookalikes.page} pages={pagedLookalikes.pages}
+              onChange={pagedLookalikes.setPage} total={pagedLookalikes.total}
+              perPage={pagedLookalikes.perPage} unit="candidates" className="row-end" />
           </div>
           {lookalikes.length ? (
             <Table head={['root', 'candidate', 'similarity', 'registration', 'state', '']}>
-              {lookalikes.map((row) => (
+              {pagedLookalikes.rows.map((row) => (
                 <tr key={row.id}>
                   <td className="mono">{row.root_domain}</td>
                   <td className="title mono">{row.candidate}</td>
@@ -224,6 +240,9 @@ export default function AttackSurface() {
             !error && <EmptyState title="No lookalikes"
               hint="Import a watched root domain and its candidates; DNS resolving alone is never treated as registration or malice." />
           )}
+          <Pager page={pagedLookalikes.page} pages={pagedLookalikes.pages}
+            onChange={pagedLookalikes.setPage} total={pagedLookalikes.total}
+            perPage={pagedLookalikes.perPage} unit="candidates" className="row-end" />
         </>
       )}
 
@@ -233,9 +252,14 @@ export default function AttackSurface() {
             Assets whose ownership is unsettled. Confirming an asset is ours does not
             authorize testing it, and an IP observed under a domain may belong to a CDN.
           </p>
+          <div className="toolbar">
+            <Pager page={pagedReview.page} pages={pagedReview.pages}
+              onChange={pagedReview.setPage} total={pagedReview.total}
+              perPage={pagedReview.perPage} unit="assets" className="row-end" />
+          </div>
           {review.length ? (
             <Table head={['asset', 'type', 'source', 'classification', 'observations', '']}>
-              {review.map((row) => (
+              {pagedReview.rows.map((row) => (
                 <tr key={row.asset.id}>
                   <td className="title mono">{row.asset.value}</td>
                   <td className="muted">{row.asset.type}</td>
@@ -257,6 +281,9 @@ export default function AttackSurface() {
             !error && <EmptyState title="Nothing to review"
               hint="Every asset has a settled ownership decision." />
           )}
+          <Pager page={pagedReview.page} pages={pagedReview.pages}
+            onChange={pagedReview.setPage} total={pagedReview.total}
+            perPage={pagedReview.perPage} unit="assets" className="row-end" />
         </>
       )}
 

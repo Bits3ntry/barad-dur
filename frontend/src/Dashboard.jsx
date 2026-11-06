@@ -23,19 +23,20 @@ function V0Overview({ data, onNavigate }) {
       filters: null },
   ]
   return (
-    <Card title="v0 counters" actions={
+    <Card title="Scope and coverage" actions={
       <span className="muted">as of {new Date(data.generated_at).toLocaleString()}</span>
     }>
-      <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+      <p className="dashboard-context">{data.coverage.note}</p>
+      <div className="scope-signals">
         {blocks.map((block) => (
-          <button key={block.key} className="mini" title={block.filters || ''}
+          <button key={block.key} title={block.filters || ''}
             onClick={() => onNavigate && onNavigate(block.key)}>
-            {block.label}: <strong>{block.value}</strong>
+            <strong>{block.value}</strong><span>{block.label}</span>
           </button>
         ))}
       </div>
-      <p className="muted" style={{ marginTop: 8 }}>
-        {data.coverage.note} · without owner: {data.coverage.assets_without_owner}
+      <p className="dashboard-context">
+        Without owner: {data.coverage.assets_without_owner}
         {' · '}without project: {data.coverage.assets_without_project}
         {' · '}change coverage notes: {data.coverage.change_coverage_notes}
       </p>
@@ -182,22 +183,26 @@ export default function Dashboard({ projects, onNavigate }) {
         </div>
       )}
 
-      <Card title="Findings">
-        <div className="metrics">
-          <Stat label="open" value={f.open} />
-          <Stat label="critical" value={openFindings.CRITICAL ?? 0}
-            tone={openFindings.CRITICAL ? 'bad' : ''} />
-          <Stat label="high" value={openFindings.HIGH ?? 0}
-            tone={openFindings.HIGH ? 'warn' : ''} />
-          <Stat label="medium" value={openFindings.MEDIUM ?? 0} />
-          <Stat label="known exploited" value={f.kev_open} tone={f.kev_open ? 'bad' : ''} />
-          <Stat label="SLA breached" value={f.sla_breached} tone={f.sla_breached ? 'bad' : ''} />
-          <Stat label="SLA due ≤2d" value={f.sla_due_within_2d}
-            tone={f.sla_due_within_2d ? 'warn' : ''} />
-          <Stat label="new 7d" value={f.new_last_7d} />
-          <Stat label="resolved 7d" value={f.resolved_last_7d}
-            tone={f.resolved_last_7d ? 'good' : ''} />
+      <Card title="Findings" actions={onNavigate && <button className="mini" onClick={() => onNavigate('findings')}>open findings</button>}>
+        <p className={`posture-verdict${f.kev_open || openFindings.CRITICAL ? ' is-urgent' : ''}`}>
+          {f.kev_open
+            ? `${f.kev_open} known exploited finding${f.kev_open === 1 ? ' needs' : 's need'} attention first.`
+            : openFindings.CRITICAL
+              ? `${openFindings.CRITICAL} critical finding${openFindings.CRITICAL === 1 ? '' : 's'} remain open.`
+              : f.sla_breached
+                ? `${f.sla_breached} finding${f.sla_breached === 1 ? '' : 's'} are past the agreed remediation window.`
+                : 'No known exploited, critical or overdue finding is open in this scope.'}
+        </p>
+        <div className="posture-signals">
+          <span><strong>{f.open}</strong> open</span>
+          <span className={f.kev_open ? 'bad' : ''}><strong>{f.kev_open}</strong> known exploited</span>
+          <span className={f.sla_breached ? 'bad' : ''}><strong>{f.sla_breached}</strong> past SLA</span>
+          <span className={f.sla_due_within_2d ? 'warn' : ''}><strong>{f.sla_due_within_2d}</strong> due in 2 days</span>
         </div>
+        <p className="dashboard-context">
+          Severity: {openFindings.CRITICAL ?? 0} critical · {openFindings.HIGH ?? 0} high · {openFindings.MEDIUM ?? 0} medium.
+          {' '}7 days: {f.new_last_7d} new · {f.resolved_last_7d} resolved.
+        </p>
       </Card>
 
       <Card title="Exposure flow"

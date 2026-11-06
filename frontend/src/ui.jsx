@@ -37,12 +37,10 @@ const TOKENS = {
 const ROOT = document.documentElement
 
 export function getTheme() {
-  if (typeof window === 'undefined') return 'light'
+  if (typeof window === 'undefined') return 'system'
   const stored = localStorage.getItem('barad.theme')
   if (stored === 'dark' || stored === 'light' || stored === 'system') return stored
-  // Readable by default: a dark console was hard to read for long sessions.
-  // Anyone who prefers dark keeps it via Settings (stored) or "system".
-  return 'light'
+  return 'system'
 }
 
 export function getDensity() {
@@ -54,7 +52,10 @@ export function getDensity() {
 
 export function setTheme(t) {
   localStorage.setItem('barad.theme', t)
-  ROOT.setAttribute('data-theme', t)
+  ROOT.setAttribute('data-theme-mode', t)
+  ROOT.setAttribute('data-theme', t === 'system'
+    ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    : t)
   applyDensity()
 }
 export function setDensity(d) {
@@ -77,8 +78,14 @@ function applyDensity() {
    This is not a component, so calling a hook here would run outside React's
    dispatcher and throw ("Cannot read properties of null (reading 'useEffect')"),
    which unmounted the whole console. Plain DOM writes are the correct tool. */
-document.documentElement.setAttribute('data-theme', getTheme())
+setTheme(getTheme())
 applyDensity()
+
+if (typeof window !== 'undefined' && window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (getTheme() === 'system') setTheme('system')
+  })
+}
 
 /* ── PageHeader ── */
 export function PageHeader({ title, subtitle, actions }) {
@@ -163,6 +170,60 @@ export function Table({ head, children, empty, className }) {
       </table>
     </div>
   )
+}
+
+/* ── Pagination ───────────────────────────────────────────────────────────────
+   One pager for every table in the console. A table taller than the viewport
+   needs a second copy of the controls below it, because scrolling back up to
+   change page is friction nobody reports and everybody pays.
+
+   `total` is the count the platform reported, never the number of rows on this
+   page: a pager that counts itself hides how much it is not showing. Pass it
+   (plus `perPage`) when the platform pages; omit it when the screen already
+   holds the whole list and only slices it. */
+export function Pager({ page, pages, onChange, total, perPage, unit = 'rows',
+                        className = '' }) {
+  if (!pages || pages <= 1) return null
+  const size = perPage || (total ? Math.ceil(total / pages) : 0)
+  const label = total != null && size
+    ? `${page * size + 1}–${Math.min((page + 1) * size, total)} of ${total} ${unit}`
+    : `page ${page + 1} of ${pages}`
+  return (
+    <span className={`pager ${className}`}>
+      <button className="mini" disabled={page === 0}
+        onClick={() => onChange(page - 1)}>‹ prev</button>
+      <span className="muted">{label}</span>
+      <button className="mini" disabled={page >= pages - 1}
+        onClick={() => onChange(page + 1)}>next ›</button>
+    </span>
+  )
+}
+
+/* Client-side paging for a list the API answered whole (targets, members,
+   policies: bounded by design, not by a limit somebody guessed). Returns the
+   slice to render and clamps itself when a filter shrinks the list. */
+export function usePage(rows, perPage = 25) {
+  const [page, setPage] = useState(0)
+  const pages = Math.max(1, Math.ceil(rows.length / perPage))
+  const current = Math.min(page, pages - 1)
+  const start = current * perPage
+  return {
+    page: current, pages, setPage, perPage, total: rows.length,
+    rows: rows.slice(start, start + perPage),
+  }
+}
+
+/* Server-side paging: the platform owns the total, the screen owns the offset.
+   A plain function, not a hook, because paging and filtering touch the same
+   state: a screen that changes a filter resets its offset to zero itself, and
+   the pager follows. */
+export function serverPager(total, perPage, offset, setOffset) {
+  const pages = Math.max(1, Math.ceil((total || 0) / perPage))
+  const page = Math.min(Math.floor((offset || 0) / perPage), pages - 1)
+  return {
+    page, pages, perPage, total: total || 0, offset: page * perPage,
+    setPage: (next) => setOffset(next * perPage),
+  }
 }
 
 /* ── Stat ── */
