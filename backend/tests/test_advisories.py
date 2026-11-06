@@ -464,6 +464,33 @@ def test_a_quiet_sweep_says_nothing(env, monkeypatch):
     session.commit()
     assert counters["notified"] == []
     assert sent == [], "sin novedades no se manda nada"
+    assert session.query(models.Notification).count() == 0
+
+
+def test_the_bell_rings_without_any_channel(env, monkeypatch):
+    """The in-app centre had no writer: a bell that never wakes is not a notice."""
+    from backend.app.routers import notifications
+
+    session, org = env["session"], env["org"]
+    project, version = _version(session, org)
+    component = session.query(models.Component).one()
+    finding = _new_finding(session, org, project, version, component, cve="CVE-2026-3")
+    session.commit()
+    monkeypatch.setattr(notifications, "deliver",
+                        lambda *args, **kwargs: (200, None))
+    for _ in range(2):
+        advisories.run(session, org.id, force=True,
+                       kev_fetch=lambda: [], epss_fetch=lambda cve_ids: [],
+                       analyze=lambda *args, **kwargs: {
+                           "findings_created": 1, "created_ids": [finding.id],
+                           "components_queried": 1, "findings_refreshed": 0,
+                           "advisories_found": 1, "components_skipped_unmapped": 0,
+                           "truncated": False})
+        session.commit()
+    rows = session.query(models.Notification).all()
+    assert len(rows) == 1, "una fila por día, no una por barrido"
+    assert rows[0].event == "advisory.new" and rows[0].read is False
+    assert rows[0].count == 2, "el segundo lote suma al aviso del día"
 
 
 def test_a_channel_that_did_not_subscribe_is_not_used(env, monkeypatch):

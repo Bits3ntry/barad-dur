@@ -301,9 +301,35 @@ def _announce(session: Session, org_id: str, created_ids: list[str],
                       "title": finding.title, "url": finding.url}
                      for finding, _advisory in ordered[:25]],
     }
+    # In-app first: the console's bell has to ring even when nobody configured a
+    # webhook, otherwise "we found 5 CVEs" lives only in a list nobody opens.
+    _in_app(session, org_id, payload)
     results = notifications.notify(session, org_id, "advisory.new", payload,
                                    dedupe_suffix=models.utcnow().date().isoformat())
     counters["notified"] = [f"{item['channel']}:{item['result']}" for item in results]
+
+
+def _in_app(session: Session, org_id: str, payload: dict) -> None:
+    """One unread row per organization per day, with the day's count.
+
+    The notification centre had no writer at all: `notifications` was a table
+    nobody inserted into, so the bell was decorative. A second batch on the same
+    day adds to the row instead of stacking near-duplicates.
+    """
+    midnight = models.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    existing = (session.query(models.Notification)
+                .filter(models.Notification.org_id == org_id,
+                        models.Notification.event == "advisory.new",
+                        models.Notification.created_at >= midnight).first())
+    body = json.dumps({key: payload.get(key) for key in
+                       ("count", "worst", "kev", "builds", "by_severity")}, sort_keys=True)
+    if existing is not None:
+        existing.count += int(payload.get("count") or 0)
+        existing.payload = body
+        return
+    session.add(models.Notification(org_id=org_id, channel=None, event="advisory.new",
+                                    count=int(payload.get("count") or 0), read=False,
+                                    payload=body))
 
 
 def _sweep(session: Session, org_id: str, config: dict, counters: dict,
