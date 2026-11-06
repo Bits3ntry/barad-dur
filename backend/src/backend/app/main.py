@@ -8,7 +8,7 @@ from backend.app.db import get_session, run_migrations
 from backend.app import models
 from backend.app.routers import authorization as authorization_router
 
-from backend.app.routers import accounts, analysis, artifacts, attack_surface, ci, code_baselines, code_review, ctem, cycles, dashboard, deployment, easm, easm_trivy, exposures, findings, gates as gates_router, identity, impact, intelligence, inventory, inventory_groups, jira, lifecycle, licenses as licenses_router, mfa as mfa_router, notifications, onboarding, orchestration, organization, pentest, projects as projects_router, regression, relationships, sarif, scans as scans_router, schedules, scope, sbom, spdx, vulnerabilities, work
+from backend.app.routers import accounts, advisories, analysis, artifacts, attack_surface, ci, code_baselines, code_review, ctem, cycles, dashboard, deployment, easm, easm_trivy, exposures, findings, gates as gates_router, identity, impact, intelligence, inventory, inventory_groups, jira, lifecycle, licenses as licenses_router, mfa as mfa_router, notifications, onboarding, orchestration, organization, pentest, pipeline, projects as projects_router, regression, relationships, sarif, scans as scans_router, schedules, scope, sbom, spdx, vulnerabilities, work
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 def create_app() -> FastAPI:
     app = FastAPI(title="Barad-dûr platform", version="0.1.0")
     app.include_router(sbom.router)
+    app.include_router(advisories.router)
     app.include_router(inventory.router)
     app.include_router(inventory_groups.router)
     app.include_router(vulnerabilities.router)
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(work.router)
     app.include_router(findings.router)
     app.include_router(ci.router)
+    app.include_router(pipeline.router)
     app.include_router(scope.router)
     app.include_router(lifecycle.router)
     app.include_router(identity.router)

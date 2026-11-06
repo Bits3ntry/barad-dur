@@ -247,8 +247,14 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-}
     ports:
-      # Console + CLI reach the API from the host; loopback-only.
-      - "127.0.0.1:${PLATFORM_API_PORT:-8090}:8090"
+      # Who has to reach this: the host console/CLI and the CI runner. A runner
+      # job lives in its own container on another Docker network, and a loopback
+      # publish is invisible from there — the Shauron action announces its run
+      # before scanning, so `Connection refused` here means "the job never
+      # started", not "the scan failed".
+      #   PLATFORM_API_BIND=127.0.0.1    → host only (default)
+      #   PLATFORM_API_BIND=0.0.0.0      → host + containers on other networks
+      - "${PLATFORM_API_BIND:-127.0.0.1}:${PLATFORM_API_PORT:-8090}:8090"
     networks: [edge]
     mem_limit: 512m
     restart: unless-stopped
@@ -292,7 +298,7 @@ services:
       - -c
       - |
         while true; do
-          for path in orchestration/schedules/tick notifications/tick projects/probes/tick; do
+          for path in orchestration/schedules/tick notifications/tick projects/probes/tick advisories/tick; do
             curl -s -o /dev/null -w "$${path} %{http_code}\n" \
               -X POST "http://platform-api:8090/api/v1/$${path}" \
               -H "X-API-Key: $${BARAD_API_KEY}" \
