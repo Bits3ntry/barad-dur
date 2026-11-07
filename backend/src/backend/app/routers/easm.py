@@ -1,6 +1,9 @@
 """B4 endpoints: externally observable assets, crt.sh subdomain sweep."""
 import datetime
 import json
+import os
+import urllib.error
+import urllib.parse
 import urllib.request
 from email.utils import parsedate_to_datetime
 
@@ -57,8 +60,196 @@ def _latest_observation(session: Session, asset: models.Asset) -> dict | None:
             "days_left": days_left,
             "tls_version": tls.get("tls_version"),
         } if tls else None,
-        "tech": data.get("tech") or [],
+        # One row per product. httpx and nmap both fingerprint the same host, so
+        # the list arrived with "haproxy" twice (one with a version, one without)
+        # and the overview counted six technologies on a host that runs four.
+        "tech": _dedupe_tech(data.get("tech") or []),
     }
+
+
+def _observation_value(observation: models.Observation) -> dict:
+    """The row's payload as a dict.
+
+    `Observation.value` is a JSON column, so SQLAlchemy already hands back a
+    dict. It used to be passed through `json.loads`, which raised on a dict and
+    the `except` swallowed it — every technology row the scanners found was
+    silently dropped and the panel read "nothing fingerprinted yet".
+    """
+    value = observation.value
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (str, bytes)):
+        try:
+            parsed = json.loads(value or "{}")
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+# What an open port is for, in the words a reader needs. The service name is
+# what the daemon announced; the purpose is the standard role of that service,
+# not a guess about what this deployment does with it.
+SERVICE_PURPOSE = {
+    "ftp": "file transfer", "ftps": "file transfer over TLS",
+    "ssh": "remote shell", "telnet": "remote shell (plaintext)",
+    "smtp": "mail transfer", "submission": "mail submission (authenticated)",
+    "smtps": "mail submission over TLS",
+    "pop3": "mailbox, POP3", "pop3s": "mailbox, POP3 over TLS",
+    "imap": "mailbox, IMAP", "imaps": "mailbox, IMAP over TLS",
+    "domain": "DNS", "http": "web", "https": "web over TLS",
+    "http-alt": "web (alternate port)", "http-proxy": "web proxy",
+    "mysql": "database, MySQL", "postgresql": "database, PostgreSQL",
+    "ms-sql-s": "database, SQL Server", "redis": "cache, Redis",
+    "mongodb": "database, MongoDB", "elasticsearch": "search, Elasticsearch",
+    "ldap": "directory, LDAP", "ldaps": "directory, LDAP over TLS",
+    "rdp": "remote desktop", "vnc": "remote desktop, VNC",
+    "smb": "file sharing, SMB", "nfs": "file sharing, NFS",
+    "ntp": "time", "snmp": "monitoring, SNMP",
+}
+
+PORT_PURPOSE = {
+    21: "file transfer", 22: "remote shell", 23: "remote shell (plaintext)",
+    25: "mail transfer", 53: "DNS", 80: "web", 110: "mailbox, POP3",
+    143: "mailbox, IMAP", 443: "web over TLS", 445: "file sharing, SMB",
+    465: "mail submission over TLS", 587: "mail submission (authenticated)",
+    993: "mailbox, IMAP over TLS", 995: "mailbox, POP3 over TLS",
+    3306: "database, MySQL", 3389: "remote desktop", 5432: "database, PostgreSQL",
+    6379: "cache, Redis", 8080: "web (alternate port)", 8443: "web over TLS (alternate)",
+}
+
+
+def _port_rows(session: Session, asset: models.Asset) -> list[dict]:
+    """One row per open port, with the banner that described it.
+
+    The scanners disagree on purpose: naabu says a port answers, nmap says what
+    answers on it. Merging them per port keeps the version nmap read and the
+    fact that two tools saw the same port.
+    """
+    rows: dict[int, dict] = {}
+    for observation in (session.query(models.Observation)
+                        .filter_by(asset_id=asset.id, kind="port")
+                        .order_by(models.Observation.observed_at.desc()).limit(400).all()):
+        if observation.port is None:
+            continue
+        value = _observation_value(observation)
+        row = rows.setdefault(observation.port, {
+            "port": observation.port,
+            "protocol": observation.protocol or "tcp",
+            "state": "open", "service": None, "product": None, "version": None,
+            "sources": [], "observed_at": None,
+        })
+        if value.get("state") == "open":
+            row["state"] = "open"
+        # Newest non-empty wins: the query is ordered newest first, so the first
+        # tool that named the service is the closest one to the truth.
+        for field in ("service", "product", "version"):
+            if not row[field] and value.get(field):
+                row[field] = str(value[field]).strip()
+        if observation.source and observation.source not in row["sources"]:
+            row["sources"].append(observation.source)
+        if row["observed_at"] is None and observation.observed_at:
+            row["observed_at"] = observation.observed_at.isoformat()
+    for row in rows.values():
+        row["purpose"] = (SERVICE_PURPOSE.get((row["service"] or "").lower())
+                          or PORT_PURPOSE.get(row["port"]))
+        row["sources"].sort()
+    return sorted(rows.values(), key=lambda row: row["port"])
+
+
+def _split_tech(label: str) -> dict:
+    """`PHP:8.2.35` and `jquery/3.7.1` are the same fact written twice."""
+    text = str(label or "").strip()
+    for separator in (":", "/"):
+        if separator in text:
+            name, _, version = text.partition(separator)
+            if name.strip():
+                return {"name": name.strip().lower(), "version": version.strip() or None}
+    return {"name": text.lower(), "version": None}
+
+
+def _web_rows(session: Session, asset: models.Asset) -> list[dict]:
+    """What answers on the web, per URL, with the stack behind it.
+
+    A port says "80 is open"; this says "this is nginx serving PHP 8.2.35 with
+    WordPress", which is the sentence the reader is looking for.
+    """
+    rows: dict[str, dict] = {}
+    # httpx records a fetched page as `web_path` and the fingerprint as
+    # `technology`; the stack lives on the page it was read from, so both kinds
+    # are read here and only the rows that name a URL matter.
+    for observation in (session.query(models.Observation)
+                        .filter(models.Observation.asset_id == asset.id,
+                                models.Observation.kind.in_(("web_path", "technology")))
+                        .order_by(models.Observation.observed_at.desc()).limit(120).all()):
+        value = _observation_value(observation)
+        url = str(value.get("url") or "").strip()
+        if not url:
+            continue
+        row = rows.setdefault(url, {"url": url, "status": None, "server": None,
+                                    "title": None, "tech": [], "observed_at": None})
+        for field in ("status", "server", "title"):
+            if row[field] in (None, "") and value.get(field) not in (None, ""):
+                row[field] = value[field]
+        seen = {entry["name"] for entry in row["tech"]}
+        for label in value.get("tech") or []:
+            parsed = _split_tech(label)
+            if parsed["name"] and parsed["name"] not in seen:
+                row["tech"].append(parsed)
+                seen.add(parsed["name"])
+        # A tool that reads one page says so with a url: its products belong to
+        # that page's stack, not only to the asset-wide list.
+        for product in value.get("products") or []:
+            name = str(product.get("name") or "").strip().lower()
+            if not name or name in seen:
+                continue
+            row["tech"].append({"name": name, "version": product.get("version") or None})
+            seen.add(name)
+        if row["observed_at"] is None and observation.observed_at:
+            row["observed_at"] = observation.observed_at.isoformat()
+    for row in rows.values():
+        row["tech"].sort(key=lambda entry: (entry["version"] is None, entry["name"]))
+    return sorted(rows.values(), key=lambda row: row["url"])
+
+
+def _technology_rows(session: Session, asset: models.Asset) -> list[dict]:
+    """Products with their evidence, newest observations first.
+
+    The chips on the old page carried a name and a slash; the table needs to say
+    which tool claimed it and how sure that tool was, or a version is a guess
+    presented as a fact.
+    """
+    rows: dict[tuple[str, str | None], dict] = {}
+    for observation in (session.query(models.Observation)
+                        .filter_by(asset_id=asset.id, kind="technology")
+                        .order_by(models.Observation.observed_at.desc()).limit(40).all()):
+        value = _observation_value(observation)
+        for product in value.get("products") or []:
+            name = str(product.get("name") or "").strip().lower()
+            if not name:
+                continue
+            key = (name, product.get("version") or None)
+            rows.setdefault(key, {"name": name, "version": product.get("version"),
+                                  "evidence": product.get("evidence"),
+                                  "confidence": product.get("confidence"),
+                                  "source": observation.source,
+                                  "observed_at": (observation.observed_at.isoformat()
+                                                  if observation.observed_at else None)})
+    return sorted(rows.values(), key=lambda row: row["name"])
+
+
+def _dedupe_tech(values: list) -> list[str]:
+    best: dict[str, str] = {}
+    for raw in values:
+        text = str(raw)
+        name, _, version = text.partition("/")
+        key = name.strip().lower()
+        if not key:
+            continue
+        current = best.get(key, "")
+        if not current or (version and "/" not in current):
+            best[key] = text
+    return [best[key] for key in sorted(best)]
 
 
 
@@ -80,7 +271,8 @@ def crtsh_subdomains(domain: str, timeout: float = 25.0) -> list[str]:
     return sorted(found)
 
 
-def _asset_data(session: Session, asset: models.Asset) -> dict:
+def _asset_data(session: Session, asset: models.Asset, parent: dict | None = None,
+                authorization_state: dict | None = None) -> dict:
     project = session.get(models.Project, asset.project_id) if asset.project_id else None
     groups = (session.query(models.InventoryGroup)
               .join(models.InventoryGroupMember,
@@ -90,6 +282,7 @@ def _asset_data(session: Session, asset: models.Asset) -> dict:
     return {"id": asset.id, "type": asset.type, "value": asset.value,
             "source": asset.source, "detail": asset.detail,
             "project": project.slug if project else None,
+            "project_name": project.name if project else None,
             "owner": asset.owner,
             "classification_status": asset.classification_status,
             "notes": asset.notes,
@@ -97,7 +290,133 @@ def _asset_data(session: Session, asset: models.Asset) -> dict:
             "groups": [{"id": g.id, "name": g.name} for g in groups],
             "discovered_at": asset.discovered_at.isoformat(),
             "last_seen_at": asset.last_seen_at.isoformat(),
+            "parent": parent,
+            "authorization": authorization_state or {},
             "latest": _latest_observation(session, asset)}
+
+
+def _ancestor_project(session: Session, org_id: str, asset: models.Asset):
+    """The project of the nearest ancestor that has one, for an asset without."""
+    if asset.type != "domain" or "." not in asset.value:
+        return None
+    labels = asset.value.lower().split(".")
+    for cut in range(1, len(labels) - 1):
+        candidate = ".".join(labels[cut:])
+        parent = (session.query(models.Asset)
+                  .filter_by(org_id=org_id, type="domain", value=candidate)
+                  .one_or_none())
+        if parent is not None and parent.project_id:
+            return parent.project_id
+    return None
+
+
+def _cascade_project(session: Session, org_id: str, parent: models.Asset,
+                     previous_id: str | None = None) -> int:
+    """Every descendant that has no project of its own follows the parent's.
+
+    `*.dominio.com` assigned to a project must not leave 200 subdomains to be
+    assigned one by one. The match is by label suffix (`"." + parent`), so
+    `notdominio.com` is not a child of `dominio.com`, and a child explicitly put in
+    another project is left alone — an override is a decision, not an oversight.
+    Rows that carried the **previous** project follow the change; rows with a
+    different one do not.
+    """
+    if parent.type != "domain" or not parent.project_id:
+        return 0
+    suffix = "." + parent.value.lower()
+    inherited = 0
+    rows = (session.query(models.Asset)
+            .filter_by(org_id=org_id, type="domain").all())
+    for row in rows:
+        if row.id == parent.id or not row.value.lower().endswith(suffix):
+            continue
+        if row.project_id in (None, previous_id):
+            row.project_id = parent.project_id
+            inherited += 1
+    return inherited
+
+
+def _domain_parents(session: Session, org_id: str) -> dict[str, dict]:
+    """Longest existing ancestor per domain: `dev.api.x.com` hangs from
+    `api.x.com` when that row exists, else from `x.com`, else from nothing.
+
+    Derived, not stored: the tree is a reading of the names the organization
+    actually declared, so a new subdomain appears under its parent the moment it
+    is created and no edge table has to be kept in step with it.
+    """
+    rows = (session.query(models.Asset)
+            .filter_by(org_id=org_id, type="domain")
+            .filter(models.Asset.archived_at.is_(None)).all())
+    by_value = {row.value.lower(): row for row in rows}
+    parents: dict[str, dict] = {}
+    for value, row in by_value.items():
+        labels = value.split(".")
+        for cut in range(1, len(labels) - 1):
+            candidate = ".".join(labels[cut:])
+            parent = by_value.get(candidate)
+            if parent is not None and parent.id != row.id:
+                parents[row.id] = {"id": parent.id, "value": parent.value,
+                                   "depth": cut}
+                break
+    return parents
+
+
+def _authorization_states(session: Session, org_id: str,
+                          asset_ids: set[str]) -> dict[str, dict]:
+    """Pending request and highest covered level per asset, in two queries."""
+    from backend.app import authorization
+
+    pending: dict[str, str] = {}
+    if asset_ids:
+        for row in (session.query(models.ScanGrant)
+                    .filter(models.ScanGrant.org_id == org_id,
+                            models.ScanGrant.status == "requested",
+                            models.ScanGrant.asset_id.in_(asset_ids)).all()):
+            pending[row.asset_id] = row.id
+    active = (session.query(models.ScanGrant)
+              .filter_by(org_id=org_id, status="active").all())
+    now = models.utcnow()
+    states: dict[str, dict] = {}
+    for asset_id in asset_ids:
+        asset = session.get(models.Asset, asset_id)
+        if asset is None:
+            continue
+        target = authorization.target_for_asset(asset)
+        covered = None
+        for level in reversed(authorization.SCAN_LEVEL_ORDER):
+            caps = set(authorization.capabilities_for_level(level))
+            for grant in active:
+                if not caps <= authorization.authorization_capabilities(grant):
+                    continue
+                valid_until = grant.valid_until
+                if valid_until is not None and valid_until.tzinfo is None:
+                    valid_until = valid_until.replace(tzinfo=datetime.timezone.utc)
+                if valid_until is not None and valid_until < now:
+                    continue
+                if authorization._target_allowed(session, grant, target["type"],
+                                                 target["value"]):
+                    covered = level
+                    break
+            if covered:
+                break
+        # The most confusing state in the inventory: an asset with no coverage
+        # sitting next to an active grant on the same name. It is not a bug — a
+        # wildcard does not cover its apex — but saying nothing made it look like
+        # one, so the reason travels with the state.
+        zone_cover = None
+        if not covered and asset.type == "domain":
+            zone = authorization.zone_of(asset.value)
+            if str(asset.value).lower() == zone:
+                wanted = f"*.{zone}"
+                for grant in active:
+                    if any(str(t.target_value).lower() == wanted for t in grant.targets):
+                        zone_cover = {"target": wanted, "level": grant.level,
+                                      "grant_id": grant.id}
+                        break
+        states[asset_id] = {"level": covered, "covered": bool(covered),
+                            "pending_request_id": pending.get(asset_id),
+                            "zone_cover": zone_cover}
+    return states
 
 
 @router.get("/assets")
@@ -139,8 +458,11 @@ def list_assets(type: str | None = None,
     total = query.count()
     rows = (query.order_by(models.Asset.last_seen_at.desc())
             .offset(offset).limit(limit).all())
-    return {"data": [_asset_data(session, r) for r in rows], "total": total,
-            "limit": limit, "offset": offset}
+    parents = _domain_parents(session, org.id)
+    states = _authorization_states(session, org.id, {row.id for row in rows})
+    return {"data": [_asset_data(session, r, parents.get(r.id), states.get(r.id))
+                     for r in rows],
+            "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/assets/needs-attention")
@@ -192,6 +514,219 @@ def needs_attention(limit: int = Query(default=100, ge=1, le=500),
                       "observation": "observed" if last else "never observed"})
     items.sort(key=lambda row: (-len(row["reasons"]), row["asset"]["value"]))
     return {"data": items[:limit], "total": len(items)}
+
+
+@router.get("/assets/{asset_id}")
+def get_asset(asset_id: str,
+              org: models.Organization = Depends(auth.require_org),
+              session: Session = Depends(get_session)):
+    """Everything the row's "more data" panel owes the reader, in one call.
+
+    Facts keep their observation: a certificate expiry without the moment it was
+    read is a rumour, so the panel gets the snapshot metadata alongside.
+    """
+    asset = session.get(models.Asset, asset_id)
+    if asset is None or asset.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+    parents = _domain_parents(session, org.id)
+    states = _authorization_states(session, org.id, {asset.id})
+    links = (session.query(models.AssetLink)
+             .filter_by(org_id=org.id, asset_id=asset.id)
+             .filter(models.AssetLink.removed_at.is_(None)).all())
+    context = []
+    for link in links:
+        entry = {"link_id": link.id, "kind": link.entity_type,
+                 "relation": link.relation, "id": link.entity_id}
+        if link.entity_type == "deployment":
+            deployment = session.get(models.Deployment, link.entity_id)
+            if deployment is not None:
+                component = (session.get(models.ApplicationComponent,
+                                         deployment.application_component_id)
+                             if deployment.application_component_id else None)
+                project = (session.get(models.Project, component.project_id)
+                           if component is not None else None)
+                entry.update({"name": deployment.name,
+                              "environment": deployment.environment,
+                              "version_label": deployment.version_label,
+                              "project": project.slug if project else None})
+        elif link.entity_type == "application_component":
+            component = session.get(models.ApplicationComponent, link.entity_id)
+            if component is not None:
+                project = session.get(models.Project, component.project_id)
+                entry.update({"name": component.name,
+                              "project": project.slug if project else None})
+        elif link.entity_type == "project":
+            project = session.get(models.Project, link.entity_id)
+            entry.update({"name": project.name if project else link.entity_id,
+                          "project": project.slug if project else None})
+        context.append(entry)
+    snapshots = (session.query(models.AssetSnapshot)
+                 .filter_by(org_id=org.id, asset_id=asset.id)
+                 .order_by(models.AssetSnapshot.observed_at.desc()).all())
+    latest = _latest_observation(session, asset)
+    grants = (session.query(models.ScanGrant)
+              .filter(models.ScanGrant.org_id == org.id,
+                      models.ScanGrant.asset_id == asset.id)
+              .order_by(models.ScanGrant.created_at.desc()).all())
+    data = _asset_data(session, asset, parents.get(asset.id), states.get(asset.id))
+    # The page draws a relation graph; children are the edges it cannot guess.
+    children = [{"id": row.id, "value": row.value}
+                for row in (session.query(models.Asset)
+                            .filter_by(org_id=org.id, type="domain")
+                            .filter(models.Asset.archived_at.is_(None)).all())
+                if (parents.get(row.id) or {}).get("id") == asset.id][:50]
+    data.update({
+        "children": children,
+        "technologies": _technology_rows(session, asset),
+        "ports": _port_rows(session, asset),
+        "web": _web_rows(session, asset),
+        "context": context,
+        "observations": len(snapshots),
+        "latest_snapshot": (json.loads(snapshots[0].data)
+                            if snapshots and snapshots[0].data else None),
+        "latest_source": snapshots[0].source if snapshots else None,
+        "certificate_error": ((latest or {}).get("certificate") or {}).get("error")
+        or (((json.loads(snapshots[0].data) if snapshots and snapshots[0].data else {})
+             .get("tls") or {}).get("error") if snapshots else None),
+        "grants": [{"id": grant.id, "status": grant.status, "level": grant.level,
+                    "principal": grant.principal,
+                    "requested_by": grant.requested_by,
+                    "approved_by": grant.approved_by,
+                    "valid_until": grant.valid_until.isoformat(),
+                    "targets": [{"type": t.target_type, "value": t.target_value}
+                                for t in grant.targets]}
+                   for grant in grants],
+    })
+    return {"data": data}
+
+
+GEOIP_URL = os.environ.get("PLATFORM_GEOIP_URL", "").strip()
+GEOIP_TTL_DAYS = 7
+
+
+def _geo_normalise(payload: dict) -> dict:
+    """One shape whatever the provider answered with.
+
+    Every free geolocator names the same five facts differently; the page should
+    not care which one is configured.
+    """
+    def pick(*keys):
+        for key in keys:
+            value = payload.get(key)
+            if value not in (None, ""):
+                return value
+        return None
+
+    lat = pick("lat", "latitude")
+    lon = pick("lon", "longitude", "lng")
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return {}
+    return {
+        "latitude": lat, "longitude": lon,
+        "country": pick("country", "country_name"),
+        "country_code": pick("country_code", "countryCode"),
+        "region": pick("region", "regionName"),
+        "city": pick("city"),
+        "organisation": pick("org", "organisation", "organization", "isp"),
+        "asn": pick("as", "asn"),
+        "timezone": pick("timezone"),
+    }
+
+
+@router.get("/assets/{asset_id}/geo")
+def asset_geo(asset_id: str, refresh: bool = False,
+              org: models.Organization = Depends(auth.require_org),
+              session: Session = Depends(get_session)):
+    """Where the addresses of this asset sit, cached per address.
+
+    No geolocator configured is a valid deployment, not a failure: the page shows
+    an empty map with the reason instead of inventing a location.
+    """
+    asset = session.get(models.Asset, asset_id)
+    if asset is None or asset.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+    latest = _latest_observation(session, asset) or {}
+    addresses = list(latest.get("ipv4") or []) + list(latest.get("ipv6") or [])
+    if not addresses:
+        return {"available": False, "reason": "no address observed for this asset",
+                "points": []}
+    if not GEOIP_URL:
+        return {"available": False,
+                "reason": "no geolocator configured — set PLATFORM_GEOIP_URL on the API",
+                "points": []}
+
+    points = []
+    cutoff = models.utcnow() - datetime.timedelta(days=GEOIP_TTL_DAYS)
+    for address in addresses[:8]:
+        row = (session.query(models.AssetGeo)
+               .filter_by(asset_id=asset.id, address=address).first())
+        fresh = (row is not None and row.fetched_at is not None
+                 and (row.fetched_at if row.fetched_at.tzinfo else
+                      row.fetched_at.replace(tzinfo=datetime.timezone.utc)) > cutoff)
+        if row is None or refresh or not fresh:
+            url = GEOIP_URL.format(address=urllib.parse.quote(address))
+            try:
+                with urllib.request.urlopen(url, timeout=6) as response:
+                    payload = json.load(response)
+            except (urllib.error.URLError, OSError, ValueError) as error:
+                payload = {"error": str(error)}
+            normalised = _geo_normalise(payload) if "error" not in payload else {}
+            if row is None:
+                row = models.AssetGeo(id=models.uuid_hex(), org_id=org.id,
+                                      asset_id=asset.id, address=address)
+                session.add(row)
+            row.data = json.dumps(normalised) if normalised else json.dumps(
+                {"error": payload.get("error") or "unusable answer"})
+            row.source = "geoip"
+            row.fetched_at = models.utcnow()
+            session.commit()
+        try:
+            stored = json.loads(row.data or "{}")
+        except (TypeError, ValueError):
+            stored = {}
+        if stored.get("latitude") is not None:
+            points.append({"address": address, **stored,
+                           "fetched_at": row.fetched_at.isoformat() if row.fetched_at else None})
+    return {"available": bool(points), "points": points,
+            "reason": None if points else "the geolocator returned no usable answer"}
+
+
+class RequestIn(BaseModel):
+    level: str = Field(default="simple", max_length=16)
+    actor: str = Field(default="console", max_length=255)
+
+
+@router.post("/assets/{asset_id}/request")
+def request_asset_authorization(asset_id: str, payload: RequestIn = None,
+                                org: models.Organization = Depends(auth.require_org),
+                                session: Session = Depends(get_session)):
+    """Ask for permission on an asset that already exists.
+
+    The same question a declaration asks, for a domain recorded before this flow
+    existed or one whose request was rejected. Never grants anything.
+    """
+    from backend.app import authorization
+
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    if payload.level not in authorization.SCAN_LEVELS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"level must be one of {sorted(authorization.SCAN_LEVELS)}")
+    asset = session.get(models.Asset, asset_id)
+    if asset is None or asset.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
+    decision = authorization.ensure_authorization(
+        session, org.id, asset, payload.actor, level=payload.level)
+    _audit_log(session, org.id, payload.actor, "asset.authorization_requested",
+               "asset", asset.id,
+               f"{payload.level}: "
+               + ("already covered" if decision["covered"] else
+                  "excluded from scope" if decision["excluded"] else
+                  f"request {decision['request']['id'][:8]}"))
+    session.commit()
+    return {"data": decision}
 
 
 class AssetPatch(BaseModel):
@@ -248,16 +783,21 @@ def patch_asset(asset_id: str, payload: AssetPatch = None,
         asset.owner = payload.owner.strip() or None
         changes.append(f"owner={asset.owner or 'none'}")
     if payload.project is not None:
+        previous = asset.project_id
         if payload.project == "":
             asset.project_id = None
             changes.append("project=none")
+            inherited = _cascade_project(session, org.id, asset, previous)
         else:
             project_row = (session.query(models.Project)
                            .filter_by(org_id=org.id, slug=payload.project).one_or_none())
             if project_row is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
             asset.project_id = project_row.id
+            inherited = _cascade_project(session, org.id, asset, previous)
             changes.append(f"project={project_row.slug}")
+            if inherited:
+                changes.append(f"{inherited} descendant(s) inherited it")
     if payload.classification_status is not None:
         if payload.classification_status not in models.ASSET_CLASSIFICATION:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -313,6 +853,11 @@ class AssetIn(BaseModel):
     type: str
     value: str = Field(min_length=1, max_length=1024)
     detail: str | None = Field(default=None, max_length=4096)
+    # Declaring the same domain from the Assets screen may still say where it
+    # belongs; a WordPress has a project and no code, and both are optional.
+    project: str | None = Field(default=None, max_length=128)
+    deployment_id: str | None = Field(default=None, max_length=36)
+    level: str = Field(default="simple", max_length=16)
     actor: str | None = None
 
 
@@ -320,31 +865,79 @@ class AssetIn(BaseModel):
 def add_asset(payload: AssetIn = None,
               org: models.Organization = Depends(auth.require_org),
               session: Session = Depends(get_session)):
+    """Record an asset. Recording never grants permission: when no active grant
+    already covers it, the same transaction opens a request in Grants, which is
+    the only place an administrator can turn it into authority."""
+    from backend.app import authorization
+
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
     if payload.type not in models.ASSET_TYPES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"type must be one of {sorted(models.ASSET_TYPES)}")
+    if payload.level not in authorization.SCAN_LEVELS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"level must be one of {sorted(authorization.SCAN_LEVELS)}")
+    value = payload.value.strip()
+    if payload.type in {"domain", "subdomain", "api"}:
+        value = value.lower()
+    project = None
+    if payload.project:
+        project = (session.query(models.Project)
+                   .filter_by(org_id=org.id, slug=payload.project).one_or_none())
+        if project is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    deployment = None
+    if payload.deployment_id:
+        deployment = session.get(models.Deployment, payload.deployment_id)
+        if deployment is None or deployment.org_id != org.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "deployment not found")
+
     existing = (session.query(models.Asset)
-                .filter_by(org_id=org.id, type=payload.type, value=payload.value)
+                .filter_by(org_id=org.id, type=payload.type, value=value)
                 .one_or_none())
     if existing is not None:
         existing.last_seen_at = models.utcnow()
         if payload.detail:
             existing.detail = payload.detail
-        session.commit()
-        return {"data": {"id": existing.id, "type": existing.type,
-                         "value": existing.value}, "already_known": True}
-    asset = models.Asset(org_id=org.id, type=payload.type, value=payload.value,
-                         source="manual", detail=payload.detail,
-                         discovered_at=models.utcnow(),
-                         last_seen_at=models.utcnow())
-    session.add(asset)
-    session.flush()
+        if project is not None:
+            existing.project_id = project.id
+            existing.classification_status = "owned"
+        asset = existing
+        already_known = True
+    else:
+        asset = models.Asset(org_id=org.id, type=payload.type, value=value,
+                             source="manual", detail=payload.detail,
+                             project_id=project.id if project else None,
+                             classification_status=("owned" if project else
+                                                    "unclassified"),
+                             discovered_at=models.utcnow(),
+                             last_seen_at=models.utcnow())
+        session.add(asset)
+        session.flush()
+        already_known = False
+    if deployment is not None:
+        link = (session.query(models.AssetLink)
+                .filter_by(org_id=org.id, asset_id=asset.id,
+                           entity_type="deployment", entity_id=deployment.id).one_or_none())
+        if link is None:
+            session.add(models.AssetLink(
+                org_id=org.id, asset_id=asset.id, entity_type="deployment",
+                entity_id=deployment.id, relation="exposes",
+                added_by=payload.actor or "console", added_at=models.utcnow()))
+
+    decision = authorization.ensure_authorization(
+        session, org.id, asset, payload.actor or "console", level=payload.level)
     _audit_log(session, org.id, payload.actor or "system", "asset.added",
-               "asset", asset.id, f"{payload.type}:{payload.value}")
+               "asset", asset.id,
+               f"{payload.type}:{value}"
+               + (f" -> {project.slug}" if project else " (standalone)")
+               + ("; authorization requested" if decision.get("request") else
+                  "; already covered" if decision["covered"] else
+                  "; excluded from scope"))
     session.commit()
-    return {"data": {"id": asset.id, "type": asset.type, "value": asset.value}}
+    return {"data": {"id": asset.id, "type": asset.type, "value": asset.value},
+            "already_known": already_known, "authorization": decision}
 
 
 class DiscoveryIn(BaseModel):
@@ -380,9 +973,14 @@ def discover(payload: DiscoveryIn = None,
     seed = (session.query(models.Asset)
             .filter_by(org_id=org.id, type="domain", value=payload.domain)
             .one_or_none())
+    # A sweep is discovery, not a decision: the new candidates are ours when the
+    # parent is already filed, and stay unclassified when nobody claimed it.
+    sweep_project = _ancestor_project(session, org.id, seed) if seed else None
     if seed is not None:
         seed.last_seen_at = now
         seed.source = "seed" if seed.source == "seed" else seed.source
+        if seed.project_id:
+            _cascade_project(session, org.id, seed)
     else:
         session.add(models.Asset(org_id=org.id, type="domain", value=payload.domain,
                                  source="seed", discovered_at=now, last_seen_at=now))
