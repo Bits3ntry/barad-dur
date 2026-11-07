@@ -127,3 +127,56 @@ def test_products_read_from_one_page_land_in_that_pages_stack(detail_client):
     data = client.get(f"/api/v1/assets/{asset['id']}", headers=headers).json()["data"]
     stack = {row["name"]: row["version"] for row in data["web"][0]["tech"]}
     assert stack == {"wordpress": "6.8.2", "jquery": "3.7.1"}
+
+
+def test_a_page_and_its_port_are_the_same_row(detail_client):
+    """The join a reader would otherwise do by hand: 443 holds the stack."""
+    client, headers, _org = detail_client
+    asset = _asset_with(client, headers, [
+        {"kind": "port", "port": 443,
+         "value": {"state": "open", "service": "http", "product": "nginx"},
+         "source": "shauron:nmap"},
+        {"kind": "web_path",
+         "value": {"url": "https://councilbox.com", "status": 301, "server": "nginx",
+                   "tech": ["PHP:8.2.35", "Polylang"]},
+         "source": "shauron:httpx"},
+        {"kind": "certificate", "port": 443,
+         "value": {"issuer": {"organizationName": "Let's Encrypt"},
+                   "days_left": 43, "cipher": "TLS_AES_256_GCM_SHA384"},
+         "source": "shauron:native"},
+        {"kind": "port", "port": 22,
+         "value": {"state": "open", "service": "ssh", "product": "OpenSSH",
+                   "version": "8.2p1"},
+         "source": "shauron:nmap"},
+    ])
+    data = client.get(f"/api/v1/assets/{asset['id']}", headers=headers).json()["data"]
+    services = {row["port"]: row for row in data["services"]}
+    assert set(services) == {22, 443}
+    web = services[443]
+    assert web["service"] == "http"
+    assert web["product"] == "nginx"
+    assert web["purpose"] == "web over TLS"
+    assert web["tls"]["issuer"] == "Let's Encrypt"
+    assert web["tls"]["days_left"] == 43
+    stack = {entry["name"]: entry["version"] for entry in web["web"][0]["tech"]}
+    assert stack["php"] == "8.2.35"
+    assert "shauron:httpx" in web["sources"]
+    # A port with nothing behind it stays a single line.
+    assert services[22]["web"] == []
+    assert services[22]["tls"] is None
+    assert services[22]["purpose"] == "remote shell"
+
+
+def test_a_page_read_from_an_odd_port_lands_on_that_port(detail_client):
+    client, headers, _org = detail_client
+    asset = _asset_with(client, headers, [{
+        "kind": "web_path",
+        "value": {"url": "https://councilbox.com:8443/admin", "status": 200,
+                  "server": "nginx", "tech": []},
+        "source": "shauron:httpx",
+    }])
+    data = client.get(f"/api/v1/assets/{asset['id']}", headers=headers).json()["data"]
+    services = {row["port"]: row for row in data["services"]}
+    assert 8443 in services
+    assert services[8443]["web"][0]["url"].endswith("/admin")
+    assert services[8443]["purpose"] == "web over TLS (alternate)"

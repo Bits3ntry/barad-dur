@@ -96,6 +96,7 @@ export default function AssetDetail({ assetId }) {
     () => [...(latest.ipv4 || []), ...(latest.ipv6 || [])], [latest])
   const technologies = asset?.technologies || []
   const ports = asset?.ports || []
+  const services = asset?.services || []
   const web = asset?.web || []
   const openPorts = ports.filter((row) => row.state === 'open').length
   const authorization = asset?.authorization || {}
@@ -217,73 +218,71 @@ export default function AssetDetail({ assetId }) {
         </Card>
       </div>
 
-      <Card title={`open ports${ports.length ? ` · ${ports.length}` : ''}`}>
-        {!ports.length ? (
+      <Card title={`services${services.length ? ` · ${services.length}` : ''}`}>
+        {!services.length ? (
           <p className="hint">
-            nothing listening was read — a simple scan resolves the name; the ports
-            table needs the advanced one.
+            nothing listening was read — a simple scan resolves the name; services
+            and the stack behind them need the advanced one.
           </p>
         ) : (
-          <table className="asset-tech">
-            <thead>
-              <tr><th>port</th><th>service</th><th>what it is for</th><th>product</th>
-                <th>version</th><th>answered the banner</th><th>last seen</th></tr>
-            </thead>
-            <tbody>
-              {ports.map((row) => (
-                <tr key={`${row.port}/${row.protocol}`}>
-                  <td className="mono">
+          <div className="service-list">
+            {services.map((row) => (
+              <details className="service" key={`${row.port}/${row.protocol}`}
+                       open={row.web.length > 0}>
+                <summary>
+                  <span className="service-port mono">
                     {row.port}<span className="muted">/{row.protocol}</span>
-                  </td>
-                  <td className="mono">{row.service || <span className="muted">—</span>}</td>
-                  <td>{row.purpose || <span className="muted">not announced</span>}</td>
-                  <td className="mono">{row.product || <span className="muted">—</span>}</td>
-                  <td className="mono">
-                    {row.version || <span className="muted">—</span>}
-                  </td>
-                  <td className="muted small">
+                  </span>
+                  <span className="service-what">
+                    <span className="service-name">{row.service || 'unknown'}</span>
+                    <span className="muted small">{row.purpose || 'not announced'}</span>
+                  </span>
+                  <span className="service-product mono">
+                    {row.product
+                      ? <>{row.product}{row.version && <span className="muted"> {row.version}</span>}</>
+                      : <span className="muted">—</span>}
+                  </span>
+                  <span className="muted small service-sources">
                     {row.sources.map((name) => name.replace('shauron:', '')).join(', ')}
-                  </td>
-                  <td className="muted">{when(row.observed_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
-
-      <Card title={`web${web.length ? ` · ${web.length}` : ''}`}>
-        {!web.length ? (
-          <p className="hint">
-            no web answer was read. The stack behind a site (server, language, CMS
-            and its version) comes from reading the page, not from the port.
-          </p>
-        ) : (
-          <table className="asset-tech">
-            <thead>
-              <tr><th>url</th><th>status</th><th>server</th><th>stack</th><th>seen</th></tr>
-            </thead>
-            <tbody>
-              {web.map((row) => (
-                <tr key={row.url}>
-                  <td className="mono">{row.url}</td>
-                  <td className="mono">{row.status ?? <span className="muted">—</span>}</td>
-                  <td className="mono">{row.server || <span className="muted">—</span>}</td>
-                  <td>
-                    <span className="tech-chips">
-                      {row.tech.length ? row.tech.map((entry) => (
-                        <span key={entry.name} className="pill">
-                          {entry.name}
-                          {entry.version && <span className="mono"> {entry.version}</span>}
-                        </span>
-                      )) : <span className="muted">nothing fingerprinted</span>}
-                    </span>
-                  </td>
-                  <td className="muted">{when(row.observed_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </span>
+                </summary>
+                <div className="service-body">
+                  {row.tls && (
+                    <p className="service-line muted small">
+                      certificate · {row.tls.issuer || 'unknown issuer'}
+                      {row.tls.days_left != null && ` · ${row.tls.days_left}d left`}
+                      {row.tls.cipher && ` · ${row.tls.cipher}`}
+                      {row.tls.error && <span className="asset-bad"> · {row.tls.error}</span>}
+                    </p>
+                  )}
+                  {row.web.map((page) => (
+                    <div className="service-line" key={page.url}>
+                      <a className="mono" href={page.url} target="_blank" rel="noreferrer">
+                        {page.url}
+                      </a>
+                      <span className="mono muted">{page.status ?? '—'}</span>
+                      <span className="mono">{page.server || '—'}</span>
+                      <span className="tech-chips">
+                        {page.tech.length ? page.tech.map((entry) => (
+                          <span key={entry.name} className="pill">
+                            {entry.name}
+                            {entry.version && <span className="mono"> {entry.version}</span>}
+                          </span>
+                        )) : <span className="muted">nothing fingerprinted</span>}
+                      </span>
+                    </div>
+                  ))}
+                  {!row.web.length && !row.tls && (
+                    <p className="service-line muted small">
+                      {row.product
+                        ? `banner: ${row.product}${row.version ? ` ${row.version}` : ''}`
+                        : 'the port answered, nothing named it'}
+                    </p>
+                  )}
+                </div>
+              </details>
+            ))}
+          </div>
         )}
       </Card>
 

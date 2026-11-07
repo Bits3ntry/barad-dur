@@ -3425,3 +3425,34 @@ tr.group-head:hover > td, tr.group-child:hover > td { background: var(--accent-s
    only part that needs a fixed-width face. */
 .tech-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .tech-chips .pill { white-space: nowrap; }
+
+/* A service is one row and one fold: the port is the address, the banner names
+   the daemon, and what answers behind it opens underneath. */
+.service-list { display: flex; flex-direction: column; gap: 2px; }
+.service { border-top: 1px solid var(--line); }
+.service:first-child { border-top: 0; }
+.service > summary {
+  display: grid;
+  grid-template-columns: 92px minmax(120px, 1.2fr) minmax(120px, 1fr) auto;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 4px;
+  cursor: pointer;
+  list-style: none;
+}
+.service > summary::-webkit-details-marker { display: none; }
+.service > summary:hover { background: var(--panel-2); }
+.service-port { font-size: 12.5px; }
+.service-what { display: flex; flex-direction: column; gap: 1px; }
+.service-name { font-size: 12.5px; }
+.service-product { text-align: left; }
+.service-sources { text-align: right; white-space: nowrap; }
+.service-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 4px 12px 104px;
+}
+.service-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0; }
+.service-line a { color: var(--text); text-decoration: none; border-bottom: 1px dotted var(--line); }
+.service-line a:hover { border-bottom-color: var(--muted); }

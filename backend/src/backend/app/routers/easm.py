@@ -151,8 +151,10 @@ def _port_rows(session: Session, asset: models.Asset) -> list[dict]:
         if row["observed_at"] is None and observation.observed_at:
             row["observed_at"] = observation.observed_at.isoformat()
     for row in rows.values():
-        row["purpose"] = (SERVICE_PURPOSE.get((row["service"] or "").lower())
-                          or PORT_PURPOSE.get(row["port"]))
+        # The port map goes first: nmap calls 443 "http" even when it is serving
+        # TLS, and "web over TLS" is the fact the reader needs.
+        row["purpose"] = (PORT_PURPOSE.get(row["port"])
+                          or SERVICE_PURPOSE.get((row["service"] or "").lower()))
         row["sources"].sort()
     return sorted(rows.values(), key=lambda row: row["port"])
 
@@ -187,7 +189,10 @@ def _web_rows(session: Session, asset: models.Asset) -> list[dict]:
         if not url:
             continue
         row = rows.setdefault(url, {"url": url, "status": None, "server": None,
-                                    "title": None, "tech": [], "observed_at": None})
+                                    "title": None, "tech": [], "sources": [],
+                                    "observed_at": None})
+        if observation.source and observation.source not in row["sources"]:
+            row["sources"].append(observation.source)
         for field in ("status", "server", "title"):
             if row[field] in (None, "") and value.get(field) not in (None, ""):
                 row[field] = value[field]
@@ -210,6 +215,74 @@ def _web_rows(session: Session, asset: models.Asset) -> list[dict]:
     for row in rows.values():
         row["tech"].sort(key=lambda entry: (entry["version"] is None, entry["name"]))
     return sorted(rows.values(), key=lambda row: row["url"])
+
+
+def _url_port(url: str) -> int:
+    """The port a URL is served from, which is what groups a page under a service."""
+    parsed = urllib.parse.urlsplit(url if "://" in url else f"https://{url}")
+    if parsed.port:
+        return int(parsed.port)
+    return 443 if parsed.scheme == "https" else 80
+
+
+def _service_rows(session: Session, asset: models.Asset) -> list[dict]:
+    """One block per port, because the port is where the reader points.
+
+    Two tables — "ports" and "web" — left the join to the person reading: an open
+    443 with nginx and a page served by nginx with PHP are the same fact told
+    twice. A service folds them: the port is the address, the banner names the
+    daemon, and the page read from it says what answers behind the daemon.
+    """
+    services: dict[int, dict] = {}
+    for row in _port_rows(session, asset):
+        services[row["port"]] = {**row, "web": [], "tls": None}
+
+    def _slot(port: int, source: str | None, observed_at: str | None) -> dict:
+        slot = services.get(port)
+        if slot is None:
+            slot = services[port] = {
+                "port": port, "protocol": "tcp", "state": "open", "service": None,
+                "product": None, "version": None,
+                "purpose": PORT_PURPOSE.get(port)
+                or SERVICE_PURPOSE.get("https" if port in (443, 8443) else "http"),
+                "sources": [], "observed_at": None, "web": [], "tls": None,
+            }
+        if source and source not in slot["sources"]:
+            slot["sources"].append(source)
+        if slot["observed_at"] is None:
+            slot["observed_at"] = observed_at
+        return slot
+
+    for page in _web_rows(session, asset):
+        slot = _slot(_url_port(page["url"]), None, page["observed_at"])
+        for source in page.get("sources") or []:
+            if source not in slot["sources"]:
+                slot["sources"].append(source)
+        slot["web"].append(page)
+
+    for observation in (session.query(models.Observation)
+                        .filter_by(asset_id=asset.id, kind="certificate")
+                        .order_by(models.Observation.observed_at.desc()).limit(20).all()):
+        value = _observation_value(observation)
+        slot = _slot(observation.port or 443, observation.source,
+                     observation.observed_at.isoformat() if observation.observed_at else None)
+        if slot["tls"] is None:
+            issuer = value.get("issuer")
+            slot["tls"] = {
+                "issuer": (issuer.get("organizationName") or issuer.get("commonName"))
+                if isinstance(issuer, dict) else (issuer or None),
+                "not_after": value.get("not_after"),
+                "days_left": value.get("days_left"),
+                "cipher": value.get("cipher"),
+                "error": value.get("error"),
+            }
+
+    for slot in services.values():
+        slot["sources"].sort(key=lambda name: name.replace("shauron:", ""))
+        # A page was read from this port: it answers, whatever the banner said.
+        if slot["web"]:
+            slot["state"] = "open"
+    return sorted(services.values(), key=lambda row: row["port"])
 
 
 def _technology_rows(session: Session, asset: models.Asset) -> list[dict]:
@@ -580,6 +653,7 @@ def get_asset(asset_id: str,
         "technologies": _technology_rows(session, asset),
         "ports": _port_rows(session, asset),
         "web": _web_rows(session, asset),
+        "services": _service_rows(session, asset),
         "context": context,
         "observations": len(snapshots),
         "latest_snapshot": (json.loads(snapshots[0].data)
