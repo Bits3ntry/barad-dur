@@ -9,6 +9,7 @@ from email.utils import parsedate_to_datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.app import auth, models
@@ -589,6 +590,71 @@ def needs_attention(limit: int = Query(default=100, ge=1, le=500),
     return {"data": items[:limit], "total": len(items)}
 
 
+def _subdomain_rows(session: Session, org_id: str, asset: models.Asset,
+                    parents: dict, limit: int = 300) -> tuple[list[dict], int]:
+    """The children of this name, with enough about each one to choose.
+
+    "50 subdomains" is a number, not information: the reader wants to know which
+    one answers, which one has a certificate about to expire, and which one was
+    never scanned. Everything here comes from observations already stored — no
+    probe is launched to fill this panel.
+    """
+    children = [row for row in (session.query(models.Asset)
+                                .filter_by(org_id=org_id, type="domain")
+                                .filter(models.Asset.archived_at.is_(None))
+                                .order_by(models.Asset.value).all())
+                if (parents.get(row.id) or {}).get("id") == asset.id]
+    total = len(children)
+    children = children[:limit]
+    if not children:
+        return [], total
+    ids = [row.id for row in children]
+
+    counts: dict[str, dict[str, int]] = {}
+    for asset_id, kind, count in (session.query(models.Observation.asset_id,
+                                                models.Observation.kind,
+                                                func.count(models.Observation.id))
+                                  .filter(models.Observation.asset_id.in_(ids))
+                                  .group_by(models.Observation.asset_id,
+                                            models.Observation.kind).all()):
+        counts.setdefault(asset_id, {})[kind] = count
+
+    # `assets.last_seen_at` is when the row was written, not when the child was
+    # last read: a subdomain nobody probed still has a fresh row.
+    last_observed = dict(session.query(models.Observation.asset_id,
+                                       func.max(models.Observation.observed_at))
+                         .filter(models.Observation.asset_id.in_(ids))
+                         .group_by(models.Observation.asset_id).all())
+
+    newest: dict[str, dict] = {}
+    for observation in (session.query(models.Observation)
+                        .filter(models.Observation.asset_id.in_(ids),
+                                models.Observation.kind.in_(("host", "certificate")))
+                        .order_by(models.Observation.observed_at.desc()).all()):
+        slot = newest.setdefault(observation.asset_id, {})
+        slot.setdefault(observation.kind, _observation_value(observation))
+
+    rows = []
+    for child in children:
+        kinds = counts.get(child.id) or {}
+        seen = newest.get(child.id) or {}
+        host = seen.get("host") or {}
+        certificate = seen.get("certificate") or {}
+        rows.append({
+            "id": child.id, "value": child.value, "type": child.type,
+            "classification_status": child.classification_status,
+            "last_seen_at": child.last_seen_at.isoformat() if child.last_seen_at else None,
+            "observed_at": (last_observed[child.id].isoformat()
+                            if last_observed.get(child.id) else None),
+            "addresses": host.get("addresses") or [],
+            "ports": kinds.get("port", 0),
+            "products": kinds.get("technology", 0),
+            "certificate_days": certificate.get("days_left"),
+            "certificate_error": certificate.get("error"),
+        })
+    return rows, total
+
+
 @router.get("/assets/{asset_id}")
 def get_asset(asset_id: str,
               org: models.Organization = Depends(auth.require_org),
@@ -648,8 +714,11 @@ def get_asset(asset_id: str,
                             .filter_by(org_id=org.id, type="domain")
                             .filter(models.Asset.archived_at.is_(None)).all())
                 if (parents.get(row.id) or {}).get("id") == asset.id][:50]
+    subdomains, subdomain_count = _subdomain_rows(session, org.id, asset, parents)
     data.update({
         "children": children,
+        "subdomains": subdomains,
+        "subdomain_count": subdomain_count,
         "technologies": _technology_rows(session, asset),
         "ports": _port_rows(session, asset),
         "web": _web_rows(session, asset),

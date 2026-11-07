@@ -180,3 +180,60 @@ def test_a_page_read_from_an_odd_port_lands_on_that_port(detail_client):
     assert 8443 in services
     assert services[8443]["web"][0]["url"].endswith("/admin")
     assert services[8443]["purpose"] == "web over TLS (alternate)"
+
+
+def test_the_subdomain_list_says_which_child_is_worth_opening(detail_client):
+    """A count is not a list: each child carries address, ports and certificate.
+
+    The panel is built from observations already stored — asking the scanner
+    again to draw a list would be a scan nobody approved.
+    """
+    client, headers, org = detail_client
+    parent = _asset_with(client, headers, [])
+    session = session_factory()()
+    children = []
+    for value in ("api.councilbox.com", "www.councilbox.com", "old.councilbox.com"):
+        child = models.Asset(org_id=org, type="domain", value=value, source="seed")
+        session.add(child)
+        session.flush()
+        children.append(child)
+    session.commit()
+
+    # api answers with two ports and a certificate; www only resolves.
+    for row in (
+        models.Observation(org_id=org, asset_id=children[0].id, kind="host",
+                           subject="api.councilbox.com",
+                           value={"addresses": ["52.157.199.20"]}, source="shauron:native"),
+        models.Observation(org_id=org, asset_id=children[0].id, kind="port", port=443,
+                           subject="api.councilbox.com", value={"state": "open"},
+                           source="shauron:nmap"),
+        models.Observation(org_id=org, asset_id=children[0].id, kind="port", port=22,
+                           subject="api.councilbox.com", value={"state": "open"},
+                           source="shauron:nmap"),
+        models.Observation(org_id=org, asset_id=children[0].id, kind="technology",
+                           subject="api.councilbox.com", value={"products": []},
+                           source="shauron:httpx"),
+        models.Observation(org_id=org, asset_id=children[0].id, kind="certificate", port=443,
+                           subject="api.councilbox.com",
+                           value={"days_left": 12, "issuer": {"commonName": "R3"}},
+                           source="shauron:native"),
+        models.Observation(org_id=org, asset_id=children[1].id, kind="host",
+                           subject="www.councilbox.com",
+                           value={"addresses": ["52.157.199.19"]}, source="shauron:native"),
+    ):
+        session.add(row)
+    session.commit()
+    session.close()
+
+    data = client.get(f"/api/v1/assets/{parent['id']}", headers=headers).json()["data"]
+    rows = {row["value"]: row for row in data["subdomains"]}
+    assert data["subdomain_count"] >= 3
+    api = rows["api.councilbox.com"]
+    assert api["addresses"] == ["52.157.199.20"]
+    assert api["ports"] == 2
+    assert api["products"] == 1
+    assert api["certificate_days"] == 12
+    assert rows["www.councilbox.com"]["ports"] == 0
+    assert rows["old.councilbox.com"]["observed_at"] is None   # never observed
+    # The row's own timestamp exists for every child: it is not evidence.
+    assert rows["old.councilbox.com"]["last_seen_at"] is not None

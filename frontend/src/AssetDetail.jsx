@@ -4,6 +4,7 @@ import { Card, EmptyState, ErrorBanner, Loading } from './ui'
 import ScanDialog from './ScanDialog'
 import AssetMap from './AssetMap'
 import AssetRelations from './AssetRelations'
+import SubdomainCard, { SubdomainDrawer } from './AssetSubdomains'
 
 /* One asset, one page. The table answers "what do I have"; this answers "what is
    this thing": where it sits, what it points at, what it serves, who owns it,
@@ -97,6 +98,9 @@ export default function AssetDetail({ assetId }) {
   const technologies = asset?.technologies || []
   const ports = asset?.ports || []
   const services = asset?.services || []
+  const subdomains = asset?.subdomains || []
+  const subdomainCount = asset?.subdomain_count ?? subdomains.length
+  const [subOpen, setSubOpen] = useState(false)
   const web = asset?.web || []
   const openPorts = ports.filter((row) => row.state === 'open').length
   const authorization = asset?.authorization || {}
@@ -186,6 +190,7 @@ export default function AssetDetail({ assetId }) {
                   tone={certDays != null && certDays < 20 ? 'bad' : undefined} />
             <Stat label="open ports" value={openPorts || '—'} />
             <Stat label="products" value={technologies.length || '—'} />
+            <Stat label="subdomains" value={subdomainCount || '—'} />
           </div>
           <dl className="asset-facts">
             <dt>ip</dt>
@@ -319,9 +324,19 @@ export default function AssetDetail({ assetId }) {
         )}
       </details>
 
+      <Card title={`subdomains${subdomainCount ? ` · ${subdomainCount}` : ''}`}>
+        <SubdomainCard rows={subdomains} total={subdomainCount}
+                       onOpenAll={() => setSubOpen(true)}
+                       onOpenOne={(id) => { window.location.hash = `asset::${id}` }} />
+      </Card>
+
+      <SubdomainDrawer open={subOpen} onClose={() => setSubOpen(false)}
+                       rows={subdomains} total={subdomainCount} assetValue={asset.value} />
+
       <Card title="relationships">
         <AssetRelations asset={asset} parent={asset.parent}
-                        children={asset.children || []} addresses={addresses}
+                        children={subdomains} addresses={addresses}
+                        onOpenChildren={() => setSubOpen(true)}
                         project={asset.project}
                         projectName={labelOf(asset.project_name) || labelOf(asset.project)}
                         grant={grantLabel} covered={covered} />
