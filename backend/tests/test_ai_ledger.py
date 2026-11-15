@@ -697,3 +697,76 @@ def test_an_advisory_link_is_never_a_target_and_the_gap_is_named(context):
     assert "nvd.nist.gov" in answer
     assert "last_checked_at" in answer
     assert session.query(models.AgentMission).count() == 0
+
+
+def test_a_declared_target_starts_a_mission_from_the_chat(context):
+    """A lab scenario has no finding and no asset. Refusing until somebody files one is
+    how `validá esto` became a dead end — so a host typed in the conversation is a
+    target, recorded as declared, still behind the human gate."""
+    http, headers, session, org = context
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    body = http.post(
+        f"/api/v1/ai/sessions/{row['id']}/turns",
+        json={"question": "@angmar probá https://app.example.test/rest/user/login con "
+                          "' OR 1=1-- y decime si entra como admin"},
+        headers=headers).json()["data"]
+    answer = body["turn"]["content"]
+    assert "esperando tu aprobación" in answer
+
+    mission = session.query(models.AgentMission).one()
+    assert mission.status == "awaiting_approval"
+    assert mission.capability == "validate"
+    targets = json.loads(mission.targets)
+    assert targets[0]["value"] == "https://app.example.test", \
+        "the envelope names the origin, the path stays in the goal"
+    assert targets[0]["declared"] == "https://app.example.test/rest/user/login"
+    assert targets[0]["source"] == "chat.declared"
+    evidence = json.loads(mission.evidence)
+    assert evidence["finding_id"] is None
+    assert evidence["task_kind"] == "exploit.chain"
+    assert "' OR 1=1--" in mission.goal, "the hypothesis travels with the mission"
+
+
+def test_the_proposal_carries_a_plan_and_the_plan_names_the_steps(context, monkeypatch):
+    """A goal is not a plan. Before the mission exists, the planner reads the estate and
+    writes the steps, the signal that settles it, and what it could not establish — so
+    the operator approves a plan, not a sentence."""
+    http, headers, session, org = context
+    from backend.app.ai import engine as engine_mod
+    from backend.app import secrets as secrets_mod
+
+    finding = _finding_for_thread(http, headers, session, org)
+    _provider(http, headers)
+    monkeypatch.setattr(secrets_mod, "open_sealed", lambda s, c: "sk")
+    # The envelope is signed with the deployment's own key; stubbing `open_sealed` to a
+    # fake string breaks Ed25519, so the signature is the thing that gets stubbed.
+    import backend.app.shauron_signing as signing
+    monkeypatch.setattr(signing, "sign_ticket",
+                        lambda s, payload: {signing.SIGNATURE_FIELD: "sig"})
+    monkeypatch.setattr(engine_mod, "complete", lambda *a, **k: {
+        "content": json.dumps({
+            "technique": {"known": True, "summary": "unchecked deserialisation",
+                          "sources": [finding.id]},
+            "hypothesis": "a crafted body reaches the parser and hands back a session",
+            "steps": [{"n": 1, "method": "POST", "path": "/rest/user/login",
+                       "payload": "{...}", "expect": "HTTP 200 with a token"}],
+            "success_signal": "HTTP 200 with a token",
+            "safety": "active", "needs_grant": False, "open_questions": []}),
+        "tool_calls": [], "tokens_in": 900, "tokens_out": 200})
+
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"@angmar analizá {finding.id} y armá la POC"},
+                     headers=headers).json()["data"]
+
+    assert "Técnica documentada" in body["turn"]["content"]
+    assert "/rest/user/login" in body["turn"]["content"], "the steps are visible"
+    assert "Señal de éxito" in body["turn"]["content"]
+
+    mission = session.query(models.AgentMission).one()
+    evidence = json.loads(mission.evidence)
+    assert evidence["plan"]["steps"][0]["path"] == "/rest/user/login"
+    assert evidence["task_kind"] == "exploit.chain", "an active plan runs as a chain"
+    assert mission.goal.startswith("a crafted body"), \
+        "the goal is the hypothesis, not a template"

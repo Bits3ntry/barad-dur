@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from backend.app import auth, models, secrets, shauron_signing
 from backend.app.ai import (agents, authz, engine, orchestrator,
                             session as context, profiles)
-from backend.app.ai import suggestions as suggestions_ai
+from backend.app.ai import planner, suggestions as suggestions_ai
 from backend.app.db import get_session as db_session
 from backend.app.db import session_factory
 
@@ -689,6 +689,11 @@ def _run_room(session_db: Session, row: models.ChatSession, provider, *,
 # knows, and the reason it cannot run yet when it cannot.
 
 FINDING_ID_RE = re.compile(r"\b[0-9a-f]{32}\b")
+#: A host or URL the operator typed in the conversation. A lab target has no finding and
+#: no asset yet; refusing to act until somebody files one is how "validá esto" became a
+#: dead end. The declared value is recorded so widening scope is legible.
+TARGET_RE = re.compile(r"\b(?:https?://[^\s,;]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?)\b",
+                       re.IGNORECASE)
 FIELD_TOOLS = ["curl", "python"]
 
 
@@ -729,17 +734,36 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
         if row is not None and row.org_id == org.id:
             finding = row
             break
-    if finding is None:
+
+    # A declared target: the operator named a host in the conversation. This is how a
+    # lab scenario gets validated without pretending a finding exists.
+    declared = None
+    for candidate in TARGET_RE.findall(question or ""):
+        if FINDING_ID_RE.fullmatch(candidate):
+            continue
+        if session_db.get(models.Finding, candidate) is not None:
+            continue
+        declared = candidate.rstrip(".,;)")
+        break
+
+    if finding is None and declared is None:
         return {"blocked": "no finding id in the question", "needs": "finding",
                 "ids": {"candidates": candidates}}
 
-    value, source = _finding_target(session_db, finding)
-    ids = {"finding": finding.id, "asset": finding.asset_id,
-           "component": finding.component_id}
-    if not value:
-        return {"blocked": ("this finding is not attached to an asset or an endpoint, so "
-                            "nothing in the estate says which host it runs on"),
-                "needs": "target", "ids": ids, "advisory_url": finding.url}
+    if finding is not None:
+        value, source = _finding_target(session_db, finding)
+        ids = {"finding": finding.id, "asset": finding.asset_id,
+               "component": finding.component_id}
+        if not value and declared is None:
+            return {"blocked": ("this finding is not attached to an asset or an "
+                                "endpoint, so nothing in the estate says which host it "
+                                "runs on"),
+                    "needs": "target", "ids": ids, "advisory_url": finding.url}
+        if not value:
+            value, source = declared, "chat.declared"
+    else:
+        value, source = declared, "chat.declared"
+        ids = {"finding": None, "asset": None, "component": None}
 
     # Same normalisation the mission API applies: the envelope names the origin.
     from urllib.parse import urlsplit
@@ -756,11 +780,21 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
                 "target": origin, "source": source, "capability": capability,
                 "matched": getattr(decision, "matched_rule", None)}
 
+    # The plan, before the mission: a goal is not a plan, and approving one without the
+    # other is how the operator approves a sentence and the agent improvises.
+    plan_row = planner.plan(session_db, org, actor=actor,
+                            question=(f"Plan for finding {finding.id}: {finding.title}. "
+                                      f"Target: {origin}." if finding is not None
+                                      else f"Plan for {origin}: {question.strip()}"))
+
     profile = agent_router.PROFILE_FOR.get(capability, "angmar")
     now = models.utcnow()
     mission = models.AgentMission(
         org_id=org.id, actor=actor, actor_role="analyst",
-        goal=f"validate {finding.title[:150]} on {origin}"[:2000],
+        goal=(((plan_row or {}).get("hypothesis") or "").strip()
+              or (f"validate {finding.title[:150]} on {origin}" if finding is not None
+                  else f"prove or disprove, on {origin}: "
+                       f"{question.strip()[:400]}"))[:2000],
         capability=capability, profile=profile,
         # A proposal is not an authorization: the human gate is the point.
         status="awaiting_approval",
@@ -770,7 +804,13 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
         tools=json.dumps(FIELD_TOOLS),
         budget=json.dumps({"steps": 8, "tokens": 20000, "wall_s": 600, "usd": 0.0}),
         evidence=json.dumps({"required": ["request", "response", "verdict"],
-                             "finding_id": finding.id, "proposed_from": "chat"}),
+                             "finding_id": finding.id if finding is not None else None,
+                             "task_kind": ("exploit.chain"
+                                           if (plan_row or {}).get("safety") == "active"
+                                           or finding is None else "validate.finding"),
+                             "declared_target": declared,
+                             "plan": plan_row,
+                             "proposed_from": "chat"}),
         deadline_at=now + timedelta(minutes=30))
     session_db.add(mission)
     session_db.flush()
@@ -786,7 +826,8 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
         "deadline_at": mission.deadline_at.isoformat()})
     mission.signature = signed[shauron_signing.SIGNATURE_FIELD]
     return {"mission": agent_router._mission_data(mission, tasks=0),
-            "target": origin, "declared": value, "source": source, "ids": ids}
+            "target": origin, "declared": value, "source": source, "ids": ids,
+            "plan": plan_row}
 
 
 def _proposal_answer(result: dict, capability: str) -> str:
@@ -803,8 +844,11 @@ def _proposal_answer(result: dict, capability: str) -> str:
             f"{(mission['budget'] or {}).get('steps')} pasos / "
             f"{(mission['budget'] or {}).get('tokens')} tokens / 30 min\n"
             f"- prueba exigida: {', '.join((mission['evidence'] or {}).get('required') or [])}\n"
-            f"- hallazgo: `{(mission['evidence'] or {}).get('finding_id')}`\n\n"
-            f"Aprobala en Missions (`#missions::{mission['id']}`) y el agente de campo "
+            + (f"- hallazgo: `{(mission['evidence'] or {}).get('finding_id')}`\n\n"
+               if (mission['evidence'] or {}).get("finding_id")
+               else "- sin hallazgo: es un target declarado en este chat\n\n")
+            + (f"\n{planner.describe(result['plan'])}\n\n" if result.get("plan") else "")
+            + f"Aprobala en Missions (`#missions::{mission['id']}`) y el agente de campo "
             "corre ahí con su envelope firmado: lee qué está realmente desplegado, prueba "
             "la hipótesis y devuelve request/response. Eso entra como candidato y pasa "
             "los gates antes de tocar el hallazgo — el veredicto del modelo no lo "

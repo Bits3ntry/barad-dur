@@ -490,8 +490,47 @@ def approve_mission(mission_id: str,
     mission.approved_at = models.utcnow()
     _audit_log(session, org.id, "console", "agent.mission_approved", "agent_mission",
                mission.id, mission.goal[:120])
+    # Approving a mission that already says what it will run is one act, not two. The
+    # proposal carries `evidence.task_kind`; without this the operator approves and the
+    # mission then sits there until somebody remembers to file a task by hand — which is
+    # how a queue looks alive and does nothing.
+    spawned = _first_task(session, mission)
     session.commit()
-    return {"data": _mission_data(mission)}
+    return {"data": _mission_data(mission),
+            "task": _task_brief(spawned) if spawned is not None else None}
+
+
+def _first_task(session: Session, mission: models.AgentMission):
+    """The task the proposal described, written on approval. Never a guess.
+
+    Only when the mission names one kind and one target: a mission with two targets needs
+    a human to say which one runs first, and inventing an order is worse than asking.
+    """
+    try:
+        evidence = json.loads(mission.evidence or "{}")
+        targets = json.loads(mission.targets or "[]")
+    except ValueError:
+        return None
+    kind = evidence.get("task_kind")
+    if kind not in models.AGENT_TASK_KINDS or len(targets) != 1:
+        return None
+    existing = (session.query(models.AgentTask)
+                .filter_by(mission_id=mission.id).count())
+    if existing:
+        return None
+    target = targets[0]
+    task = models.AgentTask(
+        org_id=mission.org_id, mission_id=mission.id, kind=kind,
+        target=json.dumps(target), tools=mission.tools,
+        must_return=json.dumps(evidence.get("required") or []),
+        status="queued")
+    session.add(task)
+    session.flush()
+    return task
+
+
+def _task_brief(task: models.AgentTask) -> dict:
+    return {"id": task.id, "kind": task.kind, "status": task.status}
 
 
 @router.post("/missions/{mission_id}/reject")
