@@ -156,6 +156,18 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
       }
       return
     }
+    if (suggestion.action === "create_cycle" && suggestion.name) {
+      try {
+        await api.post("/api/v1/cycles",
+                       { name: suggestion.name, kind: suggestion.kind || "pentest_external",
+                         actor: "chat" })
+        setNotice(`Ciclo «${suggestion.name}» creado.`)
+        onNavigate?.("cycles")
+      } catch (caught) {
+        setError(String(caught.message || caught))
+      }
+      return
+    }
     if (suggestion.href) {
       const [screen, arg] = suggestion.href.replace(/^#/, "").split("::")
       if (screen === "ai-runs" && arg) onNavigate?.("ai-runs", { runId: arg })

@@ -27,6 +27,7 @@ ACTIONS = {
     "validate_finding": "pedir una misión de validación para un hallazgo",
     "open_run": "abrir el recibo de una corrida",
     "approve_mission": "aprobar una misión que espera un humano",
+    "create_cycle": "abrir un ciclo CTEM para ordenar el trabajo que la respuesta describe",
 }
 
 SCREENS = {"projects", "assets", "findings", "missions", "prompts", "ai-runs",
@@ -104,6 +105,14 @@ def validate(session: Session, org: models.Organization, raw) -> list[dict]:
                 out.append({"action": action, "label": label,
                             "mission_id": mission_id,
                             "href": f"#missions::{mission_id}"})
+        elif action == "create_cycle":
+            name = str(item.get("name") or "").strip()[:120]
+            kind = str(item.get("kind") or "pentest_external").strip()
+            # A cycle is a real container with a KPI bucket: the kind has to be one of
+            # the estate's, or the button writes a row nobody can report on.
+            if name and kind in models.CYCLE_KINDS:
+                out.append({"action": action, "label": label, "name": name,
+                            "kind": kind, "href": "#cycles"})
         elif action == "open_run":
             run_id = str(item.get("run_id") or "").strip()
             row = session.get(models.AiRun, run_id) if run_id else None
@@ -127,6 +136,7 @@ Allowed `action` values, nothing else:
 - `validate_finding` — {"action":"validate_finding","label":"...","finding_id":"<32 hex from a tool answer>"}
 - `open_run` — {"action":"open_run","label":"...","run_id":"<run id from this conversation>"}
 - `approve_mission` — {"action":"approve_mission","label":"...","mission_id":"<id>"}
+- `create_cycle` — {"action":"create_cycle","label":"...","name":"...","kind":"pentest_external|sweep|supply_chain|ai_redteam|pentest_internal"}
 
 At most three. Every id must come from a tool answer in this run; a button that points
 at something you did not read is dropped by the platform. If nothing useful applies,
