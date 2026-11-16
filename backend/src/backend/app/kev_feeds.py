@@ -34,7 +34,10 @@ import urllib.request
 from backend.app import models
 
 CISA_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-EU_URL = "https://raw.githubusercontent.com/enisaeu/CNW/main/advisories/eukev/eukev.json"
+# The EU KEV list moved inside its own repository (`advisories/eukev` → `eukev`); the old
+# path answers 404. A KEV feed that 404s reads as "nothing exploited in Europe", which is
+# the worst shape a failure can take here: silence that looks like an answer.
+EU_URL = "https://raw.githubusercontent.com/enisaeu/CNW/main/eukev/eukev.json"
 VULNCHECK_URL = "https://api.vulncheck.com/v3/backup/vulncheck-kev"
 
 CISA = "cisa-kev"
@@ -147,6 +150,21 @@ def _fetch_cisa(timeout: float = 25.0) -> list[dict]:
 
 # ── EU KEV (ENISA CNW) ───────────────────────────────────────────────────────
 
+def _text(value) -> str:
+    """A field that may arrive as a string or a list, as text.
+
+    The EU feed's own shape is inconsistent between entries — `exploitationType` is a
+    quoted Python list in some rows and a real list in others — and a parser that assumes
+    one of them fails on the other. A feed that fails to parse is as silent as one that
+    404s, which is the failure this whole module exists to avoid.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value if item)
+    return str(value)
+
+
 def _parse_eu(payload) -> list[dict]:
     """The EU list: curated, terse, and the only one that says *why* it is listed.
 
@@ -160,7 +178,7 @@ def _parse_eu(payload) -> list[dict]:
         payload.get("vulnerabilities") or payload.get("data") or [])
     rows = []
     for entry in entries:
-        exploitation = (entry.get("exploitationType") or "").strip() or None
+        exploitation = _text(entry.get("exploitationType")).strip() or None
         rows.append({
             "cve_id": entry.get("cveID") or entry.get("cve"),
             "title": entry.get("vulnerabilityName"),
