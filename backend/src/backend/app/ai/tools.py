@@ -105,6 +105,17 @@ TOOLS: list[dict] = [
         "params": {"finding_id": {"in": "path", "type": "string", "required": True}},
     },
     {
+        "name": "finding_trace",
+        "summary": ("The story behind one finding: the envelope that authorised it, the "
+                    "ordered events (tool → observation → decision), the gate verdicts, "
+                    "and every `repeat` that already tried to reproduce it. Read this "
+                    "before planning a validation: a plan that repeats an attempt which "
+                    "already failed is not a plan."),
+        "method": "GET",
+        "path": "/api/v1/findings/{finding_id}/trace",
+        "params": {"finding_id": {"in": "path", "type": "string", "required": True}},
+    },
+    {
         "name": "findings_search",
         "summary": ("Raw findings, one row per weakness/instance. Use it when you "
                     "need ids, not the grouped view. The list does not carry proof "

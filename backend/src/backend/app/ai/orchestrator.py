@@ -54,6 +54,13 @@ ANSWER_NOW = ("You have no tool calls left. Answer the question now, in prose, f
               "the tool results above — and name anything you could not verify "
               "instead of guessing it.")
 
+#: For a step whose contract is an object of its own — the planner. The claims schema
+#: above would override the shape the agent's own prompt asked for, which is why the
+#: planner kept answering in claims or in prose instead of a plan.
+OUTPUT_CONTRACT = (
+    "\n\nReturn exactly the JSON object your instructions describe. No prose, no code "
+    "fences, no comments, nothing outside the object.")
+
 OUTPUT_PROSE = (
     "\n\nAnswer the operator directly in prose: the answer first, then the ids that "
     "support it. Name what is unknown and what data would settle it. No preamble.\n"
@@ -147,7 +154,9 @@ def execute(session: Session, run: models.AiRun, *,
             break
         outcome = _run_specialist(
             session, run, state, name, provider, api_key, settings,
-            transport=transport, context=context, json_mode=not terminal,
+            transport=transport, context=context,
+            json_mode=(bool((named.get(name) or {}).get("json_output"))
+                       or not terminal),
             calls_left=calls_left, prompt_set=prompt_set, named=named)
 
         if outcome["stopped"]:
@@ -197,8 +206,9 @@ def _run_specialist(session: Session, run: models.AiRun, state: AgentState,
     body, prompt_label = ((prompt_set or {}).get(spec.get("prompt_key") or name)
                           or (spec["prompt"],
                               spec.get("prompt_label") or f"{name}@code"))
-    messages = [{"role": "system",
-                 "content": body + (OUTPUT_JSON if json_mode else OUTPUT_PROSE)}]
+    suffix = (spec.get("json_suffix")
+              or (OUTPUT_JSON if json_mode else OUTPUT_PROSE))
+    messages = [{"role": "system", "content": body + suffix}]
     if context:
         messages.extend(_conversation_tail(context))
     messages.append({"role": "user", "content": _user_message(state, spec, json_mode)})
@@ -220,7 +230,12 @@ def _run_specialist(session: Session, run: models.AiRun, state: AgentState,
         # no tools. When a tool loop eats the whole budget the run ends with facts and
         # no sentence (`the plan produced no answer text`), which the operator reads as
         # a cut-off assistant — and it is not a budget decision, it is a lost turn.
-        final = not json_mode and attempt == calls_allowed - 1
+        # A step that must hand back an object still needs a call with no tools on
+        # offer: without this the model keeps calling tools until the budget runs out and
+        # the run ends with facts and no answer — which is exactly how the planner
+        # produced `stopped_no_progress` instead of a plan.
+        final = attempt == calls_allowed - 1 and (
+            spec.get("json_output") or not json_mode)
         offered = [] if final else tools
         if final and tools:
             messages.append({"role": "user", "content": ANSWER_NOW})

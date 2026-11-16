@@ -46,6 +46,7 @@ _DISPATCH: dict[str, Callable[..., Any]] = {
     "vulnerabilities_search": vulnerabilities.list_vulnerabilities,
     "findings_search": findings.list_findings,
     "finding_detail": findings.get_finding,
+    "finding_trace": findings.finding_trace,
     "assets_search": easm.list_assets,
     "intel_kev": intelligence.kev_for,
     "intel_kev_catalog": intelligence.kev_catalog,

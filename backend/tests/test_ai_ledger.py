@@ -624,10 +624,26 @@ def _finding_for_thread(http, headers, session, org, *, host="app.example.test",
     return finding
 
 
-def test_a_field_mention_proposes_a_mission_instead_of_a_dead_end(context):
+PLAN = {"technique": {"known": True, "summary": "probe the login", "sources": []},
+        "hypothesis": "a crafted body hands back a session",
+        "steps": [{"n": 1, "method": "POST", "path": "/rest/user/login",
+                   "payload": "x", "expect": "200 with a token"}],
+        "success_signal": "200 with a token", "safety": "active",
+        "needs_grant": False, "open_questions": []}
+
+
+def _stub_planner(monkeypatch):
+    """The proposal fails closed without a plan, so these tests stub one: they are about
+    the envelope, not about whether a model can write JSON on a given Tuesday."""
+    monkeypatch.setattr("backend.app.ai.planner.plan",
+                        lambda *a, **k: (PLAN, ""))
+
+
+def test_a_field_mention_proposes_a_mission_instead_of_a_dead_end(context, monkeypatch):
     """`@angmar` used to answer "authorize one in Missions". It now writes the envelope
     and stops at the human gate — the chat still never executes."""
     http, headers, session, org = context
+    _stub_planner(monkeypatch)
     finding = _finding_for_thread(http, headers, session, org)
     row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
 
@@ -699,11 +715,12 @@ def test_an_advisory_link_is_never_a_target_and_the_gap_is_named(context):
     assert session.query(models.AgentMission).count() == 0
 
 
-def test_a_declared_target_starts_a_mission_from_the_chat(context):
+def test_a_declared_target_starts_a_mission_from_the_chat(context, monkeypatch):
     """A lab scenario has no finding and no asset. Refusing until somebody files one is
     how `validá esto` became a dead end — so a host typed in the conversation is a
     target, recorded as declared, still behind the human gate."""
     http, headers, session, org = context
+    _stub_planner(monkeypatch)
     row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
 
     body = http.post(
@@ -725,7 +742,10 @@ def test_a_declared_target_starts_a_mission_from_the_chat(context):
     evidence = json.loads(mission.evidence)
     assert evidence["finding_id"] is None
     assert evidence["task_kind"] == "exploit.chain"
-    assert "' OR 1=1--" in mission.goal, "the hypothesis travels with the mission"
+    # The goal is the planner's hypothesis now; the payload lives in the plan, which is
+    # what the field agent follows.
+    assert mission.goal == PLAN["hypothesis"]
+    assert json.loads(mission.evidence)["plan"]["steps"][0]["path"] == "/rest/user/login"
 
 
 def test_the_proposal_carries_a_plan_and_the_plan_names_the_steps(context, monkeypatch):
@@ -770,3 +790,22 @@ def test_the_proposal_carries_a_plan_and_the_plan_names_the_steps(context, monke
     assert evidence["task_kind"] == "exploit.chain", "an active plan runs as a chain"
     assert mission.goal.startswith("a crafted body"), \
         "the goal is the hypothesis, not a template"
+
+
+def test_no_plan_means_no_mission(context, monkeypatch):
+    """Fail closed: the planner's prose is worth more than a mission the worker would
+    improvise. A mission without a plan is exactly what this refuses to create."""
+    http, headers, session, org = context
+    _provider(http, headers)
+    finding = _finding_for_thread(http, headers, session, org)
+    monkeypatch.setattr("backend.app.ai.planner.plan",
+                        lambda *a, **k: (None, "the finding carries no version, so no "
+                                                 "probe can be decided in advance"))
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"@angmar validá {finding.id}"},
+                     headers=headers).json()["data"]
+    assert "No armé la misión" in body["turn"]["content"]
+    assert "no version" in body["turn"]["content"], "the reason travels with the refusal"
+    assert session.query(models.AgentMission).count() == 0

@@ -782,10 +782,17 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
 
     # The plan, before the mission: a goal is not a plan, and approving one without the
     # other is how the operator approves a sentence and the agent improvises.
-    plan_row = planner.plan(session_db, org, actor=actor,
-                            question=(f"Plan for finding {finding.id}: {finding.title}. "
-                                      f"Target: {origin}." if finding is not None
-                                      else f"Plan for {origin}: {question.strip()}"))
+    plan_row, plan_prose = planner.plan(
+        session_db, org, actor=actor,
+        question=(f"Plan for finding {finding.id}: {finding.title}. Target: {origin}."
+                  if finding is not None else f"Plan for {origin}: {question.strip()}"))
+    if plan_row is None:
+        # Fail closed: a mission without a plan is a sentence the worker improvises on.
+        # The planner's own prose is the reason, and it is worth more than a template.
+        return {"blocked": "el planner no produjo un plan ejecutable",
+                "needs": "plan", "ids": {"finding": finding.id if finding is not None
+                                         else None, "target": origin},
+                "prose": (plan_prose or "").strip()[:1200]}
 
     profile = agent_router.PROFILE_FOR.get(capability, "angmar")
     now = models.utcnow()
@@ -856,6 +863,15 @@ def _proposal_answer(result: dict, capability: str) -> str:
     needs = result.get("needs")
     ids = ", ".join(f"{key} `{value}`" for key, value in (result.get("ids") or {}).items()
                     if value)
+    if needs == "plan":
+        prose = (result.get("prose") or "").strip()
+        return (
+            "**No armé la misión**, y es a propósito: el planner leyó el hallazgo y no "
+            "produjo un plan ejecutable. Una misión sin plan es una frase que el agente "
+            "de campo improvisa, y eso no es una validación.\n\n"
+            + (f"Lo que concluyó:\n\n> {prose}\n\n" if prose else "")
+            + "Con eso en la mano se decide mejor: o falta un dato (versión, asset, "
+              "target), o la técnica no está documentada y hay que investigarla antes.")
     if needs == "finding":
         return ("Para armar una misión necesito el **id del hallazgo** (32 caracteres "
                 "hex). Sin él no sé qué se va a probar ni contra qué host.")

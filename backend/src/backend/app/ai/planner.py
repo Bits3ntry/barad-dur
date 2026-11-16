@@ -22,7 +22,7 @@ from backend.app.ai import engine, orchestrator
 
 #: Read-only, and only what a plan needs: the finding, what it touches, where it runs,
 #: what the world says about it, and what the estate authorises.
-PLANNER_TOOLS = ["finding_detail", "findings_search", "components_impact",
+PLANNER_TOOLS = ["finding_detail", "finding_trace", "findings_search", "components_impact",
                  "deployment_chain", "vulnerabilities_search", "advisory_resolve",
                  "intel_kev", "intel_epss", "assets_search", "authorized_targets",
                  "projects_list", "project_inventory"]
@@ -32,10 +32,11 @@ write the plan somebody else will approve.
 
 Gather, with your tools and only with them: what the finding is about (component, version
 as recorded, purl), which asset and deployment carry it, whether the advisory documents a
-technique, and whether the host is inside an authorised scope.
+technique, whether the host is inside an authorised scope, and **what was already tried**.
+`finding_trace` carries every previous attempt and how it ended: a plan that runs the same
+probe again, knowing it failed, is worse than no plan.
 
-Then, at the end of your answer, emit the plan inside a fenced json block — one line of
-verdict before it, nothing after it:
+Answer with **one JSON object and nothing else** — no prose before it, none after:
 
 ```json
 
@@ -83,6 +84,10 @@ def spec() -> dict:
         "sees": [],
         "executor": "analyst",
         "must_return": ["technique", "hypothesis", "steps", "success_signal", "safety"],
+        #: The plan is the deliverable, not a block at the end of a paragraph: the prompt
+        #: asks for the object alone and the step reserves a call to produce it.
+        "json_output": True,
+        "json_suffix": orchestrator.OUTPUT_CONTRACT,
     }
 
 
@@ -115,11 +120,12 @@ def parse(answer: str) -> dict | None:
 
 
 def plan(session: Session, org: models.Organization, *, actor: str,
-         question: str) -> dict | None:
-    """Run the planner once and return its plan. Its own run, in the same ledger."""
+         question: str) -> tuple[dict | None, str]:
+    """Run the planner once. Returns `(plan, prose)`: when there is no plan, the prose is
+    the reason, and a proposal without a plan is not emitted."""
     provider = engine.default_provider(session)
     if provider is None:
-        return None
+        return None, "no provider configured"
     run = models.AiRun(org_id=org.id, actor=actor, actor_role="analyst",
                        question=question, mode="ask",
                        provider_id=provider.id, model=provider.model)
@@ -127,9 +133,10 @@ def plan(session: Session, org: models.Organization, *, actor: str,
     session.flush()
     try:
         orchestrator.execute(session, run, agent=spec())
-    except Exception:          # a planner that dies must not take the proposal with it
-        return None
-    return parse(run.answer or "")
+    except Exception as error:  # a planner that dies must not take the proposal with it
+        return None, f"the planner failed: {error}"
+    answer = run.answer or ""
+    return parse(answer), answer.strip()
 
 
 def describe(plan_row: dict, limit: int = 5) -> str:

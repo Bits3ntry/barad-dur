@@ -199,3 +199,15 @@ def test_a_tool_projection_keeps_the_totals_and_samples_the_rows():
     assert payload["data"][-1]["_rows_hidden"] == 200 - (len(payload["data"]) - 1)
 
 
+
+
+def test_every_tool_the_planner_names_exists_in_the_catalogue():
+    """A planner tool that is not in the catalogue is silently dropped at call time, and
+    the plan is written from whatever the model remembers — the exact failure mode this
+    guards."""
+    from backend.app.ai import planner, tools as catalog
+
+    missing = [name for name in planner.PLANNER_TOOLS if name not in catalog.BY_NAME]
+    assert missing == [], f"planner names tools the catalogue cannot serve: {missing}"
+    assert "finding_trace" in planner.PLANNER_TOOLS, \
+        "a plan that ignores what was already tried repeats a failed attempt"
