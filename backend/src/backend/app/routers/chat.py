@@ -512,10 +512,17 @@ def create_turn(session_id: str, payload: TurnIn, response: Response,
         extra = [ref for ref in (created.get("id"),
                                  ((proposal or {}).get("ids") or {}).get("finding"))
                  if ref]
+        # The approve button travels with the proposal: the operator says yes to what the
+        # turn just described, in the turn, without a trip to Missions.
+        buttons: list[dict] = []
+        if created.get("id"):
+            buttons.append({"action": "approve_mission", "label": "Aprobar y ejecutar",
+                            "mission_id": created["id"],
+                            "href": f"#missions::{created['id']}"})
         assistant = _write_turn(
             session_db, row, run, answer=answer, actor=actor,
             profile_key=profile_key, assistant_role=assistant_role,
-            extra_citations=extra)
+            extra_citations=extra, suggestions=buttons)
         session_db.commit()
         compaction = None
     else:

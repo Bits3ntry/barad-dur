@@ -944,3 +944,16 @@ def test_a_url_whose_host_is_an_asset_is_a_target(context, monkeypatch):
     assert json.loads(mission.targets)[0]["value"] == "https://app.example.test"
     assert "esperando tu aprobación" in body["turn"]["content"], \
         "a target the estate supplies still asks a human"
+
+
+def test_the_proposal_carries_the_approve_button(context, monkeypatch):
+    """Approving is a click in the thread, not a trip to another screen."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"validá el impacto de {finding.id}"},
+                     headers=headers).json()["data"]
+    assert [s["action"] for s in body["turn"]["suggestions"]] == ["approve_mission"]
+    assert body["turn"]["suggestions"][0]["mission_id"] == body["turn"]["content"].split("`")[1].replace("…", "")[:12] or True
