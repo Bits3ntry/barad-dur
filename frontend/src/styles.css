@@ -5627,3 +5627,50 @@ button.rem-title:hover { color: var(--accent); }
 .chat-run-step__tok {
   color: var(--muted, #9aa4b2);
 }
+
+/* Relations, inside the conversation. */
+.chat-thread {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  border: 1px solid var(--line, #2a2f3a);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.chat-thread > summary {
+  cursor: pointer;
+  color: var(--muted, #9aa4b2);
+}
+
+.chat-thread__row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.chat-thread__n,
+.chat-thread__tok {
+  color: var(--muted, #9aa4b2);
+}
+
+.chat-thread__kind {
+  font-variant: small-caps;
+  opacity: 0.8;
+}
+
+.chat-thread__kind--delegated {
+  color: var(--accent, #6ea8fe);
+}
+
+.chat-thread__who {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chat-thread__what {
+  color: var(--muted, #9aa4b2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

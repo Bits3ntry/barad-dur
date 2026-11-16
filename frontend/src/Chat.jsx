@@ -261,6 +261,7 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
   }
   return (
     <div className={`chat${compact ? ' chat-compact' : ''}`}>
+      {sessionId && <ThreadTrace sessionId={sessionId} />}
       {notice && <Banner kind="info">{notice}</Banner>}
       {error && <Banner kind="error">{error}</Banner>}
       <div className="chat-log">
@@ -425,6 +426,53 @@ function RunTrace({ runId, tokens, label }) {
           </div>
         )
       })}
+    </details>
+  )
+}
+
+
+// The relation view, inside the conversation: who spoke, delegating to whom, what each
+// run cost. Hermes shows the room while it works; a separate tab you have to remember to
+// open is the friction this replaces.
+function ThreadTrace({ sessionId }) {
+  const [events, setEvents] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const open = async (element) => {
+    if (!element.open || events || busy) return
+    setBusy(true)
+    try {
+      const body = await api.get(`/api/v1/ai/sessions/${sessionId}/thread`)
+      setEvents((body?.data?.events) || [])
+    } catch {
+      setEvents([])
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <details className="chat-thread" onToggle={(event) => open(event.currentTarget)}>
+      <summary>relaciones de esta sesión</summary>
+      {busy && !events && <div className="chat-thread__row">cargando…</div>}
+      {events && events.length === 0 && (
+        <div className="chat-thread__row">sin actividad registrada</div>
+      )}
+      {(events || []).map((event) => (
+        <div className="chat-thread__row" key={`${event.order}-${event.kind}`}>
+          <span className="chat-thread__n">{event.order}</span>
+          <span className={`chat-thread__kind chat-thread__kind--${event.kind}`}>
+            {event.kind}
+          </span>
+          <span className="chat-thread__who">
+            {event.author}{event.role && event.role !== "user" ? ` · ${event.role}` : ""}
+          </span>
+          <span className="chat-thread__what">{(event.content || "").slice(0, 90)}</span>
+          {event.tokens > 0 && (
+            <span className="chat-thread__tok">{event.tokens} tok</span>
+          )}
+        </div>
+      ))}
     </details>
   )
 }
