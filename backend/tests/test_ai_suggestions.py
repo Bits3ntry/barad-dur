@@ -133,3 +133,18 @@ def test_lookup_says_what_an_id_is_instead_of_denying_it(client):
     missing = http.get(f"/api/v1/ai/lookup/{'0' * 32}", headers=headers).json()["data"]
     assert missing["kind"] is None
     assert "absence, not a failed lookup" in missing["note"]
+
+
+def test_a_cycle_button_is_offered_only_with_a_kind_the_estate_reports_on(client):
+    """A cycle is a container with a KPI bucket: a free-string kind would write a row
+    nobody can report on, so the suggestion survives validation only when it matches."""
+    http, headers, db = client
+    org = db.query(models.Organization).one()
+    kept = suggest.validate(db, org, [
+        {"action": "create_cycle", "label": "Crear ciclo CTEM",
+         "name": "Juice Shop lab", "kind": "pentest_external"},
+        {"action": "create_cycle", "label": "Inventado", "name": "x", "kind": "nope"},
+        {"action": "create_cycle", "label": "Sin nombre", "kind": "sweep"},
+    ])
+    assert [s["name"] for s in kept] == ["Juice Shop lab"]
+    assert kept[0]["kind"] == "pentest_external"

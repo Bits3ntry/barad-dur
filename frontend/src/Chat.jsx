@@ -156,6 +156,18 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
       }
       return
     }
+    if (suggestion.action === "create_cycle" && suggestion.name) {
+      try {
+        await api.post("/api/v1/cycles",
+                       { name: suggestion.name, kind: suggestion.kind || "pentest_external",
+                         actor: "chat" })
+        setNotice(`Ciclo «${suggestion.name}» creado.`)
+        onNavigate?.("cycles")
+      } catch (caught) {
+        setError(String(caught.message || caught))
+      }
+      return
+    }
     if (suggestion.href) {
       const [screen, arg] = suggestion.href.replace(/^#/, "").split("::")
       if (screen === "ai-runs" && arg) onNavigate?.("ai-runs", { runId: arg })
@@ -299,10 +311,8 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
               </div>
             )}
             {turn.run_id && (
-              <button type="button" className="chat-run"
-                onClick={() => onNavigate?.('ai-runs', { runId: turn.run_id })}>
-                {t('chat.run.open')}{turn.tokens > 0 ? ` · ${t('chat.tokens', { n: turn.tokens })}` : ''}
-              </button>
+              <RunTrace runId={turn.run_id} tokens={turn.tokens}
+                        label={t('chat.run.open')} />
             )}
           </div>
         )))}
@@ -357,6 +367,56 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
         </p>
       )}
     </div>
+  )
+}
+
+
+// The run, in place. Leaving the thread to see what the assistant just did is the exact
+// friction this harness exists to remove: the steps are one disclosure away.
+function RunTrace({ runId, tokens, label }) {
+  const [rows, setRows] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const open = async (element) => {
+    if (!element.open || rows || busy) return
+    setBusy(true)
+    try {
+      const body = await api.get(`/api/v1/ai/runs/${runId}`)
+      setRows(body?.data?.step_rows || [])
+    } catch {
+      setRows([])
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <details className="chat-run-inline" onToggle={(event) => open(event.currentTarget)}>
+      <summary>
+        {label}{tokens > 0 ? ` · ${tokens} tok` : ''}
+      </summary>
+      {!rows && busy && <div className="chat-run-step">cargando…</div>}
+      {rows && rows.length === 0 && <div className="chat-run-step">sin pasos registrados</div>}
+      {(rows || []).map((step) => {
+        let tools = []
+        try { tools = JSON.parse(step.tool_calls || '[]') } catch { tools = [] }
+        return (
+          <div className="chat-run-step" key={`${runId}-${step.seq}`}>
+            <span className="chat-run-step__n">{step.seq}</span>
+            <span className="chat-run-step__role">{step.role}</span>
+            {step.phase && <span className="chat-run-step__phase">{step.phase}</span>}
+            {tools.length > 0 && (
+              <span className="chat-run-step__tools">
+                {tools.map((call) => call.tool).filter(Boolean).join(' · ')}
+              </span>
+            )}
+            <span className="chat-run-step__tok">
+              {(step.tokens_in || 0) + (step.tokens_out || 0)} tok
+            </span>
+          </div>
+        )
+      })}
+    </details>
   )
 }
 

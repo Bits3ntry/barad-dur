@@ -69,7 +69,7 @@ OUTPUT_PROSE = (
     "```json\n{\"suggestions\": [{\"action\": \"open_screen\", \"label\": \"...\", "
     "\"screen\": \"findings\"}]}\n```\n"
     "At most three suggestions, chosen only from `ask`, `open_screen`, "
-    "`validate_finding`, `open_run`. Ids must come from a tool answer in this run: the "
+    "`validate_finding`, `open_run`, `approve_mission`, `create_cycle`. Ids must come from a tool answer in this run: the "
     "platform drops any button it cannot honour, so an invented id costs the answer its "
     "buttons. No block at all when nothing applies.")
 
