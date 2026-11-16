@@ -616,9 +616,10 @@ def _finding_for_thread(http, headers, session, org, *, host="app.example.test",
     finding = models.Finding(
         org_id=org.id, kind="vulnerability", source="scanner",
         title="CVE-2026-111497: brotli return value unchecked",
-        severity="high", status="open", url="https://nvd.nist.gov/vuln/detail/CVE-2026-111497",
+        severity="high", status="open",
         asset_id=asset.id if asset else None,
-        fingerprint=f"fp-{len(session.query(models.Finding).all())}", **extra)
+        fingerprint=f"fp-{len(session.query(models.Finding).all())}",
+        **{"url": "https://nvd.nist.gov/vuln/detail/CVE-2026-111497", **extra})
     session.add(finding)
     session.commit()
     return finding
@@ -922,3 +923,24 @@ def test_validá_a_finding_id_reaches_the_field_agent(context, monkeypatch):
                      headers=headers).json()["data"]
     assert "acción contra un host" in body["turn"]["content"]
     assert session.query(models.AgentMission).count() == 1
+
+
+def test_a_url_whose_host_is_an_asset_is_a_target(context, monkeypatch):
+    """The rule: the inventory decides what a finding's `url` is. A host the estate owns
+    makes it a target; an advisory host does not."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    session.add(models.Asset(org_id=org.id, type="url",
+                             value="https://app.example.test",
+                             source="manual", classification_status="owned"))
+    session.flush()
+    finding = _finding_for_thread(http, headers, session, org, with_asset=False,
+                                  url="https://app.example.test/rest/user/login")
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"validá el impacto de {finding.id}"},
+                     headers=headers).json()["data"]
+    mission = session.query(models.AgentMission).one()
+    assert json.loads(mission.targets)[0]["value"] == "https://app.example.test"
+    assert "esperando tu aprobación" in body["turn"]["content"], \
+        "a target the estate supplies still asks a human"

@@ -735,6 +735,23 @@ def _finding_target(session_db: Session, finding: models.Finding) -> tuple[str |
         asset = session_db.get(models.Asset, finding.asset_id)
         if asset is not None and asset.value:
             return str(asset.value).strip(), "asset.value"
+    # A finding's `url` is two different things: on a scanner row it is a link to the
+    # advisory (`nvd.nist.gov`), on a field row it is the exact endpoint that was
+    # exploited. The origin is not the discriminator — the inventory is: if the url's
+    # host is an asset this estate owns, it is a target. If it is not, it is a link.
+    if finding.url and str(finding.url).strip():
+        candidate = str(finding.url).strip()
+        parsed = urlsplit(candidate if "//" in candidate else f"https://{candidate}")
+        if parsed.netloc:
+            known = (session_db.query(models.Asset)
+                     .filter_by(org_id=finding.org_id)
+                     .filter(models.Asset.value.in_([
+                         f"{parsed.scheme}://{parsed.netloc}",
+                         f"http://{parsed.netloc}", f"https://{parsed.netloc}",
+                         parsed.netloc]))
+                     .first())
+            if known is not None:
+                return candidate, "finding.url→asset"
     if finding.endpoint and str(finding.endpoint).strip():
         # An endpoint is often a *path* (`/rest/user/login`), not an origin. Taking it as
         # one produced `https:///rest/user/login` — a target with no host, refused by the
