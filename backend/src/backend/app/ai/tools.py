@@ -105,6 +105,15 @@ TOOLS: list[dict] = [
         "params": {"finding_id": {"in": "path", "type": "string", "required": True}},
     },
     {
+        "name": "lookup",
+        "summary": ("What one 32-hex id is: finding, mission, task, run, cycle, asset or "
+                    "component. Use it before saying an id does not exist — the text "
+                    "searches match titles and CVE ids, never identifiers."),
+        "method": "GET",
+        "path": "/api/v1/ai/lookup/{ref}",
+        "params": {"ref": {"in": "path", "type": "string", "required": True}},
+    },
+    {
         "name": "finding_trace",
         "summary": ("The story behind one finding: the envelope that authorised it, the "
                     "ordered events (tool → observation → decision), the gate verdicts, "
@@ -117,9 +126,10 @@ TOOLS: list[dict] = [
     },
     {
         "name": "findings_search",
-        "summary": ("Raw findings, one row per weakness/instance. Use it when you "
-                    "need ids, not the grouped view. The list does not carry proof "
-                    "bodies: open one with `finding_detail`."),
+        "summary": ("Raw findings, one row per weakness/instance, matched by "
+                    "`q` against title, rule, path and CVE — **never by id**. Zero rows "
+                    "here does not mean the finding is absent: open it with "
+                    "`finding_detail`, or resolve the id with `lookup`."),
         "method": "GET",
         "path": "/api/v1/findings",
         "params": {

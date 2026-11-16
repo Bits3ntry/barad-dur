@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from fastapi.params import Query
 
+from backend.app.ai import lookup as id_lookup
 from backend.app.ai import tools as catalog
 from backend.app.routers import (agents, authorization as grants_api, deployment_chain,
                                  easm, exposure_verdict, findings, intelligence,
@@ -34,6 +35,7 @@ def grants_router_list(*, org, session, status=None):
 
 # name -> (callable, allowed kwargs). The callable receives `org` and `session`.
 _DISPATCH: dict[str, Callable[..., Any]] = {
+    "lookup": id_lookup.lookup,
     "deployment_chain": deployment_chain.deployment_chain,
     "exposure_verdict": exposure_verdict.exposure_verdict,
     "components_impact": inventory.component_impact,

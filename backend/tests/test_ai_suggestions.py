@@ -112,3 +112,24 @@ def test_no_block_means_no_buttons():
     assert text == prose and buttons == []
     text, buttons = suggest.extract(None, None, prose + "\n\n```json\n{broken\n```")
     assert buttons == [], "a malformed block costs the buttons, not the answer"
+
+
+def test_lookup_says_what_an_id_is_instead_of_denying_it(client):
+    """The failure this prevents: a finding that exists, denied because a 32-hex id went
+    to a text search that matches titles. `lookup` answers with the row."""
+    http, headers, db = client
+    org = db.query(models.Organization).one()
+    finding = models.Finding(org_id=org.id, kind="vulnerability", source="shauron:ai",
+                             title="SQL injection auth bypass in /rest/user/login",
+                             severity="CRITICAL", status="open", fingerprint="fp-look")
+    db.add(finding)
+    db.commit()
+
+    body = http.get(f"/api/v1/ai/lookup/{finding.id}", headers=headers).json()["data"]
+    assert body["kind"] == "finding"
+    assert body["row"]["status"] == "open"
+    assert "SQL injection" in body["row"]["title"]
+
+    missing = http.get(f"/api/v1/ai/lookup/{'0' * 32}", headers=headers).json()["data"]
+    assert missing["kind"] is None
+    assert "absence, not a failed lookup" in missing["note"]

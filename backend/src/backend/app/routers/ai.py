@@ -305,6 +305,15 @@ class PromptPatch(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
 
 
+@router.get("/lookup/{ref}")
+def lookup_ref(ref: str,
+               org: models.Organization = Depends(auth.require_org),
+               session: Session = Depends(get_session)):
+    """Which object is this id. A miss is an answer: `kind: None`."""
+    from backend.app.ai import lookup as id_lookup
+    return {"data": id_lookup.lookup(ref, org=org, session=session)}
+
+
 @router.get("/prompts")
 def list_prompts(org: models.Organization = Depends(auth.require_org),
                  session: Session = Depends(get_session)):
