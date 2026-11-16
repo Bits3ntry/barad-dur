@@ -11,10 +11,12 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -65,6 +67,11 @@ class ApiKey(Base, TimestampMixin):
     label: Mapped[str] = mapped_column(String(255), default="")
 
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# crown → high → normal → low. Anything else (including null) is `unclassified`,
+# and the API says so rather than guessing a middle value.
+CRITICALITY_LEVELS = {"crown", "high", "normal", "low"}
 
 
 class Project(Base, TimestampMixin):
@@ -201,7 +208,42 @@ class Finding(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
     org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
-    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"))
+    # Nullable since F3 (D29): an asset-only finding — a WordPress behind a domain —
+    # is a real thing, and inventing a project to hold it was the lie this column
+    # used to force.
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True)
+    asset_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("assets.id"), nullable=True, index=True)
+    # A run's claim: the scan job that said so. Kept so a finding can be traced to
+    # the evidence that produced it even while it belongs to no asset yet.
+    origin_run_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("scan_jobs.id"), nullable=True, index=True)
+    # The autonomous path's three ids: the mission that authorised the run, the task
+    # that decided it, and the candidate the gates settled. They are what turns a
+    # claim into a story — without them the trace lives in `agent_task_events` and
+    # the finding cannot reach it.
+    agent_mission_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True)
+    agent_task_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True)
+    agent_candidate_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True)
+    # Who found it. Not the same question as `source` (which tool said so): a pentest
+    # row and a scanner row can share a tool and still need different weight.
+    origin: Mapped[str] = mapped_column(String(32), default="scanner", index=True)
+    # Human verdict. The agent can only create `new`; a person moves it on.
+    triage_status: Mapped[str] = mapped_column(String(16), default="triaged", index=True)
+    # Proof, on its own axis: hypothesis | static | observed | demonstrated.
+    evidence_level: Mapped[str] = mapped_column(String(16), default="observed")
+    # Impact, on its own axis: none | attempted | reproduced | effect_proven.
+    exploit_state: Mapped[str] = mapped_column(String(16), default="none")
+    evidence_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("finding_attachments.id"), nullable=True)
+    triaged_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    triaged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    triage_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     kind: Mapped[str] = mapped_column(String(32), index=True)
     # The class says WHAT it is; the vector says HOW it must be closed. A CVE is
     # closed by upgrading the package, a credential by rotating it, a code defect
@@ -242,10 +284,80 @@ class Finding(Base, TimestampMixin):
     # Last run that actually evaluated this finding; closure requires it.
     last_evaluated_run_id: Mapped[str | None] = mapped_column(
         String(36), nullable=True, index=True)
+    # ── the fingerprint of a hand-written finding ──
+    # A pentest row is not a title and a url: it names the weakness class, the
+    # product, the exact endpoint, the session needed to reach it, the raw request
+    # that proves it, and what we expected instead. Without these the report cannot
+    # be reproduced by anyone who was not in the room.
+    http_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    endpoint: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    auth_required: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    auth_profile_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("auth_profiles.id"), nullable=True)
+    expected_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observed_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validation_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proof_request: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proof_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The product the weakness lives in: a crown jewel, not the domain that serves it.
+    product_component_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("application_components.id"), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuthProfile(Base):
+    """A reusable way in: bearer, cookie, header, form login.
+
+    The session recipe belongs to the engagement, not to one finding — a pentest
+    reaches forty endpoints through the same login, and repeating the token in forty
+    rows is how credentials end up in fifty places nobody can rotate.
+    """
+
+    __tablename__ = "auth_profiles"
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_auth_profiles_org_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    # bearer | cookie | header | basic | form_login | oauth | mtls | none
+    kind: Mapped[str] = mapped_column(String(32), default="bearer")
+    headers: Mapped[str | None] = mapped_column(Text, nullable=True)
+    login_steps: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RepeatRun(Base):
+    """One executed Repeat chain for a finding: what was sent, what came back.
+
+    A repeater without history is a scratchpad: the run that reproduced the bug at
+    10:04 is the evidence, and it has to survive the tab being closed. The chain is
+    stored with the requests as they were **written** (`Authorization: Bearer
+    {{token}}`) and the responses as they came back, which is why this row is the
+    one place a token may appear in the body — that is what was proved.
+    """
+
+    __tablename__ = "repeat_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                        index=True)
+    finding_id: Mapped[str | None] = mapped_column(String(36),
+                                                   ForeignKey("findings.id"),
+                                                   nullable=True, index=True)
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # ok | denied | error
+    result: Mapped[str] = mapped_column(String(16), default="ok")
+    steps: Mapped[str | None] = mapped_column(Text, nullable=True)
+    variables: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class SuppressionRule(Base, TimestampMixin):
@@ -398,16 +510,70 @@ class AuditLog(Base):
 
 
 class KevEntry(Base):
-    """One CISA KEV row mirrored locally (catalog lives at cisa.gov)."""
+    """One known-exploited CVE mirrored locally, merged from every catalogue.
+
+    The feed carries vendor, product, vulnerability name and description; discarding
+    them left a list of ids that could be looked up but never searched, so "what came
+    out this week and does it touch anything I run" had no answer.
+
+    The row is keyed on the CVE, not on the publisher: CISA, VulnCheck and the EU
+    list often say the same CVE is being exploited, and stacking three rows would
+    break the join every other screen makes. `sources` keeps the provenance
+    ("cisa-kev,eu-kev") and `exploitation_type`/`euvd_id`/`notes` keep what only
+    the EU list publishes — which kind of actor is using it, and the report.
+    """
 
     __tablename__ = "kev_entries"
 
     cve_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
-    date_added: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # The four fields that make the row readable and matchable. `name` is the same
+    # string as `title`; the duplicate keeps older screens working and is written by
+    # the same sync.
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vendor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    product: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    required_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ransomware: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cwes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    date_added: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     due_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Comma-separated slugs of the catalogues that list this CVE, in authority
+    # order. Empty on rows imported before the mirror knew there was more than one
+    # catalogue; the migration backfills them as `cisa-kev`.
+    sources: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    exploitation_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    euvd_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # CISA's `notes` and the EU list's report link answer the same question
+    # ("what is the evidence?") from different sides, so they cannot share a
+    # column: whichever catalogue wrote first would erase the other.
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    eu_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KevFeedState(Base):
+    """Whether a catalogue answered the last time the mirror asked it.
+
+    A merged row cannot say which source is stale — "1.779 rows" is the same
+    number whether CISA answered ten minutes ago or the EU list has been failing
+    for a week. One row per registry slug makes the difference visible, and lets
+    "never synced" stay distinguishable from "synced, then broke".
+    """
+
+    __tablename__ = "kev_feed_state"
+
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),
+                                                       nullable=True)
+    last_ok_rows: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),
+                                                          nullable=True)
 
 
 class EpssScore(Base):
@@ -717,6 +883,27 @@ class Deployment(Base, TimestampMixin):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class AssetGeo(Base):
+    """Where an address sits, cached per asset and address.
+
+    Geolocation belongs to the address, not to the name: ten subdomains on one box
+    share it. Caching it here keeps the asset page fast and lets it say when the
+    lookup happened — a location without a moment is a rumour. Nothing is fetched
+    unless `PLATFORM_GEOIP_URL` is configured.
+    """
+
+    __tablename__ = "asset_geo"
+    __table_args__ = (UniqueConstraint("asset_id", "address", name="uq_asset_geo_asset_address"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    asset_id: Mapped[str] = mapped_column(String(36), ForeignKey("assets.id"))
+    address: Mapped[str] = mapped_column(String(64))
+    data: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AssetLink(Base):
     """Typed, temporal asset attachment: asset ↔ (project | service |
     deployment). One row per pairing; unlinking keeps the history; sharing an
@@ -757,7 +944,14 @@ class FindingContext(Base):
 class ScanGrant(Base):
     """An explicit, expiring, revocable authorization to run one or more
     capabilities against declared targets. Issuance and revocation both
-    leave an audit-chain entry; revalidation never trusts past answers."""
+    leave an audit-chain entry; revalidation never trusts past answers.
+
+    A grant is also the *request*: declaring an asset emits a row with
+    `status="requested"`, which the decision engine ignores (it only reads
+    `active`), and an administrator approves — possibly widening its scope —
+    from the Grants screen. That keeps one object and one place for authority
+    instead of a second "request" table beside the ledger.
+    """
 
     __tablename__ = "scan_grants"
 
@@ -765,6 +959,10 @@ class ScanGrant(Base):
     org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
     principal: Mapped[str] = mapped_column(String(255), index=True)
     capabilities: Mapped[str] = mapped_column(String(255))
+    # The human-facing bundle ("simple scan", "advanced scan", "red teaming").
+    # `capabilities` stays the machine truth the engine reads; the level is what
+    # the operator chose, and the two are kept in step on every write.
+    level: Mapped[str] = mapped_column(String(16), default="simple")
     tools: Mapped[str | None] = mapped_column(String(512), nullable=True)
     environment: Mapped[str | None] = mapped_column(String(64), nullable=True)
     conditions: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -772,6 +970,15 @@ class ScanGrant(Base):
     justification: Mapped[str] = mapped_column(Text)
     policy_version: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    # Who asked (an asset declaration) and who answered (an administrator).
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The asset whose declaration produced the request, so the console can show
+    # "this domain is waiting for authorization" without guessing by value.
+    asset_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("assets.id"), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(24), default="manual")
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -999,6 +1206,10 @@ class PentestFinding(Base, TimestampMixin):
     verification_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
     verified_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # F3: the queue row this engagement finding became, so the same object has one
+    # identity across two screens (D29).
+    ingested_finding_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("findings.id"), nullable=True, index=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1135,6 +1346,11 @@ class ScanJob(Base):
     capability: Mapped[str] = mapped_column(String(64))
     principal: Mapped[str] = mapped_column(String(255))
     environment: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # The campaign this run belongs to. A tool is launched *into* a cycle: without
+    # it, a run's findings have no reference to be judged against, and the review
+    # would be typed by hand. System jobs (advisory clock, enrichment) leave it null.
+    cycle_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("cycles.id"), nullable=True, index=True)
     targets: Mapped[str] = mapped_column(Text, default="[]")
     profile: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(16), default="queued")
@@ -1303,6 +1519,26 @@ class PrFinding(Base):
 USER_ROLES = {"owner", "admin", "analyst", "viewer"}
 
 
+class OrganizationMember(Base):
+    """A person's seat in one organisation.
+
+    `users.org_id` used to be the whole answer, which made "change organisation"
+    impossible: the row *was* the membership. Now the user is a person and this
+    table says where they may work — `role` here, not on the user, decides what
+    they may do in that organisation.
+    """
+
+    __tablename__ = "organization_members"
+    __table_args__ = (UniqueConstraint("org_id", "user_id", name="uq_org_members"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                        index=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16), default="viewer")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class User(Base, TimestampMixin):
     """A human principal. API keys stay the org-level service identity."""
 
@@ -1390,6 +1626,36 @@ class OidcState(Base):
         DateTime(timezone=True), nullable=True)
 
 
+class ScanWorkflow(Base, TimestampMixin):
+    """A workflow an organisation writes: the catalog's document shape, its rules.
+
+    Stored as the document it is — stages and limits as JSON — rather than as
+    rows per stage: the platform never queries a stage on its own, it hands the
+    whole thing to the resolver, and the resolver's contract is the document.
+    """
+
+    __tablename__ = "scan_workflows"
+    __table_args__ = (UniqueConstraint("org_id", "slug", name="uq_workflows_org_slug"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    #: `org.<name>` — the prefix is what tells the resolver this is not a catalog
+    #: profile, and it is part of every plan that names it.
+    slug: Mapped[str] = mapped_column(String(96))
+    label: Mapped[str] = mapped_column(String(128))
+    question: Mapped[str] = mapped_column(Text, default="")
+    target_kind: Mapped[str] = mapped_column(String(32), default="domain")
+    level: Mapped[str] = mapped_column(String(16), default="simple")
+    plane: Mapped[str] = mapped_column(Text, default="[]")
+    stages: Mapped[str] = mapped_column(Text, default="[]")
+    limits: Mapped[str] = mapped_column(Text, default="{}")
+    #: Which catalog profile it was cloned from, when it was. Provenance, not a
+    #: parent: editing the catalog never rewrites an organisation's workflow.
+    cloned_from: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(255), default="console")
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class ScanSchedule(Base, TimestampMixin):
     """Recurring job definition; a tick queues due jobs through the same
     authorization path as manual ones (never bypassing BL-015)."""
@@ -1435,6 +1701,45 @@ class WorkerToken(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DeviceAuthorization(Base):
+    """A terminal asking to become a session (RFC 8628, simplified).
+
+    The device shows a short code, a human approves it in the console, and the
+    terminal trades its secret for a real session. The secret is stored **hashed**
+    — a leaked table must not be a leaked set of credentials — while the short
+    code is stored in clear because it is only useful together with that secret
+    and only for eight minutes.
+
+    Approval is a human decision by an owner or an admin, and it is the only place
+    a CLI session is born: the grant engine never sees this table.
+    """
+
+    __tablename__ = "device_authorizations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    user_code: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    device_code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    hostname: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    platform: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Filled by the approver, so the session that comes out is theirs.
+    org_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=True)
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    last_polled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    polls: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class NotificationChannel(Base, TimestampMixin):
@@ -1568,6 +1873,17 @@ class ApplicationComponent(Base):
     name: Mapped[str] = mapped_column(String(255))
     slug: Mapped[str] = mapped_column(String(128))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Business context: the jewel is the **component** — AUREA > Backend, not AUREA
+    # and not the domain in front of it. A project is a container; a component is
+    # what the business runs. `crown` is what the threat model is built for; null
+    # means nobody judged it, and the API says `unclassified` instead of guessing.
+    criticality: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, index=True)
+    business_service: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    criticality_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    criticality_set_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    criticality_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1811,7 +2127,11 @@ class AnalysisFinding(Base):
 # An exposure event is the condition someone has to decide about; it has a
 # stable identity so repeated observations do not duplicate it.
 
-OBSERVATION_KINDS = {"host", "port", "dns", "certificate", "technology", "web_path"}
+# Every kind the runner can emit. A missing one is not a cosmetic bug: the upload
+# is rejected with 422, the run is never closed, and the job sits `leased` until
+# its lease expires — from the console, a hang with no error.
+OBSERVATION_KINDS = {"host", "port", "dns", "certificate", "technology", "web_path",
+                     "web_paths", "misconfig", "sast", "sbom", "secrets"}
 OBSERVATION_COVERAGES = {"full", "partial", "failed"}
 EXPOSURE_STATES = {"open", "accepted", "resolved", "false_positive"}
 REOPEN_POLICIES = {"on_new_observation", "manual"}
@@ -1959,6 +2279,12 @@ class LookalikeDomain(Base, TimestampMixin):
 # never rewrites what the cycle was looking at. A cycle grants no authorization.
 
 CYCLE_STATES = {"planning", "active", "review", "closed"}
+# What kind of exercise this window is. The kind is not decoration: it decides who
+# produces the evidence (a tool, a pentest team, a supply-chain review), what the
+# review is judged on, and how the KPI is bucketed. `sweep` is the estate-wide
+# baseline, `campaign` is one technique family against one subset.
+CYCLE_KINDS = {"sweep", "campaign", "pentest_external", "pentest_internal",
+               "supply_chain", "ai_redteam"}
 WORK_ITEM_KINDS = {"task", "request", "review", "acceptance"}
 WORK_ITEM_STATUSES = {"open", "in_progress", "awaiting_review", "approved",
                       "rejected", "withdrawn", "done"}
@@ -1972,7 +2298,14 @@ class Cycle(Base):
     org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The campaign's working note: what the client said, what we promised, what the
+    # scope letter excluded. Free text, kept with the cycle it belongs to.
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # sweep | campaign | pentest_external | pentest_internal | supply_chain |
+    # ai_redteam. Set at creation, never changed by activation: the kind is what a
+    # KPI is bucketed by, so rewriting it later would rewrite history.
+    kind: Mapped[str] = mapped_column(String(24), default="sweep", index=True)
     state: Mapped[str] = mapped_column(String(16), default="planning", index=True)
     starts_on: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
@@ -1991,6 +2324,27 @@ class Cycle(Base):
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CycleDocument(Base):
+    """One file that belongs to the campaign: the scope letter, the pentest report.
+
+    The bytes are kept rather than linked, because the review is written from the
+    document and a URL that rots takes the evidence with it.
+    """
+
+    __tablename__ = "cycle_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    cycle_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cycles.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[str] = mapped_column(String(512))
+    media_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    uploaded_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class CycleMembership(Base):
@@ -2025,6 +2379,67 @@ class CycleFinding(Base):
     finding_id: Mapped[str] = mapped_column(String(36), ForeignKey("findings.id"))
     linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     source: Mapped[str] = mapped_column(String(16), default="manual")
+
+
+class AttackTechnique(Base):
+    """One MITRE ATT&CK technique the catalogue knows about.
+
+    `capability` is the platform capability that could test it, or NULL when nothing
+    we run today can reach it (phishing, DoS, exfiltration). A technique nobody can
+    test is listed and counted, never scored as covered.
+    """
+
+    __tablename__ = "attack_techniques"
+
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    tactic: Mapped[str] = mapped_column(String(64), index=True)
+    capability: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ThreatEntry(Base):
+    """One technique declared against one crown jewel, and why it applies."""
+
+    __tablename__ = "threat_entries"
+    __table_args__ = (UniqueConstraint("component_id", "technique_id",
+                                       name="uq_threat_entry_component_technique"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), index=True)
+    component_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("application_components.id"), index=True)
+    technique_id: Mapped[str] = mapped_column(
+        String(24), ForeignKey("attack_techniques.id"))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AttackerProfile(Base):
+    """A reusable bundle of techniques — "opportunistic external", "supply chain".
+
+    Org-scoped, not per cycle: an attacker profile outlives any single window, and a
+    cycle cites it instead of redefining it.
+    """
+
+    __tablename__ = "attacker_profiles"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_attacker_profile_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"))
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    techniques: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of ids
+    # Who authored the profile: `custom` (written here), `external` (came from a
+    # report or a public actor description), `none` (unknown provenance, said out
+    # loud instead of pretending it is ours).
+    origin: Mapped[str] = mapped_column(String(16), default="custom")
+    # Tooling the actor is known for (nmap, metasploit, commodity). Free text on
+    # purpose: a tool missing from every catalogue still describes the actor.
+    tools: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class WorkItem(Base, TimestampMixin):
@@ -2316,3 +2731,601 @@ class ScanEvent(Base):
     at_client: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
     detail: Mapped[str] = mapped_column(Text, default="{}")
+
+
+# ─────────────── AI harness (F1): providers, budget, runs ───────────────
+#
+# Deployment-wide configuration (D17): one provider list and one budget, because
+# this is an internal operator tool (D16). Runs and steps still carry `org_id`,
+# because the *question* is about one estate even when the configuration is not.
+#
+# The provider key is sealed with the platform key (`secrets.seal`) and is never
+# returned by the API: `_provider_data` exposes `key_set`, not the cipher (D9).
+
+AI_PROVIDER_KINDS = {"openai-compatible", "anthropic"}
+
+AI_RUN_STATUSES = {"running", "answered", "failed", "stopped_budget",
+                   "stopped_max_steps", "stopped_no_provider", "stopped_no_progress"}
+
+# ── The triage queue (F3, D29–D30) ─────────────────────────────────────────
+#: Who found it.
+FINDING_ORIGINS = {"scanner", "pentest-external", "pentest-internal",
+                   "shauron-ai", "manual"}
+#: A human verdict. The agent may only create `new`.
+TRIAGE_STATUSES = {"new", "triaged", "rejected", "duplicate", "accepted"}
+#: Proof, independent of impact.
+EVIDENCE_LEVELS = {"hypothesis", "static", "observed", "demonstrated"}
+#: Impact, independent of proof.
+EXPLOIT_STATES = {"none", "attempted", "reproduced", "effect_proven"}
+#: Counted toward severity and risk: a person looked, and it is not a guess.
+COUNTED_TRIAGE = {"triaged", "accepted"}
+
+
+class AiProvider(Base, TimestampMixin):
+    """One model endpoint. `kind` picks the wire format, never the capability."""
+
+    __tablename__ = "ai_providers"
+    __table_args__ = (UniqueConstraint("name", name="uq_ai_provider_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    name: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(32), default="openai-compatible")
+    base_url: Mapped[str] = mapped_column(String(255), default="")
+    model: Mapped[str] = mapped_column(String(128), default="")
+    secret_cipher: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Price per million tokens. NULL means "unknown": the ledger then counts tokens
+    # and says the price is unknown, instead of inventing a cost (D10).
+    price_in: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_out: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, default=1024)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Same reason as chat_sessions: the column is NOT NULL in the migration, so the
+    # model has to write it or the first provider the operator saves is a 500.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
+class AiSettings(Base):
+    """Exactly one row (`id='default'`): the ceiling the operator can predict."""
+
+    __tablename__ = "ai_settings"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default="default")
+    monthly_token_cap: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    monthly_cost_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # A lookup costs one call; the F2 chain costs about seven. The cap is the
+    # investigation ceiling, not the lookup one: a cap that truncates every CVE
+    # question is a cap that teaches the operator to raise it.
+    max_steps: Mapped[int] = mapped_column(Integer, default=12)
+    max_specialists: Mapped[int] = mapped_column(Integer, default=6)
+    redteam_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+
+
+class AiRun(Base):
+    """One question, its plan, its budget and how it ended.
+
+    Written `running` **before** the slow work and closed after: a run you cannot
+    see while it runs is indistinguishable from one that never started (the
+    `InternalRun` lesson).
+    """
+
+    __tablename__ = "ai_runs"
+    __table_args__ = (Index("ix_ai_runs_org_started", "org_id", "started_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), index=True)
+    #: The conversation this run belongs to (A6). A run without one is a question
+    #: asked outside the channel; with it, the channel shows who delegated what
+    #: without keeping a second store of its own.
+    session_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("chat_sessions.id"), nullable=True, index=True)
+    actor: Mapped[str] = mapped_column(String(255), default="system")
+    # The role the caller held when the run started (D44): every tool call of this
+    # run is authorized as this role, never as the machine that owns the process.
+    actor_role: Mapped[str] = mapped_column(String(16), default="viewer")
+    question: Mapped[str] = mapped_column(Text)
+    mode: Mapped[str] = mapped_column(String(16), default="ask")
+    status: Mapped[str] = mapped_column(String(24), default="running", index=True)
+    stop_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("ai_providers.id"), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    steps: Mapped[int] = mapped_column(Integer, default=0)
+    #: Optional ceiling for this run alone. NULL means the monthly cap is the only
+    #: bound: a per-run cap that is too tight cuts context, not waste.
+    token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_calls: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_known: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+
+class AiStep(Base):
+    """One model call: what it was asked, what it called, what it cost."""
+
+    __tablename__ = "ai_steps"
+    __table_args__ = (UniqueConstraint("run_id", "seq", name="uq_ai_step_seq"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("ai_runs.id", ondelete="CASCADE"), index=True)
+    seq: Mapped[int] = mapped_column(Integer)
+    role: Mapped[str] = mapped_column(String(32), default="orchestrator")
+    prompt_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Tool calls as `[{tool, args, status, result_digest}]` — the digest, not the
+    # payload: the payload lives in the tool's own tables and would double the row.
+    tool_calls: Mapped[str] = mapped_column(Text, default="[]")
+    handoff: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    #: Prompt tokens the provider served from its cache; zero when the provider is
+    #: silent about it, which is itself information (no cache savings on this plan).
+    cached_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    #: The provider's own `usage` block, verbatim. Some endpoints report what a token
+    #: count cannot express (a flat plan's remaining allowance, a metered unit), and
+    #: recording it before knowing its shape is the difference between a measurement
+    #: and a guess. Interpretation happens later, in `month_spend`.
+    usage_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Which run and phase produced this step. `price_known` (above) is what makes an
+    # unpriced call visible; a missing usage must never be recorded as "$0".
+    parent_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    phase: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
+class AiPrompt(Base):
+    """One version of one participant's instructions (A8).
+
+    The code string in `ai/specialists.py` is the **floor**: it seeds v1 and answers
+    whenever no row exists, so a fresh database, the test suite and a rollback all work
+    with zero rows. A row only ever *overrides*, and only one row per key is `active` at
+    a time — which is what lets a step say `intel.cve@3` and mean it.
+
+    Promotion is a human act (`activated_by/at`), and a model may write a `draft` but
+    never activate one. That is D24 after its revision: the ban is on self-activation,
+    not on authoring.
+    """
+
+    __tablename__ = "ai_prompts"
+    __table_args__ = (UniqueConstraint("key", "version", name="uq_ai_prompt_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    #: The specialist name, or `field.generic` for the loop inside Shauron.
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    body: Mapped[str] = mapped_column(Text)
+    #: draft | active | archived. Exactly one `active` per key, enforced in code.
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    #: Why this version exists. A version without a reason is a mystery in a month.
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    activated_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
+AI_PROMPT_STATUSES = {"draft", "active", "archived"}
+
+
+# ─────────────── chat sessions (F1): the record, and what a prompt sees ───────────────
+#
+# Two different things share these rows and must never be confused (D67):
+#   * `chat_turns` is the RECORD — every message verbatim, nothing ever removed;
+#   * the PROMPT is assembled per turn from `brief + pins + last K turns` (D68).
+# Compression therefore cannot lose history: it changes what the model sees, never
+# what the operator can read.
+
+CHAT_TURN_ROLES = {"user", "orchestrator", "specialist", "compaction"}
+
+
+class ChatSession(Base, TimestampMixin):
+    """One conversation: many turns, many runs, one subject."""
+
+    __tablename__ = "chat_sessions"
+    __table_args__ = (Index("ix_chat_sessions_org_turn", "org_id", "last_turn_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), index=True)
+    created_by: Mapped[str] = mapped_column(String(320), default="system")
+    title: Mapped[str] = mapped_column(String(255), default="")
+    subject_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    subject_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    profile_key: Mapped[str] = mapped_column(String(32), default="palantir")
+    status: Mapped[str] = mapped_column(String(16), default="idle", index=True)
+    # The rolling brief: what compression produced, versioned so a metric shift can
+    # be attributed to the compaction that caused it.
+    brief: Mapped[str | None] = mapped_column(Text, nullable=True)
+    brief_version: Mapped[int] = mapped_column(Integer, default=0)
+    brief_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    last_turn_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    # The migration makes this NOT NULL: a row that can be archived and retitled has
+    # an update time, and the model owes it a value or every insert fails.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
+class ChatTurn(Base):
+    """One message. The record: never deleted, never rewritten."""
+
+    __tablename__ = "chat_turns"
+    __table_args__ = (UniqueConstraint("session_id", "seq", name="uq_chat_turn_seq"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chat_sessions.id", ondelete="CASCADE"), index=True)
+    seq: Mapped[int] = mapped_column(Integer)
+    role: Mapped[str] = mapped_column(String(16))
+    author: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    profile_key: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    content: Mapped[str] = mapped_column(Text)
+    citations: Mapped[str] = mapped_column(Text, default="[]")
+    #: The buttons this answer offered, validated against the estate
+    #: (`ai/suggestions.py`). Stored with the turn, not in the UI: a replayed answer has
+    #: to bring back the affordance it had.
+    suggestions: Mapped[str] = mapped_column(Text, default="[]")
+    run_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("ai_runs.id"), nullable=True)
+    tokens: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
+class ChatPin(Base):
+    """A user's override: this survives compression, whatever the window says."""
+
+    __tablename__ = "chat_pins"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chat_sessions.id", ondelete="CASCADE"), index=True)
+    turn_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("chat_turns.id", ondelete="CASCADE"), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
+# ─────────────────── F4: the field runtime (D25–D28, D31–D35) ──────────────────
+#
+# A mission is the operator's authorization; a task is one contract; a field agent
+# is a task's execution inside Shauron. The platform owns the envelope, the budget
+# and the scope — never an individual tool invocation.
+
+AGENT_CAPABILITIES = {"validate", "discover", "exploit"}
+#: A mission names the profile that authorized it (D42). Palantír never gets one:
+#: it answers from what the estate knows and has no field lane.
+AGENT_PROFILES = {"angmar", "morgoth"}
+AGENT_MISSION_STATUSES = {"draft", "approved", "running", "done", "failed", "revoked"}
+AGENT_TASK_STATUSES = {"queued", "claimed", "running", "done", "failed", "expired"}
+AGENT_TASK_KINDS = {"validate.finding", "recon.surface", "exploit.chain",
+                    "probe.sibling"}
+AGENT_EVENT_KINDS = {"tool", "observation", "note", "refusal", "final"}
+#: The only two paths a task token opens (D60). Anything else is an API key's job.
+AGENT_TOKEN_PATHS = ("/api/v1/agent/llm/complete",
+                     "/api/v1/agent/tasks/",
+                     "/api/v1/agent/scope/check")
+
+
+class AgentMission(Base, TimestampMixin):
+    """One authorization: what may be touched, with what tools, under what ceiling."""
+
+    __tablename__ = "agent_missions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id"), index=True)
+    actor: Mapped[str] = mapped_column(String(255), default="system")
+    actor_role: Mapped[str] = mapped_column(String(16), default="viewer")
+    goal: Mapped[str] = mapped_column(Text)
+    capability: Mapped[str] = mapped_column(String(16))
+    #: Which profile authorized it (D42). The lane and the capability must agree:
+    #: Angmar validates, Morgoth discovers and exploits.
+    profile: Mapped[str] = mapped_column(String(16), default="angmar", index=True)
+    # 32, not 16: `awaiting_approval` is 17 and the gate must be nameable.
+    status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
+    #: JSON list of {kind, value, methods, rate_per_min}
+    targets: Mapped[str] = mapped_column(Text, default="[]")
+    #: JSON list of tool names — an allowlist, not a suggestion
+    tools: Mapped[str] = mapped_column(Text, default="[]")
+    grant_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    grant_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: JSON {steps, tokens, wall_s, usd}
+    budget: Mapped[str] = mapped_column(Text, default="{}")
+    evidence: Mapped[str] = mapped_column(Text, default="{}")
+    deadline_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    run_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("ai_runs.id"), nullable=True)
+    signature: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # The gate: a mission starts `awaiting_approval`, and these two columns are the
+    # human act that let it run. Neither is a default — a script cannot approve.
+    approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+
+class AgentTask(Base, TimestampMixin):
+    """One contract small enough to finish: `{kind, target, tools, must_return}`."""
+
+    __tablename__ = "agent_tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    mission_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_missions.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    # A task spawned by another task is how a field subagent exists: the parent keeps
+    # its envelope, the child gets its own token and budget.
+    parent_task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    target: Mapped[str] = mapped_column(Text, default="{}")
+    tools: Mapped[str] = mapped_column(Text, default="[]")
+    must_return: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    worker: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    #: Hash of the task token issued at claim time; never the token itself.
+    token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+
+class AgentTaskEvent(Base):
+    """What the field agent did, as it did it (D61: the log is not the record)."""
+
+    __tablename__ = "agent_task_events"
+    __table_args__ = (UniqueConstraint("task_id", "seq", name="uq_agent_event_seq"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), index=True)
+    task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True)
+    seq: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(16))
+    tool: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payload: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
+class AgentSpec(Base):
+    """One agent in the catalogue: identity, the tools it may use, its contract.
+
+    Deployment-wide, like `ai_providers` — the harness is one per deployment. `draft`
+    means declared but not usable: `validate.finding` was seeded that way because the
+    field tools it names do not exist yet, and the console has to say so rather than
+    offering a button that cannot work.
+    """
+
+    __tablename__ = "agent_specs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    name: Mapped[str] = mapped_column(String(64))
+    slug: Mapped[str] = mapped_column(String(64), unique=True)
+    #: `class` is a Python keyword: the column keeps the domain word, the attribute
+    #: does not. `orchestrator | analyst | query | field`.
+    agent_class: Mapped[str] = mapped_column(String(24), default="analyst")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    avatar: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    color: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    tools: Mapped[str] = mapped_column(Text, default="[]")
+    must_return: Mapped[str] = mapped_column(Text, default="[]")
+    tech_affinity: Mapped[str] = mapped_column(Text, default="[]")
+    # An agent is a node in a tree, not a flat list: `parent_slug` names whose child it
+    # is, `allowed_tools` narrows what it may call. NULL = inherit, [] = none.
+    parent_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    allowed_tools: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
+class AgentEvent(Base):
+    """One line of a thread: who said it, of what kind, and what it points at.
+
+    The thread is a projection of these rows, never a document the UI keeps. A
+    `thread` is `chat:<session_id>` or `mission:<id>`; the author is either a spec
+    slug or the operator, and `refs` carries the ids the line is about.
+    """
+
+    __tablename__ = "agent_events"
+    __table_args__ = (Index("ix_agent_events_thread_seq", "thread", "seq"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                        index=True)
+    thread: Mapped[str] = mapped_column(String(80))
+    seq: Mapped[int] = mapped_column(Integer)
+    author_spec: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    kind: Mapped[str] = mapped_column(String(24), default="message")
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refs: Mapped[str] = mapped_column(Text, default="[]")
+    # Which execution this line belongs to, and which line it answers. Together they
+    # turn the thread into a directed graph: `run_ref` groups a family, `reply_to`
+    # draws the edge — without either, the UI can only render a flat log.
+    run_ref: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    reply_to: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+
+class AgentRun(Base, TimestampMixin):
+    """One agent execution — the unit of state, budget and attribution.
+
+    A chat turn can own one, a mission can own many, and a subagent is a row with
+    `parent_run_id` set. The `thread` it writes to is the mission's or the chat's, so
+    the UI never has to guess where a run belongs.
+    """
+
+    __tablename__ = "agent_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                        index=True)
+    mission_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    parent_run_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    spec_slug: Mapped[str] = mapped_column(String(64))
+    thread: Mapped[str | None] = mapped_column(String(96), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    goal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    max_turns: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    turn_count: Mapped[int] = mapped_column(Integer, default=0)
+    cost_ceiling_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    engine_task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),
+                                                        nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),
+                                                      nullable=True)
+
+
+class AgentMessage(Base):
+    """A line with a recipient — the non-linear part of the thread.
+
+    `to_run` names the addressee, `to_spec` names a role when the run does not exist
+    yet, `reply_to` points at the line being answered. A message carries text and
+    nothing else: it can never widen scope, approve a tool or change a budget.
+    """
+
+    __tablename__ = "agent_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                        index=True)
+    mission_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    from_run: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    to_run: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    to_spec: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    kind: Mapped[str] = mapped_column(String(24), default="message")
+    body: Mapped[str] = mapped_column(Text)
+    reply_to: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),
+                                                          nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),
+                                                     nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AgentArtifact(Base):
+    """Bytes an agent produced or consumed, with a hash.
+
+    Metadata only; the body lives wherever `storage` points, and `sha256` makes the row
+    verifiable. This is what answers "how did the data move": who produced it, under
+    which task, and which run read it.
+    """
+
+    __tablename__ = "agent_artifacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                        index=True)
+    mission_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    bytes: Mapped[int] = mapped_column(Integer, default=0)
+    storage: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    meta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    produced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Candidate(Base, TimestampMixin):
+    """What an agent proposes. Never a finding — a finding needs a gate chain."""
+
+    __tablename__ = "candidates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                        index=True)
+    mission_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    finding_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    title: Mapped[str] = mapped_column(Text)
+    severity: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    claim: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String(24), default="proposed", index=True)
+
+
+class GateRun(Base):
+    """One stage's verdict on one candidate, with the reason it gave."""
+
+    __tablename__ = "gate_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                        index=True)
+    candidate_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("candidates.id", ondelete="CASCADE"), index=True)
+    stage: Mapped[str] = mapped_column(String(48))
+    verdict: Mapped[str] = mapped_column(String(16))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_ref: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GrantIdentity(Base):
+    """A principal the grant allows us to be, sealed.
+
+    Two of these are what turn "the code does not check ownership" into "user B received
+    user A's record". The credential is sealed with `secrets.seal` and never leaves the
+    row: `headers_cipher` is opened in memory, used for one request, and discarded.
+    """
+
+    __tablename__ = "grant_identities"
+    __table_args__ = (UniqueConstraint("grant_id", "label", name="uq_grant_identity_label"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_hex)
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"),
+                                        index=True)
+    grant_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("scan_grants.id", ondelete="CASCADE"), index=True)
+    label: Mapped[str] = mapped_column(String(64))
+    headers_cipher: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),
+                                                          nullable=True)

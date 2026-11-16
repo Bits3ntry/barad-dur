@@ -1,0 +1,23 @@
+{
+  "_note": "Token ceilings per question, and the live measurement behind the flagship one. `before`/`target` are the stubs' budget (cheap, deterministic). `measured` is a real run against a real estate and provider, kept as the anchor a regression must not drift from: it is what the chain actually costs, not what we hoped.",
+  "¿cuántos findings abiertos tengo?": {"before": 29078, "target": 12600},
+  "¿nos afecta node2shell?": {"before": 8856, "target": 7600},
+  "¿qué proyectos hay?": {"before": 3779, "target": 4600},
+  "¿Estamos afectados por CVE-2026-15308?": {
+    "target": 41122,
+    "measured": {
+      "at": "2026-11-15",
+      "provider": "opencode-go",
+      "model": "deepseek-v4.1-flash",
+      "status": "answered",
+      "steps": 10,
+      "tool_calls": 30,
+      "tokens_in": 35407,
+      "tokens_out": 5715,
+      "seconds": 84,
+      "chain": ["intel.cve", "estate.inventory", "applicability", "evidence.report"],
+      "skipped": ["remediation: no claim says a deployment is affected"],
+      "citations": 40
+    }
+  }
+}
