@@ -40,6 +40,24 @@ def digest(payload) -> str:
 #: cut the number off: the model read "truncated, no total" and answered that it could
 #: not give a figure over a table it had just queried successfully.
 MAX_TOOL_CHARS = 4000  # a tool result is a pointer, not the record
+#: Rows that carry a title and a severity are the ones an operator reads as a list. They
+#: travel slim — id, title, severity, status — because the fat fields (`evidence`,
+#: `detail`) are what pushed eleven rows past the budget and left the answer with
+#: references instead of names. Eleven findings must fit; a finding is not a document
+#: until somebody opens one.
+ROW_FIELDS = ("id", "title", "severity", "status", "source", "vector", "asset_id",
+              "asset_value", "component_name", "component_version", "cve_id",
+              "cvss_score", "priority", "triage_status", "exploit_state", "first_seen_at",
+              "last_seen_at", "kind", "name", "total", "url", "endpoint")
+
+
+def _slim(row):
+    if not isinstance(row, dict):
+        return row
+    if not ("severity" in row or "title" in row):
+        return row
+    return {key: value for key, value in row.items()
+            if key in ROW_FIELDS and value is not None}
 _SAMPLE_ROWS = (12, 6, 3, 1, 0)
 
 
@@ -55,6 +73,10 @@ def _shrink(value, rows: int):
     return value
 
 
+def _slim_list(value: list) -> list:
+    return [_slim(item) for item in value]
+
+
 def projection(payload) -> str:
     """A bounded, agent-shaped view of one tool result: the numbers first, then samples.
 
@@ -66,7 +88,8 @@ def projection(payload) -> str:
         payload = {"data": payload}
     ordered = {key: value for key, value in payload.items()
                if not isinstance(value, (list, dict))}
-    ordered.update({key: value for key, value in payload.items()
+    ordered.update({key: _slim_list(value) if isinstance(value, list) else value
+                    for key, value in payload.items()
                     if isinstance(value, (list, dict))})
     text = json.dumps(ordered, default=str, ensure_ascii=False)
     for rows in _SAMPLE_ROWS:
