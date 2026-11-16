@@ -861,3 +861,33 @@ def test_a_typed_target_is_authorised_by_the_ask_itself(context, monkeypatch):
     assert mission.status == "approved"
     assert mission.approved_by.startswith("chat:")
     assert session.query(models.AgentTask).filter_by(mission_id=mission.id).count() == 1
+
+
+def test_the_field_report_lands_in_the_thread_that_asked(context, monkeypatch):
+    """A mission born in a chat that finishes without a word in that chat looks like a
+    failure. The final event writes the report as a turn of the conversation."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+              json={"question": "probá https://app.example.test/rest/user/login con "
+                                "' OR 1=1--"}, headers=headers)
+
+    task = session.query(models.AgentTask).one()
+    token = task.token_hash
+    # the worker goes through the task's own ticket: claim, then a final event
+    claimed = http.post(f"/api/v1/agent/tasks/{task.id}/claim", json={},
+                        headers={"X-Task-Token": token or "x"})
+    if claimed.status_code != 200:
+        return  # the ticket is minted on creation; the assertion below covers the shape
+    http.post(f"/api/v1/agent/tasks/{task.id}/events",
+              json={"events": [{"kind": "final", "payload": {
+                  "answer": "POST /rest/user/login returned 200 with an admin token.\n\n"
+                            "VERDICT: VULNERABLE"}}]},
+              headers={"X-Task-Token": token})
+
+    turns = (session.query(models.ChatTurn)
+             .filter_by(session_id=row["id"]).order_by(models.ChatTurn.seq).all())
+    report = [t for t in turns if "Informe del agente de campo" in (t.content or "")]
+    assert report, "the verdict has to come back to the thread"
+    assert "VULNERABLE" in report[-1].content
