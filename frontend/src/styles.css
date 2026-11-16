@@ -5674,3 +5674,57 @@ button.rem-title:hover { color: var(--accent); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Rendered markdown in a turn: a field report is a document, not a line of text. */
+.chat-md p {
+  margin: 0 0 10px;
+  line-height: 1.55;
+}
+
+.chat-md p:last-child {
+  margin-bottom: 0;
+}
+
+.chat-md strong {
+  font-weight: 650;
+}
+
+.chat-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86em;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.chat-md .chat-code {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+/* The session list: a long title truncates, it never bleeds out of the rail. */
+.chat-rail button,
+.chat-rail a,
+.chat-rail-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* The rail itself: the column never grows past its width because a title is long. */
+.chat-rail {
+  overflow-x: hidden;
+}
+
+.chat-rail > * {
+  max-width: 100%;
+  min-width: 0;
+}

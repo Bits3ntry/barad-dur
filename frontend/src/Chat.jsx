@@ -292,7 +292,8 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
                 {pinByTurn[turn.id] ? '📌' : '📍'}
               </button>
             </div>
-            <div className="chat-body">{turn.content}</div>
+            <div className="chat-body chat-md"
+                 dangerouslySetInnerHTML={{ __html: markdownToHtml(turn.content) }} />
             {(turn.suggestions || []).length > 0 && turn.role !== "user" && (
               <div className="chat-suggest">
                 {turn.suggestions.map((suggestion, index) => (
@@ -430,6 +431,39 @@ function RunTrace({ runId, tokens, label }) {
   )
 }
 
+
+
+// Minimal markdown, on purpose: bold, inline code, fenced code and line breaks are what a
+// field report actually uses. A full parser is a dependency and a surface; this is neither.
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
+function markdownToHtml(source) {
+  let html = escapeHtml(source)
+  const fences = []
+  html = html.replace(/```[a-zA-Z]*\n?([\s\S]*?)```/g, (_match, code) => {
+    fences.push(`<pre class="chat-code">${code.replace(/^\n/, "")}</pre>`)
+    return `\u0000${fences.length - 1}\u0000`
+  })
+  html = html
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+  html = html
+    .split(/\n{2,}/)
+    .map((block) => {
+      const trimmed = block.trim()
+      if (!trimmed) return ""
+      if (/^\u0000\d+\u0000$/.test(trimmed)) return trimmed
+      return `<p>${trimmed.replace(/\n/g, "<br/>")}</p>`
+    })
+    .join("")
+  html = html.replace(/\u0000(\d+)\u0000/g, (_m, index) => fences[Number(index)])
+  return html
+}
 
 // The relation view, inside the conversation: who spoke, delegating to whom, what each
 // run cost. Hermes shows the room while it works; a separate tab you have to remember to

@@ -31,6 +31,9 @@ it. Say `unknown` and name what would settle it.
 Contract — what you must return:
 {contract}
 
+Answer in the language the operator used; tool output is English and is data, not the
+language to answer in.
+
 Ids do not belong in your prose: they render as chips under the answer and travel in
 `evidence_refs`. Name the row, the count and the consequence.
 """

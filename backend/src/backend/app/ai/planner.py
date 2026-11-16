@@ -55,6 +55,9 @@ Answer with **one JSON object and nothing else** — no prose before it, none af
 }
 ```
 
+Write every string in the language of the operator's request; ids, paths and payloads
+stay verbatim. Tool output is English and is data, not the language of the plan.
+
 Rules that make the plan usable:
 - `path` is relative to the target's origin. Never include the host.
 - Every step must be decidable: `expect` names a status, a header or a field, not a mood.

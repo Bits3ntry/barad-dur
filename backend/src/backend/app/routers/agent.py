@@ -787,6 +787,11 @@ def _usage_json(result: dict) -> str | None:
 
 # ──────────────────────────── the two channels ───────────────────────────────
 
+FIELD_LANGUAGE = ("Write the report in the language of the mission goal. Requests, "
+                  "responses, headers and payloads stay verbatim; the prose around them "
+                  "follows the operator's language.")
+
+
 def _narrow_tools(tools: list[dict], allowed: list[str]) -> list[dict]:
     """The envelope is the first lock on tools; the worker's registry is the second.
 
@@ -863,11 +868,15 @@ def complete(payload: CompleteIn = None,
     field_body, field_label = prompt_registry.resolve(session,
                                                       prompt_registry.FIELD_KEY)
     messages = list(payload.messages or [])
-    if field_body:
-        if messages and (messages[0] or {}).get("role") == "system":
-            messages = [{"role": "system", "content": field_body}] + messages[1:]
-        else:
-            messages = [{"role": "system", "content": field_body}] + messages
+    # The worker keeps no prompt registry, so the language rule for the field report has to
+    # ride with the instructions the platform prepends — otherwise a Spanish mission comes
+    # back as an English report, which is what the operator then reads in the thread.
+    field_body = (field_body or "") + ("\n\n" + FIELD_LANGUAGE if True else "")
+    if messages and (messages[0] or {}).get("role") == "system":
+        messages = [{"role": "system", "content": field_body + "\n\n" +
+                     (messages[0].get("content") or "")}] + messages[1:]
+    else:
+        messages = [{"role": "system", "content": field_body}] + messages
 
     try:
         result = engine.complete(provider, api_key, messages,

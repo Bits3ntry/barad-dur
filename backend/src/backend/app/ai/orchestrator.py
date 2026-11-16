@@ -61,6 +61,11 @@ OUTPUT_CONTRACT = (
     "\n\nReturn exactly the JSON object your instructions describe. No prose, no code "
     "fences, no comments, nothing outside the object.")
 
+LANGUAGE = (
+    "\n\nWrite in the language of the operator's question. Every tool answer, field "
+    "report and advisory is written in English: that is data, not the language to reply "
+    "in. A question in Spanish gets a Spanish answer, ids and code untouched.")
+
 OUTPUT_PROSE = (
     "\n\nAnswer the operator directly in prose: the answer first, then the ids that "
     "support it. Name what is unknown and what data would settle it. No preamble.\n"
@@ -207,7 +212,7 @@ def _run_specialist(session: Session, run: models.AiRun, state: AgentState,
                           or (spec["prompt"],
                               spec.get("prompt_label") or f"{name}@code"))
     suffix = (spec.get("json_suffix")
-              or (OUTPUT_JSON if json_mode else OUTPUT_PROSE))
+              or (OUTPUT_JSON if json_mode else OUTPUT_PROSE)) + LANGUAGE
     messages = [{"role": "system", "content": body + suffix}]
     if context:
         messages.extend(_conversation_tail(context))
