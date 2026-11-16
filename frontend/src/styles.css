@@ -5579,3 +5579,51 @@ button.rem-title:hover { color: var(--accent); }
   opacity: 0.5;
   cursor: default;
 }
+
+/* The run, inside the turn: steps and the tools each one used. */
+.chat-run-inline {
+  margin-top: 10px;
+  font-size: 0.84rem;
+}
+
+.chat-run-inline > summary {
+  cursor: pointer;
+  color: var(--muted, #9aa4b2);
+  list-style: none;
+}
+
+.chat-run-inline > summary::marker,
+.chat-run-inline > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-run-inline > summary::before {
+  content: "▸ ";
+}
+
+.chat-run-inline[open] > summary::before {
+  content: "▾ ";
+}
+
+.chat-run-step {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 0 3px 12px;
+  border-left: 1px solid var(--line, #2a2f3a);
+}
+
+.chat-run-step__n {
+  color: var(--muted, #9aa4b2);
+  min-width: 12px;
+}
+
+.chat-run-step__role {
+  font-weight: 600;
+}
+
+.chat-run-step__phase,
+.chat-run-step__tools,
+.chat-run-step__tok {
+  color: var(--muted, #9aa4b2);
+}
