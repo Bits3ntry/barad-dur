@@ -424,6 +424,18 @@ def create_turn(session_id: str, payload: TurnIn, response: Response,
                 answer_prefix = (f"No specialist is called «{mention}». Available today: "
                                  f"Palantír (read-only analyst).\n\n")
                 assistant_role = "orchestrator"
+    elif ACTIVE_VERB_RE.search(user_turn.content) and \
+            TARGET_RE.search(user_turn.content):
+        # No mention, but the sentence asks for an action against a host. Answering it in
+        # read-only mode is correct and useless: the operator would have to retype the
+        # same sentence with a name in front. The verb is the intent, the host is the
+        # envelope, and the proposal still stops at the human gate.
+        proposal = propose_mission(session_db, org, row, actor=actor,
+                                   capability="validate", question=user_turn.content)
+        unavailable = ("campo", "validate")
+        assistant_role = "orchestrator"
+        answer_prefix = ("No nombraste un agente, pero pediste una acción contra un "
+                         "host: lo tomé como validación.\n\n")
 
     command = _room_command(session_db, user_turn.content)
     if command is not None:
@@ -448,7 +460,7 @@ def create_turn(session_id: str, payload: TurnIn, response: Response,
                              "run": None, "compaction": None}}
         last = _run_room(session_db, row, provider, actor=actor,
                          agents_in_room=specs, question=room_question)
-        if last is None:  # a room that spoke nobody is a bug, not an answer
+        if last is None:
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
                                 "the room produced no turn")
         last_run = session_db.get(models.AiRun, last.run_id) if last.run_id else None
@@ -474,6 +486,7 @@ def create_turn(session_id: str, payload: TurnIn, response: Response,
     messages = context.assemble(session_db, row, question=user_turn.content)
     provider = engine.default_provider(session_db)
     run = None
+
     if refusal is not None:
         # Written on the same path as a proposal: no run, a turn, the same payload.
         assistant = _write_turn(session_db, row, None, answer=answer_prefix + refusal,
@@ -692,6 +705,15 @@ FINDING_ID_RE = re.compile(r"\b[0-9a-f]{32}\b")
 #: A host or URL the operator typed in the conversation. A lab target has no finding and
 #: no asset yet; refusing to act until somebody files one is how "validá esto" became a
 #: dead end. The declared value is recorded so widening scope is legible.
+#: An operator who says "probá esto contra <host>" is asking for execution, not for a
+#: briefing. Palantír answered that request with a correct refusal — it is read-only by
+#: design — and the conversation stopped there. The verb is the intent; the host is the
+#: envelope. Both present means: propose the mission, and say that is what happened.
+ACTIVE_VERB_RE = re.compile(
+    r"\b(prob[aá]|probar|probalo|valid[aá]|validar|ejecut[aá]|ejecutar|reproduc[ií]|"
+    r"reproducir|explot[aá]|explotar|dispar[aá]|corr[eé]|correr|lanza|chequear\s+en\s+vivo)\b",
+    re.IGNORECASE)
+
 TARGET_RE = re.compile(r"\b(?:https?://[^\s,;]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?)\b",
                        re.IGNORECASE)
 FIELD_TOOLS = ["curl", "python"]

@@ -809,3 +809,35 @@ def test_no_plan_means_no_mission(context, monkeypatch):
     assert "No armé la misión" in body["turn"]["content"]
     assert "no version" in body["turn"]["content"], "the reason travels with the refusal"
     assert session.query(models.AgentMission).count() == 0
+
+
+def test_an_active_verb_without_a_mention_still_proposes_a_mission(context, monkeypatch):
+    """"probá esto contra <host>" is a request for execution. Palantír is read-only by
+    design, so answering it in prose is correct and useless — the operator would have to
+    retype the sentence with a name in front of it."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "probá https://app.example.test/rest/user/login "
+                                       "con el payload ' OR 1=1-- y decime si el bypass "
+                                       "sigue activo"},
+                     headers=headers).json()["data"]
+    answer = body["turn"]["content"]
+    assert "esperando tu aprobación" in answer
+    assert "No nombraste un agente" in answer, "it says what it inferred"
+    mission = session.query(models.AgentMission).one()
+    assert mission.capability == "validate"
+    assert json.loads(mission.targets)[0]["value"] == "https://app.example.test"
+
+
+def test_a_question_about_a_host_is_not_an_action(context):
+    """The guard: asking about a host is still a question. Only the verb proposes."""
+    http, headers, session, org = context
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "¿cuántos assets hay en el proyecto Juice Shop?"},
+                     headers=headers).json()["data"]
+    assert "No armé la misión" not in body["turn"]["content"]
+    assert "No nombraste un agente" not in body["turn"]["content"]
