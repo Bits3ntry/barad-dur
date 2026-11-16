@@ -169,6 +169,14 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
       }
       return
     }
+    // A validation button sends the sentence the platform wrote for it — never its own
+    // label. Sending the label turned "validá el impacto de <id>" into "Validar el SQLi de
+    // Juice Shop", a description with no id, and the turn fell back to a read-only essay.
+    if (suggestion.action === "validate_finding" && suggestion.finding_id) {
+      await submit(suggestion.prompt ||
+                   `@angmar validá el impacto de ${suggestion.finding_id}`)
+      return
+    }
     if (suggestion.href) {
       const [screen, arg] = suggestion.href.replace(/^#/, "").split("::")
       if (screen === "ai-runs" && arg) onNavigate?.("ai-runs", { runId: arg })
