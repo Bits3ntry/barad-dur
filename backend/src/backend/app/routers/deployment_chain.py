@@ -318,8 +318,29 @@ def deployment_chain(
 
     components = _component_rows(session, org.id, purl, component, project)
     if not components:
-        raise HTTPException(status.HTTP_404_NOT_FOUND,
-                            "no component in this organization matches the query")
+        # An empty chain is an answer, not a missing page. A project with no builds (a
+        # lab target served straight from the host) used to 404, and the answer that read
+        # it said "the chain lookup came back 404" — reporting our status code as a gap in
+        # the estate. 404 stays for a ref that does not resolve at all (a bad purl or a
+        # project nobody holds); "nothing to link" is 200 with the reason in `unknown`.
+        if project and _project_id(session, org.id, project):
+            unknown.append(f"project {project} has no component or build linked to it")
+        elif purl or component:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                "no component in this organization matches the query")
+        else:
+            unknown.append("no component matched the query")
+        return {
+            "query": {"purl": purl, "component": component, "project": project,
+                      "asset": None},
+            "as_of": None,
+            "edges": {"components": [], "builds": [], "deployments": [],
+                      "assets": [], "observations": [], "findings": []},
+            "completeness": {"has_sbom": False, "has_deployment": False,
+                             "has_asset": False, "has_observation": False,
+                             "unknown_edges": unknown,
+                             "truncated": limit_note},
+        }
     component_ids = [row.id for row in components]
 
     links = []
