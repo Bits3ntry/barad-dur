@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { Card, ErrorBanner, Loading, PageHeader } from './ui'
+import { useI18n } from './i18n'
 
 /* The first thing an owner needs is not a dashboard: it is the ordered path
    from an empty organization to a working pipeline. Every step reads live
@@ -9,57 +10,51 @@ import { Card, ErrorBanner, Loading, PageHeader } from './ui'
 const STEPS = [
   {
     key: 'scope',
-    label: 'Scope',
-    title: 'Define what belongs in scope',
-    hint: 'Add domains, repositories, IPs and exclusions first. Connecting an '
-      + 'integration never starts a scan automatically.',
+    labelKey: 'setup.step.scope.label',
+    titleKey: 'setup.step.scope.title',
+    hintKey: 'setup.step.scope.hint',
     count: (d) => d.scopeTargets,
-    unit: 'targets',
+    unitKey: 'unit.targets',
   },
   {
     key: 'projects',
-    label: 'Projects',
-    title: 'Organize applications',
-    hint: 'Relate code and infrastructure to each application. Add repositories '
-      + 'you explicitly choose to bring into Barad-dûr.',
+    labelKey: 'setup.step.projects.label',
+    titleKey: 'setup.step.projects.title',
+    hintKey: 'setup.step.projects.hint',
     count: (d) => d.projects,
-    unit: 'projects',
+    unitKey: 'unit.projects',
   },
   {
     key: 'assets',
-    label: 'Assets',
-    title: 'Add business context',
-    hint: 'Add owners, environments and criticality to the assets that make up '
-      + 'each application before interpreting risk.',
+    labelKey: 'setup.step.assets.label',
+    titleKey: 'setup.step.assets.title',
+    hintKey: 'setup.step.assets.hint',
     count: (d) => d.assets,
-    unit: 'assets',
+    unitKey: 'unit.assets',
   },
   {
     key: 'grants',
-    label: 'Authorization',
-    title: 'Authorize analysis',
-    hint: 'Grants are a control before active work, not the product entry point. '
-      + 'Set targets, tools, workers and permissions deliberately.',
+    labelKey: 'setup.step.grants.label',
+    titleKey: 'setup.step.grants.title',
+    hintKey: 'setup.step.grants.hint',
     count: (d) => d.grants,
-    unit: 'grants',
+    unitKey: 'unit.grants',
   },
   {
     key: 'findings',
-    label: 'Findings',
-    title: 'Run analysis and manage results',
-    hint: 'Launch analysis only when you are ready, then triage findings with '
-      + 'owners, priority and remediation deadlines.',
+    labelKey: 'setup.step.findings.label',
+    titleKey: 'setup.step.findings.title',
+    hintKey: 'setup.step.findings.hint',
     count: (d) => d.components,
-    unit: 'components tracked',
+    unitKey: 'setup.unit.componentsTracked',
   },
   {
     key: 'cycles',
-    label: 'Cycles',
-    title: 'Create cycles when you need them',
-    hint: 'Start a CTEM cycle or pentest campaign when its scope, ownership and '
-      + 'evidence need a bounded operating rhythm.',
+    labelKey: 'setup.step.cycles.label',
+    titleKey: 'setup.step.cycles.title',
+    hintKey: 'setup.step.cycles.hint',
     count: (d) => d.cycles,
-    unit: 'cycles',
+    unitKey: 'unit.cycles',
   },
 ]
 
@@ -76,6 +71,7 @@ async function safeCount(path, pick) {
 }
 
 export default function SetupGuide({ onNavigate }) {
+  const { t } = useI18n()
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
 
@@ -99,8 +95,7 @@ export default function SetupGuide({ onNavigate }) {
   if (!data) {
     return (
       <div className="stack">
-        <PageHeader title="Set up Barad-dûr"
-          subtitle="The ordered path from an empty organization to a working pipeline." />
+        <PageHeader title={t('setup.title')} subtitle={t('setup.subtitle')} />
         <Card>{error ? <ErrorBanner error={error} onRetry={load} /> : <Loading rows={5} />}</Card>
       </div>
     )
@@ -108,14 +103,19 @@ export default function SetupGuide({ onNavigate }) {
 
   const done = STEPS.filter((step) => step.count(data) > 0)
   const pct = Math.round((done.length / STEPS.length) * 100)
-  const nextKey = STEPS.find((step) => step.count(data) === 0)?.key
+  const next = STEPS.find((step) => step.count(data) === 0)
 
   return (
     <div className="stack">
       <PageHeader
-        title="Set up Barad-dûr"
-        subtitle="Six steps, in this order. Each one unlocks the next — this page reads live data, so it also works as a status check."
-        actions={<button onClick={load}>refresh</button>}
+        title={t('setup.title')}
+        subtitle={t('setup.subtitleLive')}
+        actions={<>
+          <button className="ghost" onClick={() => onNavigate && onNavigate('guide')}>
+            {t('setup.readGuide')}
+          </button>
+          <button onClick={load}>{t('common.refresh')}</button>
+        </>}
       />
 
       {error && <ErrorBanner error={error} onRetry={load} />}
@@ -124,16 +124,16 @@ export default function SetupGuide({ onNavigate }) {
         <div className="setup-head">
           <div>
             <div className="setup-title">
-              {done.length} of {STEPS.length} steps complete
+              {t('setup.progress.steps', { done: done.length, total: STEPS.length })}
             </div>
             <div className="setup-hint">
-              {nextKey
-                ? `Next: ${STEPS.find((s) => s.key === nextKey).title.toLowerCase()}.`
-                : 'Everything is wired. Review the dashboard for posture and the audit trail for changes.'}
+              {next
+                ? t('setup.progress.next', { step: t(next.titleKey) })
+                : t('setup.progress.done')}
             </div>
           </div>
           <div className="setup-progress" role="progressbar" aria-valuenow={pct}
-            aria-valuemin={0} aria-valuemax={100} aria-label="setup progress">
+            aria-valuemin={0} aria-valuemax={100} aria-label={t('setup.progress.label')}>
             <span style={{ width: `${pct}%` }} />
           </div>
           <div className="setup-meta">{pct}%</div>
@@ -144,20 +144,20 @@ export default function SetupGuide({ onNavigate }) {
         {STEPS.map((step, index) => {
           const count = step.count(data)
           const isDone = count > 0
-          const isCurrent = !isDone && step.key === nextKey
+          const isCurrent = !isDone && step.key === next?.key
           const className = `setup-step${isDone ? ' done' : ''}${isCurrent ? ' current' : ''}`
           return (
             <li key={step.key} className={className}>
               <span className="setup-num" aria-hidden="true">{isDone ? '✓' : index + 1}</span>
               <div>
-                <div className="setup-title">{step.title}</div>
-                <div className="setup-hint">{step.hint}</div>
+                <div className="setup-title">{t(step.titleKey)}</div>
+                <div className="setup-hint">{t(step.hintKey)}</div>
               </div>
               <div className="row">
-                <span className="setup-meta">{count} {step.unit}</span>
+                <span className="setup-meta">{count} {t(step.unitKey)}</span>
                 <button className={isCurrent ? 'btn-primary mini' : 'mini'}
                   onClick={() => onNavigate && onNavigate(step.key)}>
-                  {isDone ? 'open' : 'start'}
+                  {isDone ? t('setup.action.open') : t('setup.action.start')}
                 </button>
               </div>
             </li>

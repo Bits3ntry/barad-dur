@@ -2,16 +2,18 @@ import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { PageHeader, Card, StatusBadge, EmptyState, ErrorBanner, Loading,
          Dialog, Input, CheckBox, Toggle, Banner, Table, Pager, usePage } from './ui'
+import { useI18n } from './i18n'
 
 /* What a channel can be subscribed to. Raw event ids stay in the title attribute
    so an operator can match them against a webhook receiver. */
-const EVENT_LABELS = {
-  'sla.breached': 'SLA breached',
-  'advisory.new': 'New advisories',
+const EVENT_LABEL_KEY = {
+  'sla.breached': 'notifications.event.slaBreached',
+  'advisory.new': 'notifications.event.advisoryNew',
 }
 
 
 export default function Notifications() {
+  const { t, tCount } = useI18n()
   const [notifications, setNotifications] = useState([])
   const [preferences, setPreferences] = useState({
     email_enabled: true, push_enabled: true,
@@ -59,8 +61,8 @@ export default function Notifications() {
         events: draft.events, actor: 'console',
       })
       setChannelNote(data.secret
-        ? `channel created · signing secret (shown once): ${data.secret}`
-        : 'channel created')
+        ? t('notifications.channels.createdSecret', { secret: data.secret })
+        : t('notifications.channels.created'))
       setDraft({ name: '', kind: 'slack', url: '', events: ['sla.breached', 'advisory.new'] })
       loadChannels()
     } catch (e) {
@@ -75,8 +77,12 @@ export default function Notifications() {
       const r = await api.post(`/api/v1/notifications/channels/${row.id}/test`,
         { actor: 'console' })
       setChannelNote(r.data.delivered
-        ? `test delivered to ${row.name} (HTTP ${r.data.http_status})`
-        : `test failed for ${row.name}: ${r.data.error}`)
+        ? t('notifications.channels.testDelivered', {
+          name: row.name, status: r.data.http_status,
+        })
+        : t('notifications.channels.testFailed', {
+          name: row.name, error: r.data.error,
+        }))
     } catch (e) {
       setChannelError(String(e.message || e))
     }
@@ -143,7 +149,7 @@ export default function Notifications() {
     setMarkResult('')
     try {
       await api.patch(`/api/v1/notifications/notifications/${id}`, { actor: 'console' })
-      setMarkResult('marked read')
+      setMarkResult(t('notifications.markedRead'))
       load()
     } catch (e) {
       setMarkResult(String(e.message || e))
@@ -158,12 +164,16 @@ export default function Notifications() {
   return (
     <div className="stack">
       <PageHeader
-        title="Notifications"
-        subtitle={`${unread} unread`}
+        title={t('notifications.title')}
+        subtitle={t('notifications.unread', { n: unread })}
         actions={
           <>
-            <button className="mini" onClick={load}>refresh</button>
-            {unread > 0 && <span className="count" style={{ fontWeight: 600 }}>{unread} new</span>}
+            <button className="mini" onClick={load}>{t('common.refresh')}</button>
+            {unread > 0 && (
+              <span className="count" style={{ fontWeight: 600 }}>
+                {tCount('notifications.new', unread)}
+              </span>
+            )}
           </>
         }
       />
@@ -172,13 +182,13 @@ export default function Notifications() {
 
       <div className="grid grid-2">
         {/* Notification center */}
-        <Card title="Notification center" actions={
+        <Card title={t('notifications.center.title')} actions={
           <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
             total={paged.total} perPage={paged.perPage} unit="notifications" />
         }>
           {notifications.length === 0 && !loading && (
-            <EmptyState title="No notifications"
-              hint="Notifications appear here when events occur (SLA breaches, assignments, retest requests, etc.)." />
+            <EmptyState title={t('notifications.center.empty.title')}
+              hint={t('notifications.center.empty.hint')} />
           )}
           {paged.rows.map((n) => (
             <div key={n.id} className={`notification ${n.read ? 'read' : 'unread'}`}>
@@ -189,20 +199,20 @@ export default function Notifications() {
                   <span className="notification-time">{new Date(n.created_at).toLocaleString()}</span>
                 </div>
                 <div className="notification-meta">
-                  {n.count > 1 && <span className="count">{n.count} events</span>}
-                  {!n.read && <span className="pill warn">unread</span>}
+                  {n.count > 1 && <span className="count">{tCount('notifications.center.events', n.count)}</span>}
+                  {!n.read && <span className="pill warn">{t('notifications.center.unread')}</span>}
                   <button
                     className="mini"
                     onClick={() => markRead(n.id)}
                   >
-                    {n.read ? 'show' : 'mark read'}
+                    {n.read ? t('notifications.action.show') : t('notifications.action.markRead')}
                   </button>
                 </div>
               </div>
             </div>
           ))}
           {notifications.length > 0 && notifications.every((n) => n.read) && (
-            <p className="muted">All notifications read.</p>
+            <p className="muted">{t('notifications.center.allRead')}</p>
           )}
           {/* The card is a grid cell beside preferences, so the second pager
               stays inside it instead of becoming a third cell under the grid. */}
@@ -215,66 +225,66 @@ export default function Notifications() {
         </Card>
 
         {/* Notification preferences */}
-        <Card title="Notification preferences">
+        <Card title={t('notifications.prefs.title')}>
           <div className="field-check">
             <CheckBox
-              label="Email notifications"
+              label={t('notifications.prefs.email')}
               checked={preferences.email_enabled}
               onChange={(v) => setPreferences({ ...preferences, email_enabled: v })}
             />
           </div>
           <div className="field-check">
             <CheckBox
-              label="Push notifications"
+              label={t('notifications.prefs.push')}
               checked={preferences.push_enabled}
               onChange={(v) => setPreferences({ ...preferences, push_enabled: v })}
             />
           </div>
           <div className="field-check">
             <CheckBox
-              label="SLA breach alerts"
+              label={t('notifications.prefs.sla')}
               checked={preferences.sla_breach}
               onChange={(v) => setPreferences({ ...preferences, sla_breach: v })}
             />
           </div>
           <div className="field-check">
             <CheckBox
-              label="Assignment notifications"
+              label={t('notifications.prefs.assignment')}
               checked={preferences.assignment}
               onChange={(v) => setPreferences({ ...preferences, assignment: v })}
             />
           </div>
           <div className="field-check">
             <CheckBox
-              label="Retest request notifications"
+              label={t('notifications.prefs.retest')}
               checked={preferences.retest_request}
               onChange={(v) => setPreferences({ ...preferences, retest_request: v })}
             />
           </div>
           <div className="field-check">
             <CheckBox
-              label="Jira sync error alerts"
+              label={t('notifications.prefs.jira')}
               checked={preferences.jira_sync_error}
               onChange={(v) => setPreferences({ ...preferences, jira_sync_error: v })}
             />
           </div>
-          <button className="mini" onClick={savePrefs}>Save preferences</button>
+          <button className="mini" onClick={savePrefs}>{t('notifications.prefs.save')}</button>
         </Card>
       </div>
 
-      <Card title="Delivery channels" actions={<span className="muted">{channels.length} configured</span>}>
-        <p className="muted" style={{ marginTop: 0 }}>
-          A channel hears what you subscribe it to: SLA breaches, and the new advisories the
-          daily clock finds on your builds. Slack expects an incoming-webhook URL; webhooks
-          receive a signed JSON envelope.
-        </p>
+      <Card title={t('notifications.channels.title')} actions={
+        <span className="muted">
+          {t('notifications.channels.configured', { n: channels.length })}
+        </span>
+      }>
+        <p className="muted" style={{ marginTop: 0 }}>{t('notifications.channels.help')}</p>
         {channelError && <Banner kind="error">{channelError}</Banner>}
         {channelNote && <p className="ok">{channelNote}</p>}
         <div className="row">
-          <Input label="Name" value={draft.name}
+          <Input label={t('notifications.channels.name')} value={draft.name}
             onChange={(v) => setDraft((d) => ({ ...d, name: v }))} placeholder="sec-alerts" />
           <label className="field">
-            <span>Kind</span>
+            <span>{t('notifications.channels.kind')}</span>
             <select value={draft.kind}
               onChange={(e) => setDraft((d) => ({ ...d, kind: e.target.value }))}>
               <option value="slack">slack</option>
@@ -282,55 +292,75 @@ export default function Notifications() {
               <option value="email">email</option>
             </select>
           </label>
-          <Input label={draft.kind === 'email' ? 'Address' : 'URL'} value={draft.url}
+          <Input label={draft.kind === 'email'
+            ? t('notifications.channels.address')
+            : t('notifications.channels.url')} value={draft.url}
             onChange={(v) => setDraft((d) => ({ ...d, url: v }))}
             placeholder={draft.kind === 'slack'
               ? 'https://hooks.slack.com/services/…'
               : draft.kind === 'email' ? 'sec@example.com' : 'https://example.com/hook'} />
           <div className="check" style={{ flexWrap: 'wrap' }}>
-            {Object.entries(EVENT_LABELS).map(([key, label]) => (
+            {Object.entries(EVENT_LABEL_KEY).map(([key, labelKey]) => (
               <label className="check" key={key} title={key}>
                 <input type="checkbox" checked={draft.events.includes(key)}
                   onChange={() => setDraft((d) => ({ ...d, events: d.events.includes(key)
                     ? d.events.filter((item) => item !== key) : [...d.events, key] }))} />
-                {label}
+                {t(labelKey)}
               </label>
             ))}
           </div>
           <button className="primary-action" disabled={!draft.name.trim() || !draft.url.trim()}
-            onClick={createChannel}>add channel</button>
+            onClick={createChannel}>{t('notifications.channels.add')}</button>
         </div>
         {channels.length ? (
-          <Table head={['name', 'kind', 'target', 'events', 'state', '']}>
+          <Table head={[
+            t('notifications.channels.col.name'),
+            t('notifications.channels.col.kind'),
+            t('notifications.channels.col.target'),
+            t('notifications.channels.col.events'),
+            t('notifications.channels.col.state'),
+            '',
+          ]}>
             {channels.map((row) => (
               <tr key={row.id}>
                 <td>{row.name}</td>
                 <td><span className="pill">{row.kind}</span></td>
                 <td className="mono muted" style={{ fontSize: 11.5 }}>{row.url}</td>
                 <td className="muted">
-                  {Object.entries(EVENT_LABELS).map(([key, label]) => (
+                  {Object.entries(EVENT_LABEL_KEY).map(([key, labelKey]) => (
                     <button key={key} className={`mini${(row.events || []).includes(key) ? ' primary' : ''}`}
                       onClick={() => toggleEvent(row, key)}
-                      title={`${key} — click to ${(row.events || []).includes(key) ? 'stop' : 'start'} sending`}>
-                      {label}
+                      title={t('notifications.channels.toggle', {
+                        event: key,
+                        action: (row.events || []).includes(key)
+                          ? t('notifications.channels.stop')
+                          : t('notifications.channels.start'),
+                      })}>
+                      {t(labelKey)}
                     </button>
                   ))}
                 </td>
                 <td><span className={`status st-${row.enabled ? 'active' : 'disabled'}`}>
-                  {row.enabled ? 'active' : 'paused'}
+                  {row.enabled
+                    ? t('notifications.channels.active')
+                    : t('notifications.channels.paused')}
                 </span></td>
                 <td>
-                  <button className="mini" onClick={() => testChannel(row)}>test</button>
+                  <button className="mini" onClick={() => testChannel(row)}>
+                    {t('notifications.action.test')}
+                  </button>
                   <button className="mini" onClick={() => toggleChannel(row)}>
-                    {row.enabled ? 'pause' : 'resume'}
+                    {row.enabled
+                      ? t('notifications.action.pause')
+                      : t('notifications.action.resume')}
                   </button>
                 </td>
               </tr>
             ))}
           </Table>
         ) : (
-          <EmptyState title="No channel yet"
-            hint="Slack: create an incoming webhook in the Slack app and paste its URL here." />
+          <EmptyState title={t('notifications.channels.empty.title')}
+            hint={t('notifications.channels.empty.hint')} />
         )}
       </Card>
 

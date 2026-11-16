@@ -708,7 +708,7 @@ class EventIn(BaseModel):
     detail: dict = {}
 
 
-EVENT_KINDS = {"accepted", "started", "progress", "finished", "failed",
+EVENT_KINDS = {"accepted", "started", "progress", "step", "decision", "finished", "failed",
                "cancelled"}
 
 

@@ -96,12 +96,18 @@ def needs_grant(document: dict) -> bool:
         for tool in stage.get("tools", []))
 
 
+def rules() -> dict:
+    """The engine's constants, as published with the catalog."""
+    return catalog().get("rules") or {}
+
+
 def resolve(session: Session, org: models.Organization,
             profile_name: str, targets: list[dict], *,
             plane: str = "cli", principal: str = authorization.COLLECTOR_PRINCIPAL,
-            check_grants: bool = True, actor: str | None = None) -> dict:
+            check_grants: bool = True, actor: str | None = None,
+            custom: dict | None = None) -> dict:
     """Turn a profile into a plan, with every step's verdict and its reason."""
-    document = profile(profile_name)
+    document = custom or profile(profile_name)
     if document is None:
         raise KeyError(f"unknown profile {profile_name!r}")
 

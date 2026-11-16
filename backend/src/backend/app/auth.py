@@ -83,8 +83,15 @@ def _session_principal(session: Session, raw_token: str) -> dict | None:
 
 
 def resolve_principal(session: Session, x_api_key: str = "",
-                      authorization: str = "", worker_token: str = "") -> dict:
-    """Resolve the caller to {org_id, role, kind}. Raises 401 otherwise."""
+                      authorization: str = "", worker_token: str = "",
+                      requested_org: str = "") -> dict:
+    """Resolve the caller to {org_id, role, kind}. Raises 401 otherwise.
+
+    `requested_org` (the console's `X-Org` header) lets a *person* work in any
+    organisation they are a member of. It never changes an API key or a worker
+    token: those identify an org already, and a key that could be pointed
+    anywhere is a key that has to be trusted with everything.
+    """
     if worker_token:
         row = (session.query(models.WorkerToken)
                .filter_by(token_hash=key_hash(worker_token)).one_or_none())
@@ -104,15 +111,32 @@ def resolve_principal(session: Session, x_api_key: str = "",
         principal = _session_principal(session, authorization[7:].strip())
         if principal is None:
             raise _SESSION_INVALID
-        return principal
+        return _with_requested_org(session, principal, requested_org)
     if not x_api_key or len(x_api_key) > 128:
         raise _MISSING
     row = (session.query(models.ApiKey)
            .filter_by(key_hash=key_hash(x_api_key)).one_or_none())
     if row is None or row.revoked_at is not None:
         raise _UNKNOWN
+    if requested_org and requested_org != row.org_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "this key belongs to one organisation")
     return {"org_id": row.org_id, "role": "owner", "kind": "api_key",
             "user_id": None}
+
+
+def _with_requested_org(session: Session, principal: dict,
+                        requested_org: str) -> dict:
+    """Swap the person's active organisation, if they belong to it."""
+    if not requested_org or requested_org == principal["org_id"]:
+        return principal
+    member = (session.query(models.OrganizationMember)
+              .filter_by(user_id=principal["user_id"], org_id=requested_org)
+              .one_or_none())
+    if member is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "you are not a member of that organisation")
+    return {**principal, "org_id": requested_org, "role": member.role}
 
 
 def _enforce(principal: dict, request: Request, minimum: str | None):
@@ -147,9 +171,11 @@ def require_org(
     x_api_key: str = Header(default="", alias="X-API-Key"),
     authorization: str = Header(default=""),
     x_worker_token: str = Header(default="", alias="X-Worker-Token"),
+    x_org: str = Header(default="", alias="X-Org"),
 ) -> models.Organization:
     """Resolve the caller's organization, enforcing the viewer write rule."""
-    principal = resolve_principal(session, x_api_key, authorization, x_worker_token)
+    principal = resolve_principal(session, x_api_key, authorization, x_worker_token,
+                                  requested_org=x_org)
     _enforce(principal, request, None)
     return _organization_from(principal, session)
 
@@ -160,8 +186,10 @@ def require_writer(
     x_api_key: str = Header(default="", alias="X-API-Key"),
     authorization: str = Header(default=""),
     x_worker_token: str = Header(default="", alias="X-Worker-Token"),
+    x_org: str = Header(default="", alias="X-Org"),
 ) -> models.Organization:
-    principal = resolve_principal(session, x_api_key, authorization, x_worker_token)
+    principal = resolve_principal(session, x_api_key, authorization, x_worker_token,
+                                  requested_org=x_org)
     _enforce(principal, request, "analyst")
     return _organization_from(principal, session)
 
@@ -172,7 +200,9 @@ def require_admin(
     x_api_key: str = Header(default="", alias="X-API-Key"),
     authorization: str = Header(default=""),
     x_worker_token: str = Header(default="", alias="X-Worker-Token"),
+    x_org: str = Header(default="", alias="X-Org"),
 ) -> models.Organization:
-    principal = resolve_principal(session, x_api_key, authorization, x_worker_token)
+    principal = resolve_principal(session, x_api_key, authorization, x_worker_token,
+                                  requested_org=x_org)
     _enforce(principal, request, "admin")
     return _organization_from(principal, session)

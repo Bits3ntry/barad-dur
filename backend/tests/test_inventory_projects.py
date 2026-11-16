@@ -672,9 +672,14 @@ def test_cataloguing_an_asset_files_it_without_granting_scope(client):
     inventory = http.get(f"/api/v1/projects/{slug}/inventory",
                          headers=headers).json()["data"]
     assert [row["value"] for row in inventory["assets"]] == ["api.aurea.example"]
-    # Cataloguing is ownership, not authorization: no grant was created.
+    # Cataloguing is ownership, not authorization: nothing active was created.
+    # The declaration does open a request (that is how a domain reaches Grants),
+    # and a request is inert — the engine only reads `active` grants.
     session = session_factory()()
-    assert session.query(models.ScanGrant).count() == 0
+    assert session.query(models.ScanGrant).filter_by(status="active").count() == 0
+    requested = session.query(models.ScanGrant).filter_by(status="requested").all()
+    assert len(requested) == 1
+    assert requested[0].level == "simple"
     session.close()
 
 

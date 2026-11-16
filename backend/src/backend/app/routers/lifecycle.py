@@ -93,6 +93,21 @@ class SlaCreate(SlaPolicyIn):
     pass
 
 
+class SlaPatch(BaseModel):
+    """Changing the buckets after the fact: days move, the policy stays one.
+
+    Without this the only way to correct a policy was to create a second one with
+    a different name, which left the first as a default nobody meant to keep.
+    """
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    p0_days: int | None = Field(default=None, ge=1, le=365)
+    p1_days: int | None = Field(default=None, ge=1, le=365)
+    p2_days: int | None = Field(default=None, ge=1, le=365)
+    p3_days: int | None = Field(default=None, ge=1, le=365)
+    make_default: bool | None = None
+    actor: str = Field(default="console", max_length=320)
+
+
 @router.get("/sla/policies")
 def list_policies(org: models.Organization = Depends(auth.require_org),
                   session: Session = Depends(get_session)):
@@ -131,6 +146,50 @@ def add_policy(payload: SlaCreate = None,
     return {"data": {"id": policy.id}, "recomputed_deadlines": True}
 
 
+@router.patch("/sla/policies/{policy_id}")
+def patch_policy(policy_id: str, payload: SlaPatch = None,
+                 org: models.Organization = Depends(auth.require_org),
+                 session: Session = Depends(get_session)):
+    """Move the days of an existing policy and recompute the open deadlines.
+
+    A deadline is derived from `created_at` and the policy, so leaving the old
+    values behind after an edit would mean a policy that says 30 days next to
+    findings computed from the previous 90.
+    """
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    policy = (session.query(models.SlaPolicy)
+              .filter_by(id=policy_id, org_id=org.id).one_or_none())
+    if policy is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown policy")
+    now = models.utcnow()
+    if payload.name and payload.name != policy.name:
+        taken = (session.query(models.SlaPolicy)
+                 .filter_by(org_id=org.id, name=payload.name).one_or_none())
+        if taken is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "policy name exists")
+        policy.name = payload.name
+    for field in ("p0_days", "p1_days", "p2_days", "p3_days"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(policy, field, value)
+    if payload.make_default:
+        for row in session.query(models.SlaPolicy).filter_by(org_id=org.id, is_default=True):
+            row.is_default = False
+            row.updated_at = now
+        policy.is_default = True
+    policy.updated_at = now
+    _audit_log(session, org.id, payload.actor, "sla.policy_updated", "sla_policy",
+               policy.id, policy.name)
+    if policy.is_default:
+        _reassign_deadlines(session, org.id, policy)
+    session.commit()
+    return {"data": {"id": policy.id, "name": policy.name, "p0_days": policy.p0_days,
+                     "p1_days": policy.p1_days, "p2_days": policy.p2_days,
+                     "p3_days": policy.p3_days, "is_default": policy.is_default},
+            "recomputed_deadlines": bool(policy.is_default)}
+
+
 def _default_absent(session, org_id):
     return lifecycle.default_policy(session, org_id) is None
 
@@ -166,8 +225,12 @@ class TaskCreate(BaseModel):
 
 
 class TaskPatch(BaseModel):
-    status: str
+    #: Every field optional: the detail sheet edits one thing at a time, and a
+    #: status that an owner-only edit had to repeat is a status that can drift
+    #: between what the screen shows and what it sends.
+    status: str | None = None
     owner: str | None = None
+    title: str | None = Field(default=None, min_length=2, max_length=512)
     changed_by: str | None = None
 
 
@@ -182,7 +245,10 @@ def _task_data(session, task: models.RemediationTask) -> dict:
              .filter(models.RemediationFinding.task_id == task.id,
                      models.RemediationFinding.removed_at.is_(None)).all())
     return {"id": task.id, "title": task.title, "status": task.status,
-            "owner": task.owner, "findings": [{
+            "owner": task.owner,
+            "created_at": task.created_at.isoformat() if task.created_at else None,
+            "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+            "findings": [{
                 "id": finding.id, "kind": finding.kind, "severity": finding.severity,
                 "title": finding.title, "priority": finding.priority,
                 "rule_id": finding.rule_id, "path": finding.path,
@@ -220,20 +286,55 @@ def patch_task(task_id: str, payload: TaskPatch = None,
                session: Session = Depends(get_session)):
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
-    if payload.status not in {"open", "in_progress", "resolved"}:
+    if payload.status is not None and payload.status not in {"open", "in_progress", "resolved"}:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "status must be open | in_progress | resolved")
+    if payload.status is None and payload.owner is None and payload.title is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "nothing to change")
     task = session.get(models.RemediationTask, task_id)
     if task is None or task.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
-    task.status = payload.status
+    actor = payload.changed_by or "system"
+    if payload.title is not None and payload.title.strip() != task.title:
+        task.title = payload.title.strip()
+        _audit_log(session, org.id, actor, "remediation.renamed",
+                   "remediation_task", task.id, task.title[:120])
     if payload.owner is not None:
-        task.owner = payload.owner
+        # An empty string clears the owner: a sheet that cannot unassign leaves
+        # the task pointing at whoever held it when the work moved on.
+        task.owner = payload.owner.strip() or None
+        _audit_log(session, org.id, actor, "remediation.owner",
+                   "remediation_task", task.id, task.owner or "-")
+    if payload.status is not None and payload.status != task.status:
+        task.status = payload.status
+        _audit_log(session, org.id, actor, "remediation.status",
+                   "remediation_task", task.id, f"-> {payload.status}")
     task.updated_at = models.utcnow()
-    _audit_log(session, org.id, payload.changed_by or "system", "remediation.status",
-               "remediation_task", task.id, f"-> {payload.status}")
     session.commit()
     return {"data": _task_data(session, task)}
+
+
+@router.get("/remediation/tasks/{task_id}")
+def get_task(task_id: str, org: models.Organization = Depends(auth.require_org),
+             session: Session = Depends(get_session)):
+    """One task, its claims, and what happened to it.
+
+    The history is the audit chain filtered to this row, not a second log: a
+    sheet that told its own story would be a story nobody could verify.
+    """
+    task = session.get(models.RemediationTask, task_id)
+    if task is None or task.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
+    history = (session.query(models.AuditLog)
+               .filter_by(org_id=org.id, resource_type="remediation_task",
+                          resource_id=task.id)
+               .order_by(models.AuditLog.chain_position.desc()).limit(25).all())
+    data = _task_data(session, task)
+    data["history"] = [{"action": row.action, "actor": row.actor,
+                        "detail": row.detail,
+                        "at": row.created_at.isoformat() if row.created_at else None}
+                       for row in history]
+    return {"data": data}
 
 
 @router.post("/remediation/tasks/{task_id}/findings")

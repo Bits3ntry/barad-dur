@@ -315,20 +315,49 @@ def claim_job(payload: ClaimIn = None,
                 job.lease_expires_at = None
     session.flush()
 
+    # A surface job advertises every capability its steps need ("a,b"), so the
+    # filter is a subset test, not string equality: with equality, a worker that
+    # could run the job perfectly well never saw it.
     capabilities = set(json.loads(worker.capabilities or "[]"))
+    from backend.app import surface_runtime
+
     candidate = None
+    waiting = ""
     for job in (session.query(models.ScanJob).filter_by(org_id=org.id, status="queued")
                 .order_by(models.ScanJob.priority, models.ScanJob.created_at).all()):
-        if capabilities and job.capability not in capabilities:
+        wanted = {part.strip() for part in (job.capability or "").split(",") if part.strip()}
+        if capabilities and not wanted <= capabilities:
+            continue
+        # A run over the zone or org cap stays exactly where it is: refused here
+        # it would be marked failed, and the operator would read a limit as a bug.
+        room, waiting = surface_runtime.capacity(
+            session, org.id, json.loads(job.targets or "[]"))
+        if not room:
             continue
         candidate = job
         break
     if candidate is None:
-        return {"data": None}
-    decision = authorization.authorize(
-        session, org.id, candidate.principal, candidate.capability,
-        json.loads(candidate.targets or "[]"), tool=candidate.scanner,
-        environment=candidate.environment)
+        return {"data": None, "waiting": waiting or None}
+    # An operator-launched run records *why* it was allowed to exist. Re-asking
+    # the grant engine would refuse it — there is no grant for a human typing a
+    # hostname — so the recorded basis is re-validated instead of ignored: the
+    # override travels with the job, and a job without one is still re-checked.
+    basis = ""
+    try:
+        basis = str((json.loads(candidate.authorization or "{}") or {}).get("basis") or "")
+    except (TypeError, ValueError):
+        basis = ""
+    # A red-team run is re-checked even when it recorded an override: the override
+    # is a statement about a human typing a hostname, not about sending payloads.
+    redteam = (json.loads(candidate.profile or "{}") or {}).get("level") == "redteam"
+    if basis == "admin_override" and not redteam:
+        decision = {"decision": "allow",
+                    "reason": "admin override recorded when the run was created"}
+    else:
+        decision = authorization.authorize(
+            session, org.id, candidate.principal, candidate.capability,
+            json.loads(candidate.targets or "[]"), tool=candidate.scanner,
+            environment=candidate.environment)
     candidate.attempts += 1
     if decision["decision"] == "deny":
         candidate.status = "failed"

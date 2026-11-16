@@ -335,6 +335,20 @@ def analyze(session, org_id: str, project: models.Project,
     return counters
 
 
+def _detail_payload(cve, confidence, component, score, vector, note) -> str:
+    """The machine-readable evidence, written on create *and* on refresh.
+
+    The refresh used to overwrite this with the plain note, so the score, the
+    vector and the declared version — everything the advisory page reads — were
+    destroyed on the second sweep and the row read as "no CVSS score" while NVD had
+    scored it. One builder for both paths keeps them from drifting again.
+    """
+    return json.dumps({"advisory": cve["id"], "confidence": confidence,
+                       "cvss": score, "vector": vector,
+                       "runtime": component.name, "declared": component.version,
+                       "note": note}, sort_keys=True)
+
+
 def _record(session, org_id, project, project_version, component, cve,
             confidence, now, counters) -> None:
     severity, vector, score = severity_of(cve)
@@ -366,10 +380,7 @@ def _record(session, org_id, project, project_version, component, cve,
             org_id=org_id, project_id=project.id, kind="vulnerability",
             vector="runtime-cve", fingerprint=fingerprint, source="nvd",
             title=title, severity=severity, url=advisory.url,
-            detail=json.dumps({"advisory": cve["id"], "confidence": confidence,
-                               "cvss": score, "vector": vector,
-                               "runtime": component.name,
-                               "declared": component.version}, sort_keys=True),
+            detail=_detail_payload(cve, confidence, component, score, vector, note),
             tool="nvd-cpe", rule_id=cve["id"], component_id=component.id,
             vulnerability_id=advisory.id, last_seen_version_id=project_version.id,
             recommendation=(f"NVD marks every version in that range affected; upgrade the "
@@ -385,6 +396,6 @@ def _record(session, org_id, project, project_version, component, cve,
         finding.last_seen_version_id = project_version.id
         finding.severity = severity
         finding.title = title
-        finding.detail = note
+        finding.detail = _detail_payload(cve, confidence, component, score, vector, note)
         finding.updated_at = now
         counters["findings_refreshed"] += 1

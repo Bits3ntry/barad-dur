@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { useI18n } from './i18n'
 import { Dialog, Input, Loading, Banner } from './ui'
 
 const STARTUP_STEPS = [
-  'Organization and owner',
-  'Organization details',
-  'Invite your team',
-  'Connect code',
-  'Connect tickets',
-  'Enter Barad-dûr',
+  { id: 'owner', labelKey: 'login.progress.owner' },
+  { id: 'details', labelKey: 'login.progress.details' },
+  { id: 'team', labelKey: 'login.progress.team' },
+  { id: 'code', labelKey: 'login.progress.code' },
+  { id: 'tickets', labelKey: 'login.progress.tickets' },
+  { id: 'enter', labelKey: 'login.progress.enter' },
 ]
 
 function slugify(value) {
@@ -39,6 +40,7 @@ export function BrandMark({ size = 30 }) {
 }
 
 export default function Login({ onAuthenticated }) {
+  const { t } = useI18n()
   const [mode, setMode] = useState('signin')
   const [form, setForm] = useState({ email: '', password: '', org_slug: '', url: '', key: '' })
   const [setup, setSetup] = useState({
@@ -105,7 +107,7 @@ export default function Login({ onAuthenticated }) {
       if (mode === 'setup') {
         if (!setup.org_name.trim() || !setup.org_slug.trim() || !setup.email.trim()
           || !setup.password || !setup.setup_code.trim()) {
-          throw new Error('Workspace, owner details, password and setup code are required.')
+          throw new Error(t('login.error.setupRequired'))
         }
         const response = await api.post('/api/v1/auth/bootstrap', {
           org_name: setup.org_name.trim(),
@@ -126,7 +128,7 @@ export default function Login({ onAuthenticated }) {
         return
       }
       if (mode === 'key') {
-        if (form.key.trim().length < 8) throw new Error('That API key looks too short.')
+        if (form.key.trim().length < 8) throw new Error(t('login.error.keyTooShort'))
         api.save({ url, key: form.key.trim(), token: '' })
         try {
           await api.get('/api/v1/auth/me')
@@ -138,7 +140,7 @@ export default function Login({ onAuthenticated }) {
         return
       }
       if (!form.email.trim() || !form.password) {
-        throw new Error('Email and password are required.')
+        throw new Error(t('login.error.credentialsRequired'))
       }
       const payload = { email: form.email.trim(), password: form.password }
       if (form.org_slug.trim()) payload.org_slug = form.org_slug.trim()
@@ -161,7 +163,7 @@ export default function Login({ onAuthenticated }) {
     } catch (e) {
       const message = String(e.message || e)
       setError(message.includes('401')
-        ? (mode === 'setup' ? 'That setup code was rejected.' : 'Those credentials were rejected.')
+        ? (mode === 'setup' ? t('login.error.setupCodeRejected') : t('login.error.credentialsRejected'))
         : message)
     } finally {
       setBusy(false)
@@ -172,12 +174,12 @@ export default function Login({ onAuthenticated }) {
     // called by the dialog's confirm button (no event) and by the form submit
     if (event && event.preventDefault) event.preventDefault()
     setError('')
-    if (!resetEmail.trim()) { setError('Enter the email address on your account.'); return }
+    if (!resetEmail.trim()) { setError(t('login.error.resetEmailRequired')); return }
     try {
       const response = await api.post('/api/v1/auth/password/reset/request', { email: resetEmail.trim() })
       setError(response.data?.ok
-        ? 'Reset link sent. If the address is on file, check your mail (or your admin for the manual link code).'
-        : response.data?.message || 'No account found for that address — nothing to do.')
+        ? t('login.reset.sent')
+        : response.data?.message || t('login.reset.noAccount'))
     } catch (e) {
       setError(String(e.message || e))
     }
@@ -216,7 +218,7 @@ export default function Login({ onAuthenticated }) {
       })
       onAuthenticated()
     } catch (e) {
-      setError('That code was not accepted. Try the next one, or use a recovery code.')
+      setError(t('login.mfa.rejected'))
     } finally {
       setMfaBusy(false)
     }
@@ -226,14 +228,14 @@ export default function Login({ onAuthenticated }) {
     setError('')
     const slug = form.org_slug.trim()
     if (!slug) {
-      setError('Enter your organization slug first: SSO needs to know which workspace to sign in to.')
+      setError(t('login.error.ssoSlugRequired'))
       return
     }
     try {
       const response = await api.get(
         `/api/v1/auth/oidc/start?org_slug=${encodeURIComponent(slug)}`)
       const target = response.data?.authorization_url || response.authorization_url
-      if (!target) throw new Error('The identity provider did not return a redirect.')
+      if (!target) throw new Error(t('login.error.ssoNoRedirect'))
       window.location.assign(target)
     } catch (e) {
       setError(String(e.message || e))
@@ -247,36 +249,33 @@ export default function Login({ onAuthenticated }) {
       {!isStartup && <section className="gate-brand">
         <div className="row" style={{ gap: 12 }}>
           <BrandMark size={38} />
-          <span className="gate-eyebrow">management plane</span>
+          <span className="gate-eyebrow">{t('login.brand.eyebrow')}</span>
         </div>
         <h1 className="gate-title">BARAD<span>-</span>DÛR</h1>
-        <p className="gate-copy">
-          One place to see what is exposed, what is exploitable and what it costs
-          to fix — across supply chain, code, attack surface and pentest work.
-        </p>
+        <p className="gate-copy">{t('login.brand.copy')}</p>
         <ul className="gate-list">
-          <li>Findings with occurrences, priority, SLA and verified remediation.</li>
-          <li>SBOM, licenses, VEX and advisory correlation per project version.</li>
-          <li>Pull request review with gate verdicts and inline evidence.</li>
-          <li>Authorized scanning only: every active job passes the same grant.</li>
+          <li>{t('login.brand.point.findings')}</li>
+          <li>{t('login.brand.point.sbom')}</li>
+          <li>{t('login.brand.point.review')}</li>
+          <li>{t('login.brand.point.scan')}</li>
         </ul>
-        <p className="gate-foot">Self-hosted. Nothing leaves this deployment.</p>
+        <p className="gate-foot">{t('login.brand.foot')}</p>
       </section>}
 
       <section className="gate-panel">
         <div className="auth-card">
           <div>
             <h2 className="auth-h1">{bootstrap === undefined
-              ? 'Preparing your workspace'
-              : mode === 'setup' ? 'Set up your workspace'
-              : mode === 'signin' ? 'Sign in' : 'Connect with an API key'}</h2>
+              ? t('login.title.preparing')
+              : mode === 'setup' ? t('login.title.setup')
+              : mode === 'signin' ? t('login.title.signin') : t('login.title.key')}</h2>
             <p className="auth-sub">
               {bootstrap === undefined
-                ? 'Checking whether this installation needs its first owner.'
-                : mode === 'setup' ? 'Create the first owner account. You can add your team next.'
+                ? t('login.sub.preparing')
+                : mode === 'setup' ? t('login.sub.setup')
                 : mode === 'signin'
-                ? 'Your session carries your role.'
-                : 'A service identity for automation and scripts.'}
+                ? t('login.sub.signin')
+                : t('login.sub.key')}
             </p>
           </div>
 
@@ -284,46 +283,47 @@ export default function Login({ onAuthenticated }) {
           <div className="auth-tabs" role="tablist">
             <button role="tab" aria-selected={mode === 'signin'}
               className={mode === 'signin' ? 'active' : ''}
-              onClick={openSignIn}>Sign in</button>
+              onClick={openSignIn}>{t('login.tab.signin')}</button>
             {bootstrap?.available && bootstrap?.setup_enabled && (
               <button role="tab" aria-selected={mode === 'setup'}
                 className={mode === 'setup' ? 'active' : ''}
-                onClick={openSetup}>Set up</button>
+                onClick={openSetup}>{t('login.tab.setup')}</button>
             )}
             <button role="tab" aria-selected={mode === 'key'}
               className={mode === 'key' ? 'active' : ''}
-              onClick={openApiKey}>API key</button>
+              onClick={openApiKey}>{t('login.tab.key')}</button>
           </div>
           )}
 
           {error && <div className="banner banner-error" role="alert">{error}</div>}
 
           {mode === 'setup' && !bootstrap?.organization_exists && (
-            <div className="startup-progress" aria-label="Startup progress">
-              <div className="startup-progress-label">Step 1 of 6 · Foundation</div>
+            <div className="startup-progress" aria-label={t('login.progress.aria')}>
+              <div className="startup-progress-label">
+                {t('login.progress.step', { current: 1, total: STARTUP_STEPS.length })}
+              </div>
               <ol>
                 {STARTUP_STEPS.map((step, index) => (
-                  <li key={step} className={index === 0 ? 'current' : ''}>
-                    <span>{index + 1}</span>{step}
+                  <li key={step.id} className={index === 0 ? 'current' : ''}>
+                    <span>{index + 1}</span>{t(step.labelKey)}
                   </li>
                 ))}
               </ol>
-              <p>Only this step is required. Integrations and invitations can be skipped and configured later.</p>
+              <p>{t('login.progress.foot')}</p>
             </div>
           )}
 
           {bootstrap === undefined ? (
-            <Loading rows={2} label="checking installation status" />
+            <Loading rows={2} label={t('login.loading.checking')} />
           ) : challenge ? (
             <form onSubmit={verifyMfa}>
               <p className="auth-sub">
                 {useRecovery
-                  ? 'Enter one of the recovery codes you saved when you enabled multi-factor.'
-                  : `Enter the 6-digit code from your authenticator app${
-                      sso?.provider ? '' : ''}.`}
+                  ? t('login.mfa.subRecovery')
+                  : t('login.mfa.sub')}
               </p>
               <label>
-                <span>{useRecovery ? 'Recovery code' : 'Authentication code'}</span>
+                <span>{useRecovery ? t('login.mfa.recoveryLabel') : t('login.mfa.codeLabel')}</span>
                 <input
                   autoFocus
                   value={mfaCode}
@@ -334,16 +334,16 @@ export default function Login({ onAuthenticated }) {
                 />
               </label>
               <button className="btn-primary" type="submit" disabled={mfaBusy || !mfaCode.trim()}>
-                {mfaBusy ? 'checking…' : 'Verify'}
+                {mfaBusy ? t('login.mfa.checking') : t('login.mfa.verify')}
               </button>
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <button type="button" className="link"
                   onClick={() => { setUseRecovery((v) => !v); setMfaCode('') }}>
-                  {useRecovery ? 'use an authenticator code' : 'use a recovery code'}
+                  {useRecovery ? t('login.mfa.useAuthenticator') : t('login.mfa.useRecovery')}
                 </button>
                 <button type="button" className="link"
                   onClick={() => { setChallenge(null); setMfaCode(''); setUseRecovery(false) }}>
-                  back to sign in
+                  {t('login.mfa.backToSignIn')}
                 </button>
               </div>
             </form>
@@ -352,69 +352,69 @@ export default function Login({ onAuthenticated }) {
             {mode === 'setup' ? (
               <>
                 <label>
-                  <span>Workspace name</span>
+                  <span>{t('login.field.workspaceName')}</span>
                   <input autoFocus value={setup.org_name} onChange={setSetupField('org_name')}
-                    placeholder="North Star Security" />
+                    placeholder={t('login.placeholder.workspaceName')} />
                 </label>
                 <label>
-                  <span>Workspace slug</span>
+                  <span>{t('login.field.workspaceSlug')}</span>
                   <input value={setup.org_slug} onChange={setSetupField('org_slug')}
-                    placeholder="north-star" />
+                    placeholder={t('login.placeholder.workspaceSlug')} />
                 </label>
                 <label>
-                  <span>Your name</span>
+                  <span>{t('login.field.yourName')}</span>
                   <input value={setup.display_name} onChange={setSetupField('display_name')}
-                    placeholder="Ada Lovelace" />
+                    placeholder={t('login.placeholder.yourName')} />
                 </label>
                 <label>
-                  <span>Owner email</span>
+                  <span>{t('login.field.ownerEmail')}</span>
                   <input type="email" autoComplete="username" value={setup.email}
-                    onChange={setSetupField('email')} placeholder="you@company.com" />
+                    onChange={setSetupField('email')} placeholder={t('login.placeholder.email')} />
                 </label>
                 <label>
-                  <span>Password</span>
+                  <span>{t('login.field.password')}</span>
                   <input type="password" autoComplete="new-password" value={setup.password}
-                    onChange={setSetupField('password')} placeholder="At least 8 characters" />
+                    onChange={setSetupField('password')} placeholder={t('login.placeholder.password')} />
                 </label>
                 <label>
-                  <span>Setup code</span>
+                  <span>{t('login.field.setupCode')}</span>
                   <input type="password" autoComplete="off" value={setup.setup_code}
-                    onChange={setSetupField('setup_code')} placeholder="From BOOTSTRAP_TOKEN" />
+                    onChange={setSetupField('setup_code')} placeholder={t('login.placeholder.setupCode')} />
                 </label>
               </>
             ) : mode === 'signin' ? (
               <>
                 <label>
-                  <span>Email</span>
+                  <span>{t('login.field.email')}</span>
                   <input type="email" autoComplete="username" autoFocus
-                    value={form.email} onChange={set('email')} placeholder="you@company.com" />
+                    value={form.email} onChange={set('email')} placeholder={t('login.placeholder.email')} />
                 </label>
                 <label>
-                  <span>Password</span>
+                  <span>{t('login.field.password')}</span>
                   <input type="password" autoComplete="current-password"
                     value={form.password} onChange={set('password')} placeholder="••••••••" />
                 </label>
                 <label>
-                  <span>Organization <span className="muted">(only if your email belongs to several)</span></span>
-                  <input value={form.org_slug} onChange={set('org_slug')} placeholder="slug" />
+                  <span>{t('login.field.organization')} <span className="muted">{t('login.field.organizationHint')}</span></span>
+                  <input value={form.org_slug} onChange={set('org_slug')} placeholder={t('login.placeholder.slug')} />
                 </label>
               </>
             ) : (
               <label>
-                <span>API key</span>
+                <span>{t('login.field.apiKey')}</span>
                 <input type="password" autoFocus value={form.key} onChange={set('key')}
                   placeholder="bdr_…" />
               </label>
             )}
 
             <label>
-              <span>Platform URL <span className="muted">(blank = this host)</span></span>
+              <span>{t('login.field.platformUrl')} <span className="muted">{t('login.field.platformUrlHint')}</span></span>
               <input value={form.url} onChange={set('url')} placeholder="https://barad.example.com" />
             </label>
 
             <button className="btn-primary" type="submit" disabled={busy}>
-              {busy ? 'checking…' : mode === 'setup' ? 'Create workspace'
-                : mode === 'signin' ? 'Enter' : 'Connect'}
+              {busy ? t('login.busy.checking') : mode === 'setup' ? t('login.submit.create')
+                : mode === 'signin' ? t('login.submit.enter') : t('login.submit.connect')}
             </button>
           </form>
           )}
@@ -422,11 +422,11 @@ export default function Login({ onAuthenticated }) {
           {!challenge && bootstrap !== undefined && sso?.configured && mode === 'signin' && (
             <>
               <button type="button" className="sso-button" onClick={startSso}>
-                Continue with {sso.provider}
+                {t('login.sso.continue', { provider: sso.provider })}
               </button>
               {sso.auto_provision === false && (
                 <p className="auth-hint" style={{ borderTop: 'none', paddingTop: 0 }}>
-                  SSO signs in accounts that already exist here; it does not create new ones.
+                  {t('login.sso.hint')}
                 </p>
               )}
             </>
@@ -434,34 +434,32 @@ export default function Login({ onAuthenticated }) {
 
           {bootstrap?.available && bootstrap?.setup_enabled && mode !== 'setup' && (
             <p className="auth-hint">
-              First installation? Choose <strong>Set up</strong> to create the workspace and its owner account here.
+              {t('login.hint.firstInstallPre')}<strong>{t('login.tab.setup')}</strong>{t('login.hint.firstInstallPost')}
             </p>
           )}
 
           {bootstrap !== undefined && !(bootstrap?.available && bootstrap?.setup_enabled) && (
           <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button className="mini" onClick={() => setResetOpen(true)}>Forgot password?</button>
+            <button className="mini" onClick={() => setResetOpen(true)}>{t('login.forgot')}</button>
           </div>
           )}
         </div>
       </section>
 
-      <Dialog open={resetOpen} title="Reset your password"
+      <Dialog open={resetOpen} title={t('login.reset.title')}
         onConfirm={requestReset}
         onClose={() => setResetOpen(false)}
-        confirmLabel="Request reset">
+        confirmLabel={t('login.reset.confirm')}>
         <form onSubmit={requestReset}>
-          <Input label="Email address on file" value={resetEmail}
-            onChange={setResetEmail} placeholder="you@company.com" />
+          <Input label={t('login.reset.emailLabel')} value={resetEmail}
+            onChange={setResetEmail} placeholder={t('login.placeholder.email')} />
           <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-            The reset request goes through the platform's SMTP channel when it is
-            configured. If SMTP is not provisioned, the administrator can issue
-            a manual reset token and you will be contacted out-of-band.
+            {t('login.reset.note')}
           </p>
           <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
             {sso?.configured
-              ? 'SSO is configured for this deployment; the reset link still goes through SMTP.'
-              : 'Password reset requires SMTP. Use the admin recovery process.'}
+              ? t('login.reset.ssoConfigured')
+              : t('login.reset.ssoMissing')}
           </p>
         </form>
       </Dialog>

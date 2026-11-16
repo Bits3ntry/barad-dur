@@ -34,6 +34,22 @@ def _link_data(row: models.JiraLink) -> dict:
             "last_synced_at": row.last_synced_at.isoformat() if row.last_synced_at else None}
 
 
+def _jira_state(session: Session, org: models.Organization) -> tuple[bool, dict | None]:
+    """Configured for *this org*, with the target it will talk to.
+
+    A connection saved in the console (Settings → Delivery, onboarding) is the
+    normal path; the environment is the legacy fallback. Asking
+    `configured()` with no org reads only the environment, which is how a
+    console with a working Jira connection reported `jira_configured: false`
+    and disabled the whole screen.
+    """
+    try:
+        base, account, _token = jira_client.config_for(session, org.id)
+    except jira_client.JiraError:
+        return False, None
+    return True, {"base_url": base, "account": account}
+
+
 def _enqueue(session, org_id: str, link: models.JiraLink, action: str,
              payload: dict, dedupe_key: str) -> models.JiraOutbox:
     existing = (session.query(models.JiraOutbox)
@@ -160,8 +176,31 @@ def list_links(sync_state: str | None = None,
     if sync_state:
         query = query.filter_by(sync_state=sync_state)
     rows = query.order_by(models.JiraLink.created_at.desc()).all()
-    return {"data": [_link_data(r) for r in rows], "total": len(rows),
-            "jira_configured": jira_client.configured()}
+    # A row of eight hex characters is not a finding: the ledger carries what
+    # the ticket is about, the severity and the project it belongs to.
+    projects = {row.id: row for row in
+                session.query(models.Project).filter_by(org_id=org.id).all()}
+    findings = {}
+    if rows:
+        for finding in (session.query(models.Finding)
+                        .filter(models.Finding.id.in_([r.finding_id for r in rows]))
+                        .all()):
+            project = projects.get(finding.project_id) if finding.project_id else None
+            findings[finding.id] = {
+                "finding_title": finding.title,
+                "finding_severity": finding.severity,
+                "finding_kind": finding.kind,
+                "project_slug": project.slug if project else None,
+                "project_name": project.name if project else None,
+            }
+    data = []
+    for row in rows:
+        item = _link_data(row)
+        item.update(findings.get(row.finding_id, {}))
+        data.append(item)
+    configured, target = _jira_state(session, org)
+    return {"data": data, "total": len(rows),
+            "jira_configured": configured, "jira_target": target}
 
 
 class SyncIn(BaseModel):
@@ -183,7 +222,8 @@ def sync_link(link_id: str, payload: SyncIn = None,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "link not found")
     if not link.issue_key:
         raise HTTPException(status.HTTP_409_CONFLICT, "issue not created yet")
-    if not jira_client.configured():
+    configured, _target = _jira_state(session, org)
+    if not configured:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
                             "jira_not_configured")
     outcomes = []
@@ -264,7 +304,8 @@ def reconcile(payload: ReconcileIn = None,
     modifies the finding status."""
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
-    if not jira_client.configured():
+    configured, _target = _jira_state(session, org)
+    if not configured:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "jira_not_configured")
     rows = (session.query(models.JiraLink)
             .filter_by(org_id=org.id).all())

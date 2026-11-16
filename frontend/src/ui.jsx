@@ -1,7 +1,23 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useI18n } from './i18n'
 
 /* Shared UI primitives. Small on purpose: every screen composes these so
    loading, empty, error and destructive states behave the same everywhere. */
+
+/* A count is a door. Every screen that prints how many findings something has
+   links into the queue already narrowed to that something, and this is the only
+   place the address is built — a screen cannot invent a facet the queue does not
+   understand, and the queue's crumb is what says the number belonged to a scope.
+
+   `#findings::project=aurea&build=<version id>&build_label=main` */
+export function queueHash(facets = {}) {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(facets)) {
+    if (value !== undefined && value !== null && value !== '') params.set(key, String(value))
+  }
+  const tail = params.toString()
+  return tail ? `findings::${tail}` : 'findings'
+}
 
 /* ── design tokens: dark / light / system, comfortable / compact ── */
 const TOKENS = {
@@ -100,15 +116,25 @@ export function PageHeader({ title, subtitle, actions }) {
   )
 }
 
-/* ── Card ── */
-export function Card({ title, actions, children, tight }) {
+/* ── Card ──
+   `band` puts the title in a header strip that belongs to the card, which is
+   what makes a section read as one object instead of a floating label over a
+   table. Without it the markup is unchanged, so no screen shifts. */
+export function Card({ title, actions, children, tight, band }) {
   return (
-    <section className={`card ${tight ? 'card-tight' : ''}`}>
+    <section className={`card ${tight ? 'card-tight' : ''} ${band ? 'card-band' : ''}`}>
       {(title || actions) && (
-        <div className="row" style={{ marginBottom: 12 }}>
-          {title && <h2 className="card-title" style={{ margin: 0 }}>{title}</h2>}
-          {actions && <div className="row row-end">{actions}</div>}
-        </div>
+        band ? (
+          <div className="card-band-head">
+            {title && <h2 className="card-title">{title}</h2>}
+            {actions && <div className="row row-end">{actions}</div>}
+          </div>
+        ) : (
+          <div className="row" style={{ marginBottom: 12 }}>
+            {title && <h2 className="card-title" style={{ margin: 0 }}>{title}</h2>}
+            {actions && <div className="row row-end">{actions}</div>}
+          </div>
+        )
       )}
       {children}
     </section>
@@ -127,11 +153,12 @@ export function Banner({ kind = 'info', children, action }) {
 
 /* ── ErrorBanner ── */
 export function ErrorBanner({ error, onRetry }) {
+  const { t } = useI18n()
   if (!error) return null
   const message = typeof error === 'string' ? error : String(error.message || error)
   return (
     <Banner kind="error" action={onRetry && (
-      <button className="mini" onClick={onRetry}>retry</button>
+      <button className="mini" onClick={onRetry}>{t('common.retry')}</button>
     )}>{message}</Banner>
   )
 }
@@ -148,9 +175,11 @@ export function EmptyState({ title, hint, action }) {
 }
 
 /* ── Loading ── */
-export function Loading({ rows = 3, label = 'loading' }) {
+export function Loading({ rows = 3, label }) {
+  const { t } = useI18n()
+  const text = label || t('common.loading')
   return (
-    <div className="stack" aria-busy="true" aria-label={label}>
+    <div className="stack" aria-busy="true" aria-label={text}>
       {Array.from({ length: rows }).map((_, index) => (
         <div key={index} className="skeleton" style={{ width: `${100 - index * 12}%` }} />
       ))}
@@ -183,18 +212,25 @@ export function Table({ head, children, empty, className }) {
    holds the whole list and only slices it. */
 export function Pager({ page, pages, onChange, total, perPage, unit = 'rows',
                         className = '' }) {
+  const { t, tOr } = useI18n()
   if (!pages || pages <= 1) return null
   const size = perPage || (total ? Math.ceil(total / pages) : 0)
+  const unitLabel = tOr(`unit.${unit}`, unit)
   const label = total != null && size
-    ? `${page * size + 1}–${Math.min((page + 1) * size, total)} of ${total} ${unit}`
-    : `page ${page + 1} of ${pages}`
+    ? t('common.range', {
+      from: page * size + 1,
+      to: Math.min((page + 1) * size, total),
+      total,
+      unit: unitLabel,
+    })
+    : t('common.page', { page: page + 1, pages })
   return (
     <span className={`pager ${className}`}>
       <button className="mini" disabled={page === 0}
-        onClick={() => onChange(page - 1)}>‹ prev</button>
+        onClick={() => onChange(page - 1)}>{t('common.prev')}</button>
       <span className="muted">{label}</span>
       <button className="mini" disabled={page >= pages - 1}
-        onClick={() => onChange(page + 1)}>next ›</button>
+        onClick={() => onChange(page + 1)}>{t('common.next')}</button>
     </span>
   )
 }
@@ -226,20 +262,28 @@ export function serverPager(total, perPage, offset, setOffset) {
   }
 }
 
-/* ── Stat ── */
-export function Stat({ value, label, hint, tone }) {
-  return (
-    <div className={`metric ${tone || ''}`}>
+/* ── Stat ──
+   A metric that is also a door renders as a button, so it is reachable by
+   keyboard and announced as interactive; a purely numeric one stays a div. */
+export function Stat({ value, label, hint, tone, onClick, quiet }) {
+  const body = (
+    <>
       <div className="metric-value">{value}</div>
       <div className="metric-label">{label}</div>
       {hint && <div className="metric-hint">{hint}</div>}
-    </div>
+    </>
   )
+  const className = `metric ${tone || ''}${quiet ? ' quiet' : ''}${onClick ? ' metric-link' : ''}`
+  if (onClick) {
+    return <button type="button" className={className} onClick={onClick}>{body}</button>
+  }
+  return <div className={className}>{body}</div>
 }
 
 /* ── Two-step ConfirmButton ── */
-export function ConfirmButton({ children, confirmLabel = 'confirm', onConfirm,
+export function ConfirmButton({ children, confirmLabel, onConfirm,
                                 className = 'mini' }) {
+  const { t } = useI18n()
   const [armed, setArmed] = useState(false)
   const timer = useRef(null)
 
@@ -259,7 +303,7 @@ export function ConfirmButton({ children, confirmLabel = 'confirm', onConfirm,
   return (
     <button className={`${className} ${armed ? 'btn-danger' : ''}`} onClick={click}
       aria-live="polite">
-      {armed ? confirmLabel : children}
+      {armed ? (confirmLabel || t('common.confirm')) : children}
     </button>
   )
 }
@@ -324,9 +368,10 @@ export function Modal({ title, children, onClose, size = 'normal' }) {
 }
 
 /* ── Dialog (accessible, replaces window.alert/confirm/prompt) ── */
-export function Dialog({ open, title, onClose, onConfirm, confirmLabel = 'Confirm',
+export function Dialog({ open, title, onClose, onConfirm, confirmLabel,
                         destructive = false, size = 'normal', children, body,
                         hideFooter = false }) {
+  const { t } = useI18n()
   useEffect(() => {
     if (open) document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = '' }
@@ -350,16 +395,16 @@ export function Dialog({ open, title, onClose, onConfirm, confirmLabel = 'Confir
         aria-label={title} aria-modality="alertdialog" onClick={(e) => e.stopPropagation()}>
         <div className="dialog-head">
           <h2 className="dialog-title">{title}</h2>
-          <button className="mini" onClick={onClose} aria-label="close dialog">✕</button>
+          <button className="mini" onClick={onClose} aria-label={t('common.close')}>✕</button>
         </div>
         {body !== undefined ? <div className="dialog-body">{body}</div> : children}
         {!hideFooter && (
           <div className="dialog-actions">
-            <button className="mini" onClick={onClose}>Cancel</button>
+            <button className="mini" onClick={onClose}>{t('common.cancel')}</button>
             {onConfirm && (
               <button className={destructive ? 'btn-danger' : 'btn-primary'} onClick={onOK}
                 style={{ marginLeft: 8 }}>
-                {confirmLabel}
+                {confirmLabel || t('common.confirm')}
               </button>
             )}
           </div>
@@ -393,8 +438,9 @@ export function Input({ label, value, onChange, placeholder, type = 'text',
 
 /* ── Select ── */
 export function Select({ label, value, onChange, options, placeholder, disabled }) {
+  const { t } = useI18n()
   const opts = [
-    <option key="" value="">{placeholder || 'Select...'}</option>,
+    <option key="" value="">{placeholder || t('common.select')}</option>,
     ...options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)
   ]
   return (
@@ -453,6 +499,7 @@ export function ToastContainer({ toasts, dismiss }) {
 
 /* ── Side panel drawer (desktop drawer + mobile full-screen fallback) ── */
 export function Drawer({ open, title, onClose, children, fullScreen = false }) {
+  const { t } = useI18n()
   useEffect(() => {
     if (open) document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = '' }
@@ -465,7 +512,7 @@ export function Drawer({ open, title, onClose, children, fullScreen = false }) {
       <div className="drawer" style={{ width: fullScreen ? '100%' : 480 }}>
         <div className="drawer-head">
           <h2 className="drawer-title">{title}</h2>
-          <button className="mini" onClick={onClose} aria-label="close drawer">✕</button>
+          <button className="mini" onClick={onClose} aria-label={t('common.close')}>✕</button>
         </div>
         <div className="drawer-body">{children}</div>
       </div>
@@ -501,14 +548,21 @@ export function CodeBlock({ lines, highlightLine }) {
 
 /* ── Severity badge ── */
 export function SeverityBadge({ severity, className = '' }) {
+  const { tOr } = useI18n()
   const s = (severity || 'unknown').toLowerCase()
-  return <span className={`sev sev-${s} ${className}`}>{severity?.toUpperCase?.() || 'UNKNOWN'}</span>
+  return <span className={`sev sev-${s} ${className}`}>
+    {tOr(`severity.${s}`, severity?.toUpperCase?.() || 'UNKNOWN')}
+  </span>
 }
 
 /* ── Status badge ── */
 export function StatusBadge({ status, className = '' }) {
+  const { tOr } = useI18n()
   const s = (status || 'unknown').toLowerCase()
-  return <span className={`st st-${s} ${className}`}>{status?.toLowerCase?.() || 'unknown'}</span>
+  const key = s.replace(/\s+/g, '_')
+  return <span className={`st st-${s} ${className}`}>
+    {tOr(`status.${key}`, status?.toLowerCase?.() || 'unknown')}
+  </span>
 }
 
 /* ── Pill (classification) ── */

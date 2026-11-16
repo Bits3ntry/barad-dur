@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react'
 import world from './world.json'
+import { useI18n } from './i18n'
 
 /* ────────────────────────────── where is this thing ──────────────────────────────
 
@@ -20,6 +21,7 @@ function project(lon, lat) {
 }
 
 export default function AssetMap({ points = [], reason = '', address = '' }) {
+  const { t } = useI18n()
   const paths = useMemo(() => world.rings.map((ring) => {
     const d = ring.map(([lon, lat], index) => {
       const [x, y] = project(lon, lat)
@@ -101,9 +103,9 @@ export default function AssetMap({ points = [], reason = '', address = '' }) {
         </div>
       ) : (
         <div className="map-caption">
-          <span className="map-place">location unknown</span>
+          <span className="map-place">{t('assets.map.locationUnknown')}</span>
           <span className="map-org">
-            {reason || 'no geolocator is configured for this deployment'}
+            {reason || t('assets.map.noGeolocator')}
           </span>
         </div>
       )}

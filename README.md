@@ -29,7 +29,7 @@ python3 -m venv /tmp/barad-venv
 | GitHub Action | `action/action.yml` | Composite adapter that installs the CLI; its EngineManager resolves the same pinned OpenGrep engine as local execution. |
 | Platform POC | `backend/` + `frontend/` + `compose.yaml` (`platform-api`) | The vulnerability-management POC: FastAPI service, React (JS) console and CI registry; see [docs/PLATFORM.md](docs/PLATFORM.md) for the 5-command quickstart and [architecture/AUDIT.md](docs/architecture/AUDIT.md) for the gate ledger. |
 | Tests | `tests/` | CLI, integration, workflow, evidence, and architectural contracts. |
-| Documentation | `docs/` | Current usage, architecture, and verification ledger. |
+| Documentation | `docs/` | Current usage, architecture, and verification ledger. The product's own user documentation lives in `frontend/src/guide/` and ships inside the console as **Help → Guide** (`#guide`); translations are described in [docs/i18n.md](docs/i18n.md). |
 
 
 ## Compose and data safety
@@ -58,6 +58,14 @@ docker compose config --quiet
 
 The verification ledger records checks actually performed and any remaining limits: [docs/architecture/AUDIT.md](docs/architecture/AUDIT.md).
 
-## Out of scope
+## Scope
 
-This repository does not implement a dashboard, custom API, MCP server, AI worker, Syft, or CycloneDX CLI.
+The platform is the API and console in `backend/` and `frontend/`; scanning runs in the
+sibling `shauron` repository. Syft and the CycloneDX CLI are not implemented here —
+the engines are invoked through Shauron.
+
+The AI harness is being built in phases (`docs/planning/ai-harness-and-mcp.md`). As of
+F0 the repository ships a **tool gateway** (`backend/src/backend/app/ai/`), two
+composite read endpoints (`GET /api/v1/deployment/chain`, `GET /api/v1/exposure/verdict`)
+and an **MCP server** (`mcp/`) that exposes that catalog. No model is called yet: the
+profiles, budgets and the chat arrive in F1–F2.

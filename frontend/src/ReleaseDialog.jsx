@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import { api } from './api'
+import { useI18n } from './i18n'
 import { Dialog } from './ui'
 
 /* One form for the whole release intent: which part, which build, where it runs,
@@ -23,6 +24,7 @@ const EMPTY = {
 
 export default function ReleaseDialog({ open, onClose, slug, components = [],
                                       versions = [], assets = [], onDone }) {
+  const { t, tOr } = useI18n()
   const [form, setForm] = useState(EMPTY)
   const [error, setError] = useState('')
   const [step, setStep] = useState('')
@@ -42,19 +44,19 @@ export default function ReleaseDialog({ open, onClose, slug, components = [],
   // path closes it explicitly.
   function submit() {
     if (!form.componentId && !form.componentName.trim()) {
-      setError('Choose a component or name a new one.')
+      setError(t('releaseDialog.error.component'))
       return false
     }
     if (!form.environment.trim()) {
-      setError('An environment is required — DEV, PRE, PRO…')
+      setError(t('releaseDialog.error.environment'))
       return false
     }
     if (!form.versionId && !form.versionLabel.trim() && !form.versionAuto) {
-      setError('Pick an existing version, name a new one, or let the endpoint read it.')
+      setError(t('releaseDialog.error.version'))
       return false
     }
     if (form.probe && !form.domain.trim() && !form.assetId) {
-      setError('A probe needs a domain to ask. Choose or type one, or turn the probe off.')
+      setError(t('releaseDialog.error.probeDomain'))
       return false
     }
     run()
@@ -131,34 +133,36 @@ export default function ReleaseDialog({ open, onClose, slug, components = [],
       setStep('')
       onDone?.(`${component?.name || form.componentName} ${form.versionLabel || ''}`
         + ` · ${form.environment}${domain ? ` · ${domain}` : ''}`
-        + `${form.probe && domain ? ' · probe daily' : ''}`)
+        + `${form.probe && domain ? t('releaseDialog.probeSuffix') : ''}`)
       setForm(EMPTY)
       onClose()
     } catch (problem) {
-      setError(`${at}: ${String(problem.message || problem)}`)
+      setError(t('releaseDialog.stepFailed', {
+        step: tOr(`releaseDialog.step.${at}`, at), message: String(problem.message || problem),
+      }))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <Dialog open={open} title="New environment" size="wide"
+    <Dialog open={open} title={t('releaseDialog.title')} size="wide"
       onClose={() => { if (!busy) onClose() }} onConfirm={submit}
-      confirmLabel={busy ? `saving ${step || '…'}` : 'create'}>
+      confirmLabel={busy
+        ? t('releaseDialog.saving', { step: step ? tOr(`releaseDialog.step.${step}`, step) : '…' })
+        : t('releaseDialog.create')}>
       <div className="release-form">
         <p className="muted release-intro">
-          One submission creates the pieces that only make sense together: the component if
-          you name a new one, the version, the environment, the domain that faces it and
-          the endpoint we ask for its version.
+          {t('releaseDialog.intro')}
         </p>
 
         <fieldset className="release-group">
-          <legend>What it is</legend>
+          <legend>{t('releaseDialog.group.identity')}</legend>
           <label className="field">
-            <span>component</span>
+            <span>{t('releaseDialog.component')}</span>
             <select value={form.componentId}
               onChange={(event) => set({ componentId: event.target.value, versionId: '' })}>
-              <option value="">— new component —</option>
+              <option value="">{t('releaseDialog.newComponent')}</option>
               {components.map((row) => (
                 <option key={row.id} value={row.id}>{row.name} · {row.kind}</option>
               ))}
@@ -167,12 +171,12 @@ export default function ReleaseDialog({ open, onClose, slug, components = [],
           {!form.componentId && (
             <div className="release-row">
               <label className="field">
-                <span>name</span>
-                <input value={form.componentName} placeholder="backend"
+                <span>{t('releaseDialog.name')}</span>
+                <input value={form.componentName} placeholder={t('releaseDialog.placeholder.name')}
                   onChange={(event) => set({ componentName: event.target.value })} />
               </label>
               <label className="field">
-                <span>kind</span>
+                <span>{t('releaseDialog.kind')}</span>
                 <select value={form.componentKind}
                   onChange={(event) => set({ componentKind: event.target.value })}>
                   {['backend', 'frontend', 'web', 'ios', 'android', 'worker',
@@ -185,7 +189,7 @@ export default function ReleaseDialog({ open, onClose, slug, components = [],
           )}
 
           <label className="field">
-            <span>version</span>
+            <span>{t('releaseDialog.version')}</span>
             <select value={form.versionAuto ? '__auto' : form.versionId}
               onChange={(event) => {
                 const value = event.target.value
@@ -194,21 +198,21 @@ export default function ReleaseDialog({ open, onClose, slug, components = [],
                 else set({ versionAuto: false, versionId: value, versionLabel: '' })
               }}
               disabled={!form.componentId}>
-              <option value="">— new version —</option>
+              <option value="">{t('releaseDialog.newVersion')}</option>
               {componentVersions.map((row) => (
                 <option key={row.id} value={row.id}>{row.version}</option>
               ))}
-              <option value="__auto">read it from the endpoint</option>
+              <option value="__auto">{t('releaseDialog.readFromEndpoint')}</option>
             </select>
           </label>
           {!form.componentId && (
             <p className="muted release-hint">
-              Pick the component first: versions belong to one part, not to the product.
+              {t('releaseDialog.versionHint')}
             </p>
           )}
           {form.componentId && !form.versionId && !form.versionAuto && (
             <label className="field">
-              <span>new version label</span>
+              <span>{t('releaseDialog.newVersionLabel')}</span>
               <input value={form.versionLabel} placeholder="1.9"
                 onChange={(event) => set({ versionLabel: event.target.value })} />
             </label>
@@ -216,10 +220,10 @@ export default function ReleaseDialog({ open, onClose, slug, components = [],
         </fieldset>
 
         <fieldset className="release-group">
-          <legend>Where it runs</legend>
+          <legend>{t('releaseDialog.group.runs')}</legend>
           <div className="release-row">
             <label className="field">
-              <span>environment</span>
+              <span>{t('releaseDialog.environment')}</span>
               <input list="release-environments" value={form.environment}
                 onChange={(event) => set({ environment: event.target.value })} />
               <datalist id="release-environments">
@@ -227,7 +231,7 @@ export default function ReleaseDialog({ open, onClose, slug, components = [],
               </datalist>
             </label>
             <label className="field">
-              <span>exposure</span>
+              <span>{t('releaseDialog.exposure')}</span>
               <select value={form.exposure}
                 onChange={(event) => set({ exposure: event.target.value })}>
                 {['unknown', 'internal', 'public'].map((value) => (
@@ -239,18 +243,18 @@ export default function ReleaseDialog({ open, onClose, slug, components = [],
           <label className="row release-check">
             <input type="checkbox" checked={form.requiresAuth}
               onChange={(event) => set({ requiresAuth: event.target.checked })} />
-            requires authentication
+            {t('releaseDialog.requiresAuth')}
           </label>
         </fieldset>
 
         <fieldset className="release-group">
-          <legend>Domain</legend>
+          <legend>{t('releaseDialog.group.domain')}</legend>
           <div className="release-row">
             <label className="field">
-              <span>known asset</span>
+              <span>{t('releaseDialog.knownAsset')}</span>
               <select value={form.assetId}
                 onChange={(event) => set({ assetId: event.target.value, domain: '' })}>
-                <option value="">— new domain —</option>
+                <option value="">{t('releaseDialog.newDomain')}</option>
                 {assets.map((row) => (
                   <option key={row.id} value={row.id}>{row.value}</option>
                 ))}
@@ -258,7 +262,7 @@ export default function ReleaseDialog({ open, onClose, slug, components = [],
             </label>
             {!form.assetId && (
               <label className="field">
-                <span>hostname</span>
+                <span>{t('releaseDialog.hostname')}</span>
                 <input value={form.domain} placeholder="api.dev.example.com"
                   onChange={(event) => set({ domain: event.target.value })} />
               </label>
@@ -267,34 +271,33 @@ export default function ReleaseDialog({ open, onClose, slug, components = [],
         </fieldset>
 
         <fieldset className="release-group">
-          <legend>How we learn its version</legend>
+          <legend>{t('releaseDialog.group.versionSource')}</legend>
           <label className="row release-check">
             <input type="checkbox" checked={form.probe}
               onChange={(event) => set({ probe: event.target.checked })} />
-            ask the deployment for its version
+            {t('releaseDialog.probeToggle')}
           </label>
           {form.probe && (
             <>
               <div className="release-row">
                 <label className="field">
-                  <span>endpoint path</span>
+                  <span>{t('releaseDialog.endpointPath')}</span>
                   <input value={form.probePath} placeholder="/health"
                     onChange={(event) => set({ probePath: event.target.value })} />
                 </label>
                 <label className="field">
-                  <span>version field</span>
+                  <span>{t('releaseDialog.versionField')}</span>
                   <input value={form.versionPath} placeholder="auto"
                     onChange={(event) => set({ versionPath: event.target.value })} />
                 </label>
                 <label className="field">
-                  <span>every (hours)</span>
+                  <span>{t('releaseDialog.intervalHours')}</span>
                   <input type="number" min="1" max="168" value={form.intervalHours}
                     onChange={(event) => set({ intervalHours: event.target.value })} />
                 </label>
               </div>
               <p className="muted release-hint">
-                A read-only GET against the domain above. If the version it returns is not
-                named yet, it is created inside this component — never duplicated.
+                {t('releaseDialog.probeHint')}
               </p>
             </>
           )}

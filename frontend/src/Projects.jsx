@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
+import { useI18n } from './i18n'
 import { Card, Dialog, ErrorBanner, Loading, PageHeader, Stat,
-  SeverityBadge, Tabs } from './ui'
+  SeverityBadge, Tabs, queueHash } from './ui'
 import ProjectsPortfolio from './ProjectsPortfolio'
 import ProjectRuntimeGraph from './ProjectRuntimeGraph'
 import ProjectVerification from './ProjectVerification'
@@ -17,9 +18,9 @@ import ReleaseDialog from './ReleaseDialog'
    supply-chain view did not disappear when inventory became the entry point. */
 
 const TABS = [
-  { id: 'projects', label: 'Projects' },
-  { id: 'pending', label: 'Catalogue' },
-  { id: 'portfolio', label: 'SBOM portfolio' },
+  { id: 'projects', labelKey: 'projects.tab.projects' },
+  { id: 'pending', labelKey: 'projects.tab.catalogue' },
+  { id: 'portfolio', labelKey: 'projects.tab.portfolio' },
 ]
 
 const COMPONENT_KINDS = ['backend', 'frontend', 'web', 'ios', 'android', 'worker',
@@ -28,32 +29,35 @@ const EXPOSURES = ['unknown', 'internal', 'public']
 const ASSET_KINDS = ['domain', 'subdomain', 'url', 'ip', 'api', 'mobile_app']
 
 const PROJECT_TABS = [
-  { id: 'summary', label: 'Summary' },
-  { id: 'components', label: 'Components' },
-  { id: 'environments', label: 'Environments' },
-  { id: 'assets', label: 'Assets' },
+  { id: 'summary', labelKey: 'projects.tab.summary' },
+  { id: 'components', labelKey: 'projects.tab.components' },
+  { id: 'environments', labelKey: 'projects.tab.environments' },
+  { id: 'assets', labelKey: 'projects.tab.assets' },
 ]
 
-function unit(count, singular, pluralForm) {
-  return count === 1 ? singular : (pluralForm || `${singular}s`)
+/* Counts live in the catalogue, not in a suffix: "1 versión" and "3 versiones"
+   share a noun but not its plural, and English is not the only language here. */
+function unit(tCount, key, count) {
+  return tCount(`projects.unit.${key}`, count)
 }
 
-function plural(count, singular, pluralForm) {
-  return `${count} ${count === 1 ? singular : (pluralForm || `${singular}s`)}`
+function plural(tCount, key, count) {
+  return tCount(`projects.count.${key}`, count)
 }
 
 function VersionVulnerabilities({ rows }) {
+  const { t, tCount } = useI18n()
   if (!rows.length) return null
   return (
     <tr className="version-vulnerabilities"><td colSpan="3">
       <div className="version-vulnerability-list">
-        <strong>{plural(rows.length, 'vulnerability')}</strong>
+        <strong>{plural(tCount, 'vulnerability', rows.length)}</strong>
         {rows.map((row) => (
           <div className="row" key={row.id}>
             <span className="mono">{row.cve_id || row.signature}</span>
             <SeverityBadge severity={row.severity} />
-            <span className="muted">{row.title || 'untitled finding'}</span>
-            <span className="count">{plural(row.open_findings, 'open finding')}</span>
+            <span className="muted">{row.title || t('projects.finding.untitled')}</span>
+            <span className="count">{plural(tCount, 'openFinding', row.open_findings)}</span>
           </div>
         ))}
       </div>
@@ -76,12 +80,14 @@ function shortLabel(value) {
 const BAR_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
 
 function SeverityBar({ counts = {}, width = 96 }) {
+  const { t, tCount } = useI18n()
   const shown = BAR_ORDER.filter((severity) => counts[severity] > 0)
   const total = shown.reduce((sum, severity) => sum + counts[severity], 0)
-  if (!total) return <span className="sev-bar is-empty" style={{ width }} title="no open finding" />
+  if (!total) return <span className="sev-bar is-empty" style={{ width }} title={t('projects.severity.barEmpty')} />
   return (
     <span className="sev-bar" style={{ width }}
-      title={shown.map((severity) => `${counts[severity]} ${severity.toLowerCase()}`).join(' · ')}>
+      title={shown.map((severity) => tCount(
+        `projects.severity.tip.${severity.toLowerCase()}`, counts[severity])).join(' · ')}>
       {shown.map((severity) => (
         <i key={severity} className={`sev-bar-${severity.toLowerCase()}`}
           style={{ flexGrow: counts[severity] }} />
@@ -91,14 +97,12 @@ function SeverityBar({ counts = {}, width = 96 }) {
 }
 
 function NeedsAttribution({ intakes, components, versions, busy, onAssign }) {
+  const { t, tCount } = useI18n()
   if (!intakes.length) return null
   return (
-    <Card title="Needs attribution"
-      actions={<span className="count">{plural(intakes.length, 'CI scan')}</span>}>
-      <p className="muted attribution-intro">
-        These scans reached this project through a repository, but could not be tied to one
-        component. Choose the component before the scan can proceed; a version is optional.
-      </p>
+    <Card title={t('projects.attribution.title')}
+      actions={<span className="count">{plural(tCount, 'ciScan', intakes.length)}</span>}>
+      <p className="muted attribution-intro">{t('projects.attribution.intro')}</p>
       <div className="attribution-list">
         {intakes.map((intake) => (
           <AttributionIntake key={intake.id} intake={intake} components={components}
@@ -111,6 +115,7 @@ function NeedsAttribution({ intakes, components, versions, busy, onAssign }) {
 }
 
 function AttributionIntake({ intake, components, versions, busy, onAssign }) {
+  const { t } = useI18n()
   const suggested = components.find((component) => intake.candidates?.includes(component.id))
   const [componentId, setComponentId] = useState(suggested?.id || '')
   const [versionId, setVersionId] = useState('')
@@ -122,7 +127,7 @@ function AttributionIntake({ intake, components, versions, busy, onAssign }) {
   async function submit(event) {
     event.preventDefault()
     if (!componentId) {
-      setLocalError('Choose the component that owns this scan.')
+      setLocalError(t('projects.attribution.chooseComponent'))
       return
     }
     setLocalError('')
@@ -141,49 +146,54 @@ function AttributionIntake({ intake, components, versions, busy, onAssign }) {
   return (
     <section className="attribution-intake">
       <div className="attribution-subject">
-        <strong className="mono">{subject.repository || 'repository not recorded'}</strong>
+        <strong className="mono">{subject.repository || t('projects.attribution.repositoryMissing')}</strong>
         <span className="muted">
           {[subject.branch, subject.commit && String(subject.commit).slice(0, 12),
-            subject.pull_request && `PR ${subject.pull_request}`].filter(Boolean).join(' · ') ||
-            'CI scan awaiting an owner'}
+            subject.pull_request && t('projects.attribution.pr', { n: subject.pull_request })]
+            .filter(Boolean).join(' · ') || t('projects.attribution.awaitingOwner')}
         </span>
-        {subject.version && <span className="pill mono">reported {subject.version}</span>}
+        {subject.version && (
+          <span className="pill mono">{t('projects.attribution.reported', { version: subject.version })}</span>
+        )}
       </div>
       <form className="attribution-form" onSubmit={submit}>
         <label>
-          Component
+          {t('projects.field.component')}
           <select value={componentId} disabled={busy} onChange={(event) => {
             setComponentId(event.target.value)
             setVersionId('')
           }}>
-            <option value="">choose component…</option>
+            <option value="">{t('projects.choose.component')}</option>
             {components.map((component) => (
               <option key={component.id} value={component.id}>
-                {component.name}{intake.candidates?.includes(component.id) ? ' · suggested' : ''}
+                {component.name}{intake.candidates?.includes(component.id)
+                  ? ` · ${t('projects.attribution.suggested')}` : ''}
               </option>
             ))}
           </select>
         </label>
         <label>
-          Version <span className="onb-optional">optional</span>
+          {t('projects.field.version')} <span className="onb-optional">{t('projects.optional')}</span>
           <select value={versionId} disabled={busy || !componentId}
             onChange={(event) => setVersionId(event.target.value)}>
-            <option value="">no version</option>
+            <option value="">{t('projects.option.noVersion')}</option>
             {componentVersions.map((version) => (
               <option key={version.id} value={version.id}>{version.version}</option>
             ))}
           </select>
         </label>
         <label className="attribution-note">
-          Note <span className="onb-optional">optional</span>
-          <input value={note} disabled={busy} placeholder="Why this component owns the scan"
+          {t('projects.field.note')} <span className="onb-optional">{t('projects.optional')}</span>
+          <input value={note} disabled={busy} placeholder={t('projects.attribution.notePlaceholder')}
             onChange={(event) => setNote(event.target.value)} />
         </label>
         <button className="btn-primary" type="submit" disabled={busy || !components.length}>
-          {busy ? 'assigning…' : 'assign'}
+          {busy ? t('projects.action.assigning') : t('projects.action.assign')}
         </button>
       </form>
-      {!components.length && <p className="attribution-error">Add a component before assigning this scan.</p>}
+      {!components.length && (
+        <p className="attribution-error">{t('projects.attribution.addComponentFirst')}</p>
+      )}
       {localError && <p className="attribution-error" role="alert">{localError}</p>}
     </section>
   )
@@ -195,22 +205,30 @@ function slugify(value) {
 }
 
 // An interval stored in minutes, said the way a person says it.
-function cadence(minutes) {
-  if (!minutes) return 'manual only'
-  if (minutes % 1440 === 0) return minutes / 1440 === 1 ? 'daily' : `every ${minutes / 1440}d`
-  if (minutes % 60 === 0) return minutes / 60 === 1 ? 'hourly' : `every ${minutes / 60}h`
-  return `every ${minutes}m`
+function cadence(t, minutes) {
+  if (!minutes) return t('projects.cadence.manual')
+  if (minutes % 1440 === 0) {
+    return minutes / 1440 === 1
+      ? t('projects.cadence.daily')
+      : t('projects.cadence.everyDays', { n: minutes / 1440 })
+  }
+  if (minutes % 60 === 0) {
+    return minutes / 60 === 1
+      ? t('projects.cadence.hourly')
+      : t('projects.cadence.everyHours', { n: minutes / 60 })
+  }
+  return t('projects.cadence.everyMinutes', { n: minutes })
 }
 
-function dueLabel(iso) {
+function dueLabel(t, iso) {
   const ms = new Date(iso).getTime() - Date.now()
   if (!Number.isFinite(ms)) return ''
-  if (ms <= 0) return 'due now'
+  if (ms <= 0) return t('projects.due.now')
   const minutes = Math.round(ms / 60000)
-  if (minutes < 60) return `next in ${Math.max(minutes, 1)}m`
+  if (minutes < 60) return t('projects.due.minutes', { n: Math.max(minutes, 1) })
   const hours = Math.round(minutes / 60)
-  if (hours < 48) return `next in ${hours}h`
-  return `next in ${Math.round(hours / 24)}d`
+  if (hours < 48) return t('projects.due.hours', { n: hours })
+  return t('projects.due.days', { n: Math.round(hours / 24) })
 }
 
 function fail(setError) {
@@ -219,12 +237,16 @@ function fail(setError) {
 
 export default function Projects({ onNavigate, slug = '', tab = 'summary',
                                    onOpenProject, onOpenVersion, onProjectTab, onCloseProject }) {
+  const { t, tCount } = useI18n()
   const [view, setView] = useState('projects')
   const [list, setList] = useState(null)
   const [pending, setPending] = useState(null)
   const [error, setError] = useState('')
   const [creating, setCreating] = useState(false)
   const [busy, setBusy] = useState('')
+  // Which rows asked to take their subdomains with them. React state, not a DOM
+  // read: an uncontrolled checkbox inside a row that re-renders loses its tick.
+  const [withKids, setWithKids] = useState({})
   const [filter, setFilter] = useState('')
 
   function loadProjects() {
@@ -265,13 +287,14 @@ export default function Projects({ onNavigate, slug = '', tab = 'summary',
     if (onOpenProject) onOpenProject(result.data.slug)
   }
 
-  async function fileAsset(asset, projectSlug) {
+  async function fileAsset(asset, projectSlug, includeChildren = false) {
     if (!projectSlug) return
     setBusy(`file:${asset.id}`)
     setError('')
     try {
       await api.post(`/api/v1/assets/${asset.id}/catalog`,
-        { project: projectSlug, actor: 'console' })
+        { project: projectSlug, actor: 'console',
+          include_children: Boolean(includeChildren) })
       await Promise.all([loadPending(), loadProjects()])
     } catch (e) {
       setError(String(e.message || e))
@@ -303,19 +326,24 @@ export default function Projects({ onNavigate, slug = '', tab = 'summary',
   return (
     <div className="stack">
       <PageHeader
-        title="Projects"
-        subtitle="Products you own, their parts, the code behind them and the version running in each environment. Inventory only — nothing here starts a scan."
+        title={t('projects.title')}
+        subtitle={t('projects.subtitle')}
         actions={(
           <>
             {(list || []).length > 0 && (
-              <button className="btn-primary mini" onClick={() => setCreating(true)}>new project</button>
+              <button className="btn-primary mini" onClick={() => setCreating(true)}>
+                {t('projects.action.newProject')}
+              </button>
             )}
-            <button className="mini" onClick={() => { loadProjects(); loadPending() }}>refresh</button>
+            <button className="mini" onClick={() => { loadProjects(); loadPending() }}>
+              {t('common.refresh')}
+            </button>
           </>
         )}
       />
 
-      <Tabs tabs={TABS} active={view} onChange={setView} />
+      <Tabs tabs={TABS.map((entry) => ({ ...entry, label: t(entry.labelKey) }))}
+        active={view} onChange={setView} />
 
       {error && <ErrorBanner error={error} onRetry={() => { loadProjects(); loadPending() }} />}
 
@@ -325,46 +353,45 @@ export default function Projects({ onNavigate, slug = '', tab = 'summary',
         !list ? <Card><Loading rows={4} /></Card> : (
           <>
             <p className="inventory-summary">
-              <strong>{projects.length}</strong> {unit(projects.length, 'project')} ·
-              <strong>{sum(projects, 'components')}</strong> {unit(sum(projects, 'components'), 'component')} ·
-              <strong>{new Set(projects.flatMap((p) => p.counts?.environments || [])).size}</strong> {unit(new Set(projects.flatMap((p) => p.counts?.environments || [])).size, 'environment')} ·
-              <strong>{sum(projects, 'repositories')}</strong> {unit(sum(projects, 'repositories'), 'repository', 'repositories')} ·
-              <strong>{sum(projects, 'assets')}</strong> {unit(sum(projects, 'assets'), 'asset')}
+              <strong>{projects.length}</strong> {unit(tCount, 'project', projects.length)} ·
+              <strong>{sum(projects, 'components')}</strong> {unit(tCount, 'component', sum(projects, 'components'))} ·
+              <strong>{new Set(projects.flatMap((p) => p.counts?.environments || [])).size}</strong> {unit(tCount, 'environment', new Set(projects.flatMap((p) => p.counts?.environments || [])).size)} ·
+              <strong>{sum(projects, 'repositories')}</strong> {unit(tCount, 'repository', sum(projects, 'repositories'))} ·
+              <strong>{sum(projects, 'assets')}</strong> {unit(tCount, 'asset', sum(projects, 'assets'))}
             </p>
 
             {!projects.length ? (
               <Card>
                 <div className="onb-empty-state">
-                  <h2>No projects yet</h2>
-                  <p>
-                    A project groups everything you own for one product: its components
-                    (backend, web, iOS…), the repositories behind them and the version
-                    running in each environment. Recording it needs no scan.
-                  </p>
+                  <h2>{t('projects.empty.title')}</h2>
+                  <p>{t('projects.empty.body')}</p>
                   <ol className="onb-empty-steps">
-                    <li><strong>1.</strong> Name the product and who owns it</li>
-                    <li><strong>2.</strong> Add its parts and the code behind them</li>
-                    <li><strong>3.</strong> Record what runs in DEV, PRE and PRO</li>
+                    <li><strong>1.</strong> {t('projects.empty.step1')}</li>
+                    <li><strong>2.</strong> {t('projects.empty.step2')}</li>
+                    <li><strong>3.</strong> {t('projects.empty.step3')}</li>
                   </ol>
                   <button className="btn-primary" onClick={() => setCreating(true)}>
-                    create the first project
+                    {t('projects.empty.action')}
                   </button>
                 </div>
               </Card>
             ) : (
-              <Card title="Inventory"
+              <Card title={t('projects.inventory.title')}
                 actions={(
                   <div className="row">
-                    <input placeholder="filter name, group or owner" value={filter}
+                    <input placeholder={t('projects.inventory.filter')} value={filter}
                       onChange={(e) => setFilter(e.target.value)} style={{ minWidth: 220 }} />
-                    <span className="count">{visible.length} of {projects.length}</span>
+                    <span className="count">{t('projects.inventory.count', {
+                      visible: visible.length, total: projects.length })}</span>
                   </div>
                 )}>
                 <table>
                   <thead>
-                    <tr><th>project</th><th>group</th><th>owner</th><th>components</th>
-                      <th>environments</th><th>deployments</th><th>repositories</th><th>assets</th>
-                      <th>actions</th></tr>
+                    <tr><th>{t('projects.col.project')}</th><th>{t('projects.col.group')}</th>
+                      <th>{t('common.owner')}</th><th>{t('projects.col.components')}</th>
+                      <th>{t('projects.col.environments')}</th><th>{t('projects.col.deployments')}</th>
+                      <th>{t('projects.col.repositories')}</th><th>{t('projects.col.assets')}</th>
+                      <th>{t('common.actions')}</th></tr>
                   </thead>
                   <tbody>
                     {visible.map((project) => (
@@ -395,13 +422,15 @@ export default function Projects({ onNavigate, slug = '', tab = 'summary',
                         <td>
                           <button className="mini" onClick={(e) => {
                             e.stopPropagation(); if (onOpenProject) onOpenProject(project.slug)
-                          }}>open</button>
+                          }}>{t('common.open')}</button>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                {!visible.length && <p className="muted">Nothing matches “{filter.trim()}”.</p>}
+                {!visible.length && (
+                  <p className="muted">{t('projects.inventory.noMatch', { filter: filter.trim() })}</p>
+                )}
               </Card>
             )}
           </>
@@ -410,18 +439,20 @@ export default function Projects({ onNavigate, slug = '', tab = 'summary',
 
       {view === 'pending' && (
         <>
-          <Card title="Discovered but not filed"
-            actions={<span className="count">{pendingRows.length} assets</span>}>
-            <p className="muted" style={{ marginTop: 0 }}>
-              Discovery adds candidates here. Filing one says “this is ours and it belongs to
-              this project”; it does not put it in scope and grants nothing.
-            </p>
+          <Card title={t('projects.pending.title')}
+            actions={<span className="count">
+              {pending?.total && pending.total > pendingRows.length
+                ? t('projects.pending.showing', { shown: pendingRows.length, total: pending.total })
+                : unit(tCount, 'asset', pendingRows.length)}
+            </span>}>
+            <p className="muted" style={{ marginTop: 0 }}>{t('projects.pending.intro')}</p>
             {!pendingRows.length
-              ? <p className="muted">Nothing to catalogue. Assets appear here after discovery finds them.</p>
+              ? <p className="muted">{t('projects.pending.empty')}</p>
               : (
                 <table>
-                  <thead><tr><th>asset</th><th>type</th><th>source</th><th>discovered</th>
-                    <th>file under</th></tr></thead>
+                  <thead><tr><th>{t('projects.col.asset')}</th><th>{t('projects.col.type')}</th>
+                    <th>{t('common.source')}</th><th>{t('projects.col.discovered')}</th>
+                    <th>{t('projects.pending.fileUnder')}</th></tr></thead>
                   <tbody>
                     {pendingRows.map((asset) => (
                       <tr key={asset.id}>
@@ -433,15 +464,26 @@ export default function Projects({ onNavigate, slug = '', tab = 'summary',
                         <td>
                           <div className="row">
                             <select defaultValue="" id={`file-${asset.id}`}>
-                              <option value="">choose project…</option>
+                              <option value="">{t('projects.choose.project')}</option>
                               {(pending?.projects || []).map((project) => (
                                 <option key={project.id} value={project.slug}>{project.name}</option>
                               ))}
                             </select>
+                            {asset.type === 'domain' && (
+                              <label className="file-children"
+                                     title={t('projects.pending.withKidsHint')}>
+                                <input type="checkbox"
+                                       checked={Boolean(withKids[asset.id])}
+                                       onChange={(event) => setWithKids((state) => ({
+                                         ...state, [asset.id]: event.target.checked }))} />
+                                {t('projects.pending.withKids')}
+                              </label>
+                            )}
                             <button className="mini" disabled={busy === `file:${asset.id}`}
                               onClick={() => fileAsset(asset,
-                                document.getElementById(`file-${asset.id}`).value)}>
-                              {busy === `file:${asset.id}` ? 'filing…' : 'file'}
+                                document.getElementById(`file-${asset.id}`).value,
+                                withKids[asset.id])}>
+                              {busy === `file:${asset.id}` ? t('projects.action.filing') : t('projects.action.file')}
                             </button>
                           </div>
                         </td>
@@ -471,6 +513,7 @@ function sum(projects, key) {
    name, who owns it, what it does — plus, on creation, the first component, so
    a new project is never an empty shell. */
 function ProjectForm({ mode, initial, groups = [], onClose, onSubmit }) {
+  const { t } = useI18n()
   const [form, setForm] = useState({
     name: initial?.name || '',
     slug: '',
@@ -488,11 +531,11 @@ function ProjectForm({ mode, initial, groups = [], onClose, onSubmit }) {
     event.preventDefault()
     setError('')
     if (form.name.trim().length < 2) {
-      setError('A project needs a name of at least 2 characters.')
+      setError(t('projects.error.nameTooShort'))
       return
     }
     if (mode === 'create' && preview.length < 2) {
-      setError('That name produces no usable identifier; use letters or digits.')
+      setError(t('projects.error.noIdentifier'))
       return
     }
     setBusy(true)
@@ -504,84 +547,83 @@ function ProjectForm({ mode, initial, groups = [], onClose, onSubmit }) {
   }
 
   return (
-    <Dialog open hideFooter title={mode === 'create' ? 'New project' : `Edit ${initial.name}`}
+    <Dialog open hideFooter
+      title={mode === 'create'
+        ? t('projects.dialog.newProject')
+        : t('projects.dialog.editProject', { name: initial.name })}
       onClose={onClose} body={(
         <form className="onb-form" onSubmit={submit}>
-          <p className="onb-help" style={{ margin: 0 }}>
-            A project is one product you own. Its components, code and environments live
-            inside it — you can add them right after this.
-          </p>
+          <p className="onb-help" style={{ margin: 0 }}>{t('projects.form.intro')}</p>
 
           <div className="onb-grid">
             <label>
-              Project name
+              {t('projects.field.projectName')}
               <input autoFocus value={form.name} placeholder="AUREA"
                 onChange={(e) => setForm({ ...form, name: e.target.value })} />
             </label>
             <label>
-              Group <span className="onb-optional">optional</span>
+              {t('projects.field.group')} <span className="onb-optional">{t('projects.optional')}</span>
               <input value={form.group} placeholder="Bitsentry" list="project-groups"
                 onChange={(e) => setForm({ ...form, group: e.target.value })} />
               <datalist id="project-groups">
                 {groups.map((group) => <option key={group} value={group} />)}
               </datalist>
-              <span className="onb-help">The product line or account it belongs to.</span>
+              <span className="onb-help">{t('projects.field.groupHint')}</span>
             </label>
             <label>
-              Owner <span className="onb-optional">optional</span>
+              {t('projects.field.owner')} <span className="onb-optional">{t('projects.optional')}</span>
               <input value={form.owner} placeholder="ana@bitsentry.xyz"
                 onChange={(e) => setForm({ ...form, owner: e.target.value })} />
-              <span className="onb-help">Who answers for this product.</span>
+              <span className="onb-help">{t('projects.field.ownerHint')}</span>
             </label>
             <label>
-              Identifier
+              {t('projects.field.identifier')}
               <input value={mode === 'create' ? form.slug : preview} readOnly={mode === 'edit'}
                 placeholder={slugify(form.name) || 'aurea'}
                 onChange={(e) => setForm({ ...form, slug: slugify(e.target.value) })} />
               <span className="onb-help">
                 {mode === 'create'
-                  ? `Used in URLs and filters: /projects/${preview || '…'} — it cannot be changed after creation`
-                  : 'The identifier never changes; only the display name does.'}
+                  ? t('projects.field.identifierHintNew', { slug: preview || '…' })
+                  : t('projects.field.identifierHintEdit')}
               </span>
             </label>
           </div>
 
           <label>
-            What it does <span className="onb-optional">optional</span>
+            {t('projects.field.description')} <span className="onb-optional">{t('projects.optional')}</span>
             <textarea rows={2} value={form.description}
-              placeholder="Customer app and its APIs, used by the retail team."
+              placeholder={t('projects.field.descriptionPlaceholder')}
               onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </label>
 
           {mode === 'create' && (
             <div className="onb-inline-section">
-              <span className="onb-section-label">First component · optional</span>
+              <span className="onb-section-label">{t('projects.form.firstComponent')}</span>
               <div className="onb-grid">
                 <label>
-                  Name
+                  {t('projects.field.name')}
                   <input value={form.componentName} placeholder="Backend"
                     onChange={(e) => setForm({ ...form, componentName: e.target.value })} />
                 </label>
                 <label>
-                  Component type
+                  {t('projects.field.componentKind')}
                   <select value={form.componentKind}
                     onChange={(e) => setForm({ ...form, componentKind: e.target.value })}>
                     {COMPONENT_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
                   </select>
                 </label>
               </div>
-              <span className="onb-help">
-                A part of the product: backend, web, iOS, Android… You can add the rest later.
-              </span>
+              <span className="onb-help">{t('projects.form.kindHint')}</span>
             </div>
           )}
 
           {error && <p className="banner banner-error" role="alert">{error}</p>}
 
           <div className="row-end">
-            <button className="mini" type="button" onClick={onClose}>cancel</button>
+            <button className="mini" type="button" onClick={onClose}>{t('common.cancel')}</button>
             <button className="btn-primary" type="submit" disabled={busy}>
-              {busy ? 'saving…' : (mode === 'create' ? 'create project' : 'save changes')}
+              {busy ? t('projects.action.saving')
+                : (mode === 'create' ? t('projects.action.createProject') : t('projects.action.saveChanges'))}
             </button>
           </div>
         </form>
@@ -592,6 +634,7 @@ function ProjectForm({ mode, initial, groups = [], onClose, onSubmit }) {
 /* ───────────────────────── one project ───────────────────────── */
 
 function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNavigate, onOpenVersion }) {
+  const { t, tCount } = useI18n()
   const [data, setData] = useState(null)
   const [attributionIntakes, setAttributionIntakes] = useState([])
   const [tab, setTab] = useState(initialTab)
@@ -609,6 +652,9 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState('')
+  // Which rows asked to take their subdomains with them. React state, not a DOM
+  // read: an uncontrolled checkbox inside a row that re-renders loses its tick.
+  const [withKids, setWithKids] = useState({})
   const [dialog, setDialog] = useState(null)  // {kind, row?}
   const [releaseOpen, setReleaseOpen] = useState(false)
   // Components are accordions: a project with forty parts must not paint forty
@@ -687,7 +733,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
     setNotice('')
     try {
       await api.post(`/api/v1/scans/attribution-intakes/${encodeURIComponent(intake.id)}/assign`, assignment)
-      setNotice('CI scan assigned to its component.')
+      setNotice(t('projects.notice.ciScanAssigned'))
       await load()
       return true
     } catch (e) {
@@ -699,7 +745,8 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
   if (!data) {
     return (
       <div className="stack">
-        <PageHeader title="Project" actions={<button className="mini" onClick={onBack}>← all projects</button>} />
+        <PageHeader title={t('projects.detail.title')}
+          actions={<button className="mini" onClick={onBack}>{t('projects.action.allProjects')}</button>} />
         <Card>{error ? <ErrorBanner error={error} onRetry={load} /> : <Loading rows={5} />}</Card>
       </div>
     )
@@ -713,8 +760,8 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
 
   return (
     <div className="stack">
-      <nav className="project-crumb" aria-label="Breadcrumb">
-        <button type="button" onClick={onBack}>Projects</button>
+      <nav className="project-crumb" aria-label={t('projects.crumb.aria')}>
+        <button type="button" onClick={onBack}>{t('projects.title')}</button>
         <span className="sep" aria-hidden="true">/</span>
         <span aria-current="page">{project.slug}</span>
       </nav>
@@ -724,20 +771,26 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
         subtitle={project.description}
         actions={(
           <>
-            <button className="mini" onClick={onBack}>← all projects</button>
-            <button className="mini" onClick={() => setEditing(true)}>edit project</button>
-            <button className="mini" onClick={load}>refresh</button>
+            <button className="mini" onClick={onBack}>{t('projects.action.allProjects')}</button>
+            <button className="mini" onClick={() => setEditing(true)}>
+              {t('projects.action.editProject')}
+            </button>
+            <button className="mini" onClick={load}>{t('common.refresh')}</button>
           </>
         )}
       />
 
       <dl className="project-meta">
-        <div className="meta-item"><dt>identifier</dt><dd>{project.slug}</dd></div>
-        {project.group && <div className="meta-item"><dt>group</dt><dd>{project.group}</dd></div>}
-        {project.owner && <div className="meta-item"><dt>owner</dt><dd>{project.owner}</dd></div>}
-        <div className="meta-item"><dt>components</dt><dd>{components.length}</dd></div>
-        <div className="meta-item"><dt>environments</dt><dd>{environments.length}</dd></div>
-        <div className="meta-item"><dt>assets</dt><dd>{assets.length}</dd></div>
+        <div className="meta-item"><dt>{t('projects.meta.identifier')}</dt><dd>{project.slug}</dd></div>
+        {project.group && (
+          <div className="meta-item"><dt>{t('projects.col.group')}</dt><dd>{project.group}</dd></div>
+        )}
+        {project.owner && (
+          <div className="meta-item"><dt>{t('common.owner')}</dt><dd>{project.owner}</dd></div>
+        )}
+        <div className="meta-item"><dt>{t('projects.col.components')}</dt><dd>{components.length}</dd></div>
+        <div className="meta-item"><dt>{t('projects.col.environments')}</dt><dd>{environments.length}</dd></div>
+        <div className="meta-item"><dt>{t('projects.col.assets')}</dt><dd>{assets.length}</dd></div>
       </dl>
 
       {editing && (
@@ -752,7 +805,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
               actor: 'console',
             })
             setEditing(false)
-            setNotice('Project updated.')
+            setNotice(t('projects.notice.updated'))
             await load()
           }} />
       )}
@@ -762,45 +815,48 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
         <div className="inv-notice" role="status">
           <span>{notice}</span>
           <button className="mini ghost" onClick={() => setNotice('')}
-            aria-label="dismiss message">✕</button>
+            aria-label={t('projects.notice.dismiss')}>✕</button>
         </div>
       )}
 
-      <Tabs tabs={PROJECT_TABS} active={tab} onChange={chooseTab} />
+      <Tabs tabs={PROJECT_TABS.map((entry) => ({ ...entry, label: t(entry.labelKey) }))}
+        active={tab} onChange={chooseTab} />
 
       {tab === 'summary' && (
         <>
           <Card tight>
             <div className="metrics">
-              <Stat label={unit(components.length, 'component')} value={components.length} />
-              <Stat label={unit(versions.length, 'version')} value={versions.length} />
-              <Stat label={unit(environments.length, 'environment')} value={environments.length} />
-              <Stat label={unit(assets.length, 'asset')} value={assets.length} />
+              <Stat label={unit(tCount, 'component', components.length)} value={components.length} />
+              <Stat label={unit(tCount, 'version', versions.length)} value={versions.length} />
+              <Stat label={unit(tCount, 'environment', environments.length)} value={environments.length} />
+              <Stat label={unit(tCount, 'asset', assets.length)} value={assets.length} />
             </div>
           </Card>
 
           {/* Once all four are recorded the checklist has nothing left to say:
               the metrics and the graph below are the summary. It comes back the
               moment one of them empties. */}
-          {!setupComplete && <Card title="Setup path"
+          {!setupComplete && <Card title={t('projects.setup.title')}
             actions={<span className="count">
-              {[components.length, versions.length, deployments.length, assets.length]
-                .filter(Boolean).length} of 4 recorded
+              {t('projects.setup.recorded', {
+                n: [components.length, versions.length, deployments.length, assets.length]
+                  .filter(Boolean).length,
+              })}
             </span>}>
             {(() => {
               const steps = [
-                { key: 'components', label: 'Components', count: components.length,
-                  action: 'add', hint: 'Optional. The parts of the product — backend, web, iOS. A WordPress site skips this and lives as a domain.',
-                  open: { kind: 'component' } },
-                { key: 'versions', label: 'Versions', count: versions.length,
-                  action: 'name', hint: 'The builds a component ships. An SBOM attaches to the version, not to the environment.',
-                  open: { kind: 'version' } },
-                { key: 'deployments', label: 'Environments', count: deployments.length,
-                  action: 'deploy', hint: 'Which version runs in DEV, PRE and PRO, and whether it faces the internet.',
-                  open: { kind: 'deployment' } },
-                { key: 'assets', label: 'Assets', count: assets.length,
-                  action: 'add', hint: 'The domains, URLs and IPs you know of. No scan needed to record them.',
-                  open: { kind: 'asset' } },
+                { key: 'components', labelKey: 'projects.setup.step.components',
+                  count: components.length, actionKey: 'projects.action.add',
+                  hintKey: 'projects.setup.hint.components', open: { kind: 'component' } },
+                { key: 'versions', labelKey: 'projects.setup.step.versions',
+                  count: versions.length, actionKey: 'projects.action.name',
+                  hintKey: 'projects.setup.hint.versions', open: { kind: 'version' } },
+                { key: 'deployments', labelKey: 'projects.setup.step.environments',
+                  count: deployments.length, actionKey: 'projects.action.deploy',
+                  hintKey: 'projects.setup.hint.environments', open: { kind: 'deployment' } },
+                { key: 'assets', labelKey: 'projects.setup.step.assets',
+                  count: assets.length, actionKey: 'projects.action.add',
+                  hintKey: 'projects.setup.hint.assets', open: { kind: 'asset' } },
               ]
               const nextKey = steps.find((step) => !step.count)?.key
               return (
@@ -811,14 +867,16 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                       <span className="setup-mark">{index + 1}</span>
                       <div>
                         <strong>
-                          {step.label}
-                          {step.count ? <span className="setup-check"> ✓ recorded</span> : null}
+                          {t(step.labelKey)}
+                          {step.count
+                            ? <span className="setup-check"> {t('projects.setup.recordedMark')}</span>
+                            : null}
                         </strong>
-                        <p>{step.hint}</p>
+                        <p>{t(step.hintKey)}</p>
                       </div>
                       <span className="count">{step.count}</span>
                       <button className={`mini ${nextKey === step.key ? 'primary' : ''}`}
-                        onClick={() => setDialog(step.open)}>{step.action}</button>
+                        onClick={() => setDialog(step.open)}>{t(step.actionKey)}</button>
                     </li>
                   ))}
                 </ul>
@@ -826,27 +884,27 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
             })()}
           </Card>}
 
-          <Card title="Running now"
+          <Card title={t('projects.running.title')}
             actions={<div className="row">
               <button className="mini" onClick={() => setReleaseOpen(true)}>
-                new environment
+                {t('projects.action.newEnvironment')}
               </button>
             </div>}>
             {!deployments.length
-              ? <p className="muted">
-                Nothing deployed yet. Pick a version and an environment — a deployment is
-                only "where this build runs".
-              </p>
+              ? <p className="muted">{t('projects.running.empty')}</p>
               : (
                 <table>
-                  <thead><tr><th>environment</th><th>component</th><th>version</th>
-                    <th>domains</th><th>exposure</th></tr></thead>
+                  <thead><tr><th>{t('projects.col.environment')}</th>
+                    <th>{t('projects.col.component')}</th><th>{t('projects.col.version')}</th>
+                    <th>{t('projects.col.domains')}</th><th>{t('projects.col.exposure')}</th></tr></thead>
                   <tbody>
                     {deployments.map((row) => (
                       <tr key={row.id}>
                         <td className="title">{row.environment}</td>
                         <td>{row.component || '—'}</td>
-                        <td className="mono">{row.version_label || <span className="muted">unknown</span>}</td>
+                        <td className="mono">
+                          {row.version_label || <span className="muted">{t('common.unknown')}</span>}
+                        </td>
                         <td>
                           {(row.domains || []).map((domain) => (
                             <span className="pill mono" key={domain}
@@ -869,27 +927,27 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
         <>
           <NeedsAttribution intakes={pendingAttributions} components={components} versions={versions}
             busy={busy} onAssign={assignAttribution} />
-          <Card title="Components"
+          <Card band
+            title={t('projects.tab.components')}
             actions={(
               <div className="row">
-                <button className="mini" onClick={() => expandAll(components.map((row) => row.id))}>
-                  expand all
-                </button>
-                <button className="mini" onClick={collapseAll}>collapse all</button>
-                <button className="mini" onClick={() => setDialog({ kind: 'component' })}>
-                  add component
+                <div className="btn-group" role="group" aria-label={t('projects.hint.expandAll')}>
+                  <button className="mini" onClick={() => expandAll(components.map((row) => row.id))}>
+                    {t('projects.action.expandAll')}
+                  </button>
+                  <button className="mini" onClick={collapseAll}>{t('projects.action.collapseAll')}</button>
+                </div>
+                <button className="mini primary" onClick={() => setDialog({ kind: 'component' })}>
+                  {t('projects.action.addComponent')}
                 </button>
               </div>
             )}>
             {!components.length ? (
               <div className="onb-empty-state" style={{ padding: '20px 16px 24px' }}>
-                <h2>No components yet</h2>
-                <p>
-                  A component is one deployable unit — backend, web, iOS. It is optional:
-                  a site with no code of yours lives as a domain only, under Assets.
-                </p>
+                <h2>{t('projects.component.empty.title')}</h2>
+                <p>{t('projects.component.empty.body')}</p>
                 <button className="btn-primary" onClick={() => setDialog({ kind: 'component' })}>
-                  add the first component
+                  {t('projects.action.addFirstComponent')}
                 </button>
               </div>
             ) : (
@@ -899,9 +957,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                   <i className="sev-bar-critical" /><i className="sev-bar-high" />
                   <i className="sev-bar-medium" /><i className="sev-bar-low" />
                 </span>
-                bar = that build's open dependency findings, worst first
-                (critical, high, medium, low) · the code and secrets columns are
-                source findings, from SAST and the secret scanner · newest build first
+                {t('projects.legend')}
               </p>
               <div className="component-tree">
                 {components.map((component) => {
@@ -909,6 +965,9 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                     (row) => row.component_id === component.id)
                   const latest = componentVersions[0]
                   const isOpen = openComponents.has(component.id)
+                  // Coverage at a glance: a build with no SBOM was never
+                  // analysed, and that is a different fact from "clean".
+                  const analysed = componentVersions.filter((row) => row.sbom_imports).length
                   const shown = shownVersions[component.id] || 5
                   const visible = componentVersions.slice(0, shown)
                   const hidden = Math.max(0, componentVersions.length - visible.length)
@@ -918,43 +977,67 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                         <button type="button" className="component-toggle"
                           aria-expanded={isOpen}
                           onClick={() => toggleComponent(component.id)}>
-                          <span className="caret" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+                          <span className={`caret${isOpen ? ' open' : ''}`} aria-hidden="true">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+                              stroke="currentColor" strokeWidth="3" strokeLinecap="round"
+                              strokeLinejoin="round"><path d="M9 5l7 7-7 7" /></svg>
+                          </span>
                           <span className="component-ident">
                             <h3>{component.name}</h3>
                             <span className="muted component-sub">
-                              {plural(componentVersions.length, 'version')}
+                              {plural(tCount, 'version', componentVersions.length)}
                               {component.kind && component.kind.toLowerCase()
                                 !== component.name.toLowerCase()
                                 ? ` · ${component.kind}` : ''}
                               {component.repositories.length
-                                ? ` · ${plural(component.repositories.length, 'repository', 'repositories')}`
-                                : ' · no code'}
+                                ? ` · ${plural(tCount, 'repository', component.repositories.length)}`
+                                : ` · ${t('projects.component.noCode')}`}
                             </span>
                           </span>
                         </button>
                         <div className="row component-actions">
+                          {componentVersions.length > 0 && (
+                            <span
+                              className={`pill ${analysed === 0 ? 'bad' : analysed < componentVersions.length ? 'warn' : ''}`}
+                              title={analysed === componentVersions.length
+                                ? t('projects.component.sbom.all')
+                                : analysed === 0
+                                  ? t('projects.component.sbom.none')
+                                  : t('projects.component.sbom.some')}
+                            >
+                              {analysed === 0
+                                ? t('projects.component.neverAnalysed')
+                                : t('projects.component.analysed', {
+                                  analysed, total: componentVersions.length })}
+                            </span>
+                          )}
                           {latest && (
                             <span className="component-summary"
-                              title={`newest build: ${latest.version}`}>
+                              title={t('projects.component.newestBuild', { version: latest.version })}>
                               {latest.sbom_imports ? (
                                 <>
                                   <SeverityBar counts={latest.findings?.by_severity} width={72} />
                                   <span className="muted">
-                                    {shortLabel(latest.version)} · {latest.findings?.vulns || 0} vulns
-                                    {latest.findings?.code ? ` · ${latest.findings.code} code` : ''}
-                                    {latest.findings?.secrets ? ` · ${latest.findings.secrets} secrets` : ''}
+                                    {shortLabel(latest.version)} · {t('projects.component.vulns', {
+                                      n: latest.findings?.vulns || 0 })}
+                                    {latest.findings?.code
+                                      ? ` · ${t('projects.component.code', { n: latest.findings.code })}`
+                                      : ''}
+                                    {latest.findings?.secrets
+                                      ? ` · ${t('projects.component.secrets', { n: latest.findings.secrets })}`
+                                      : ''}
                                   </span>
                                 </>
                               ) : (
                                 <span className="muted">
-                                  {shortLabel(latest.version)} · not analysed
+                                  {shortLabel(latest.version)} · {t('projects.component.notAnalysed')}
                                 </span>
                               )}
                             </span>
                           )}
                           <button className="mini"
                             onClick={() => setDialog({ kind: 'version', presetComponent: component.id })}>
-                            new version
+                            {t('projects.action.newVersion')}
                           </button>
                         </div>
                       </header>
@@ -982,7 +1065,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                           ) : (
                             <button className="mini component-attach"
                               onClick={() => setDialog({ kind: 'repository', presetComponent: component.id })}>
-                              attach code
+                              {t('projects.action.attachCode')}
                             </button>
                           )}
 
@@ -991,16 +1074,19 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                               <table className="version-tree">
                                 <thead>
                                   <tr>
-                                    <th>version</th>
-                                    <th>deployed</th>
-                                    <th>inventory</th>
-                                    <th title="open dependency findings on this build">vulns</th>
-                                    <th className="num"
-                                      title="code weaknesses reported by a SAST run on this build">code</th>
-                                    <th className="num"
-                                      title="leaked credentials reported by a secret scanner on this build">secrets</th>
-                                    <th className="num"
-                                      title="record which environment this build runs in">deploy</th>
+                                    <th>{t('projects.col.version')}</th>
+                                    <th>{t('projects.col.deployed')}</th>
+                                    <th>{t('projects.col.inventory')}</th>
+                                    <th title={t('projects.hint.vulns')}>{t('projects.col.vulns')}</th>
+                                    <th className="num" title={t('projects.hint.code')}>
+                                      {t('projects.col.code')}
+                                    </th>
+                                    <th className="num" title={t('projects.hint.secrets')}>
+                                      {t('projects.col.secrets')}
+                                    </th>
+                                    <th className="num" title={t('projects.hint.deploy')}>
+                                      {t('projects.col.deploy')}
+                                    </th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -1015,7 +1101,11 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                               version.version)}>
                                             {shortLabel(version.version)}
                                           </button>
-                                          {version.baseline && <span className="pill version-baseline">baseline</span>}
+                                          {version.baseline && (
+                                            <span className="pill version-baseline">
+                                              {t('projects.version.baseline')}
+                                            </span>
+                                          )}
                                         </td>
                                         <td className="version-envs">
                                           {version.deployments.length
@@ -1030,15 +1120,15 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                           <div className="version-inventory">
                                             {version.sbom_imports ? (
                                               <>
-                                                <span>{version.components} components</span>
+                                                <span>{plural(tCount, 'component', version.components)}</span>
                                                 <span className="muted">
-                                                  {plural(version.sbom_imports, 'SBOM import')}
+                                                  {plural(tCount, 'sbomImport', version.sbom_imports)}
                                                 </span>
                                               </>
                                             ) : (
                                               <span className="muted"
-                                                title="no BOM was imported for this label: the build exists, its contents do not">
-                                                no BOM
+                                                title={t('projects.version.noBomHint')}>
+                                                {t('projects.version.noBom')}
                                               </span>
                                             )}
                                           </div>
@@ -1049,32 +1139,52 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                           {version.sbom_imports ? (
                                             <div className="version-findings">
                                               <SeverityBar counts={counts.by_severity} />
-                                              <span className={counts.vulns ? 'version-count' : 'muted'}>
+                                              {/* The number is the door: this build's
+                                                  queue, opened already narrowed. A dead
+                                                  count makes the reader redo the filter
+                                                  the screen already knows. */}
+                                              <button
+                                                className={`linkish ${counts.vulns ? 'version-count' : 'muted'}`}
+                                                title={t('findings.door')}
+                                                onClick={() => {
+                                                  window.location.hash = queueHash({
+                                                    project: project.slug,
+                                                    build: version.id,
+                                                    build_label: version.version,
+                                                    // The cell counts open dependency
+                                                    // findings, so the door carries
+                                                    // that scope.
+                                                    kind: 'vulnerability',
+                                                    open: '1',
+                                                  })
+                                                }}>
                                                 {counts.vulns || 0}
-                                              </span>
+                                              </button>
                                             </div>
                                           ) : (
                                             <span className="muted"
-                                              title="nothing imported for this label, so nothing has been analysed">
-                                              not analysed
+                                              title={t('projects.version.notAnalysedHint')}>
+                                              {t('projects.version.notAnalysed')}
                                             </span>
                                           )}
                                           {counts.dismissed > 0 && (
                                             <div className="muted version-settled"
-                                              title="settled findings are listed on the build, and do not count as open">
-                                              {counts.dismissed} settled · not counted
+                                              title={t('projects.version.settledHint')}>
+                                              {t('projects.version.settled', { n: counts.dismissed })}
                                             </div>
                                           )}
                                         </td>
                                         <td className="num">
                                           {counts.code
                                             ? <span className="version-count">{counts.code}</span>
-                                            : <span className="muted">—</span>}
+                                            : <span className="muted"
+                                              title={t('projects.version.noSastHint')}>—</span>}
                                         </td>
                                         <td className="num">
                                           {counts.secrets
                                             ? <span className="version-count">{counts.secrets}</span>
-                                            : <span className="muted">—</span>}
+                                            : <span className="muted"
+                                              title={t('projects.version.noSecretHint')}>—</span>}
                                         </td>
                                         <td className="row version-actions">
                                           <button className="mini"
@@ -1082,7 +1192,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                               kind: 'deployment', presetComponent: component.id,
                                               presetVersion: version.version,
                                             })}>
-                                            deploy
+                                            {t('projects.action.deploy')}
                                           </button>
                                         </td>
                                       </tr>
@@ -1097,7 +1207,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                       onClick={() => setShownVersions((current) => ({
                                         ...current, [component.id]: shown + 5,
                                       }))}>
-                                      show {hidden} more
+                                      {t('projects.pager.showMore', { n: hidden })}
                                     </button>
                                   )}
                                   {shown > 5 && hidden > 0 && (
@@ -1105,7 +1215,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                       onClick={() => setShownVersions((current) => ({
                                         ...current, [component.id]: componentVersions.length,
                                       }))}>
-                                      show all {componentVersions.length}
+                                      {t('projects.pager.showAll', { n: componentVersions.length })}
                                     </button>
                                   )}
                                   {shown > 5 && hidden === 0 && (
@@ -1113,7 +1223,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                       onClick={() => setShownVersions((current) => ({
                                         ...current, [component.id]: 5,
                                       }))}>
-                                      show newest 5
+                                      {t('projects.pager.showNewest')}
                                     </button>
                                   )}
                                 </div>
@@ -1121,8 +1231,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                             </>
                           ) : (
                             <p className="muted component-empty">
-                              No version named yet — a version is a build, it does not need
-                              an environment to exist.
+                              {t('projects.component.noVersions')}
                             </p>
                           )}
                         </>
@@ -1137,18 +1246,21 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                       <button type="button" className="component-toggle"
                         aria-expanded={openComponents.has('__wide')}
                         onClick={() => toggleComponent('__wide')}>
-                        <span className="caret" aria-hidden="true">
-                          {openComponents.has('__wide') ? '▾' : '▸'}
-                        </span>
+                        <span className={`caret${openComponents.has('__wide') ? ' open' : ''}`} aria-hidden="true">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+                              stroke="currentColor" strokeWidth="3" strokeLinecap="round"
+                              strokeLinejoin="round"><path d="M9 5l7 7-7 7" /></svg>
+                          </span>
                         <span className="component-ident">
-                          <h3>Product-wide releases</h3>
-                          <span className="muted component-sub">versions named without a component</span>
+                          <h3>{t('projects.wide.title')}</h3>
+                          <span className="muted component-sub">{t('projects.wide.sub')}</span>
                         </span>
                       </button>
                     </header>
                     {openComponents.has('__wide') && (
                       <table className="version-tree">
-                        <thead><tr><th>version</th><th>runs in</th><th></th></tr></thead>
+                        <thead><tr><th>{t('projects.col.version')}</th>
+                          <th>{t('projects.wide.runsIn')}</th><th></th></tr></thead>
                         <tbody>
                           {versions.filter((row) => !row.component_id).map((version) => (
                             <React.Fragment key={version.id}>
@@ -1157,7 +1269,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                 {version.version}
                                 {version.sbom_imports ? (
                                   <span className="version-note">
-                                    {plural(version.sbom_imports, 'SBOM import')}
+                                    {plural(tCount, 'sbomImport', version.sbom_imports)}
                                   </span>
                                 ) : null}
                               </td>
@@ -1168,7 +1280,7 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                                       {dep.environment}
                                     </span>
                                   ))
-                                  : <span className="muted">not deployed</span>}
+                                  : <span className="muted">{t('projects.version.notDeployed')}</span>}
                               </td>
                               <td />
                             </tr>
@@ -1190,27 +1302,28 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
 
       {tab === 'environments' && (
         <>
-          <Card title="Environments"
-            actions={<button className="mini"
-              onClick={() => setReleaseOpen(true)}>new environment</button>}>
+          <Card title={t('projects.tab.environments')}
+            actions={<button className="mini" onClick={() => setReleaseOpen(true)}>
+              {t('projects.action.newEnvironment')}
+            </button>}>
             {!deployments.length
-              ? <p className="muted">
-                No environment yet. A deployment is a version of a component running
-                somewhere — DEV, PRE, PRO — with its domain.
-              </p>
+              ? <p className="muted">{t('projects.env.empty')}</p>
               : (
                 <table>
-                  <thead><tr><th>environment</th><th>component</th><th>version</th><th>domains</th>
-                    <th>exposure</th><th>auth</th><th>version check</th><th>actions</th></tr></thead>
+                  <thead><tr><th>{t('projects.col.environment')}</th>
+                    <th>{t('projects.col.component')}</th><th>{t('projects.col.version')}</th>
+                    <th>{t('projects.col.domains')}</th><th>{t('projects.col.exposure')}</th>
+                    <th>{t('projects.col.auth')}</th><th>{t('projects.col.versionCheck')}</th>
+                    <th>{t('common.actions')}</th></tr></thead>
                   <tbody>
                     {deployments.map((row) => (
                       <tr key={row.id}>
                         <td className="title">{row.environment}</td>
                         <td>{row.component || '—'}</td>
                         <td className="mono">
-                          {row.version_label || <span className="muted">unknown</span>}
+                          {row.version_label || <span className="muted">{t('common.unknown')}</span>}
                           <span className="muted" style={{ marginLeft: 6, fontSize: 10 }}>
-                            · {row.source}{row.source === 'health' ? ' check' : ''}
+                            · {row.source}{row.source === 'health' ? ` ${t('projects.env.check')}` : ''}
                           </span>
                         </td>
                         <td>
@@ -1221,24 +1334,27 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                           {!(row.domains || []).length && (
                             <button className="mini"
                               onClick={() => setDialog({ kind: 'asset', presetDeployment: row.id })}>
-                              add domain
+                              {t('projects.action.addDomain')}
                             </button>
                           )}
                         </td>
                         <td><span className={`pill ${row.exposure === 'public' ? 'warn' : ''}`}>{row.exposure}</span></td>
-                        <td className="muted">{row.requires_auth ? 'required' : 'no'}</td>
+                        <td className="muted">
+                          {row.requires_auth ? t('projects.env.authRequired') : t('common.no')}
+                        </td>
                         <td className="muted">
                           {row.probe
                             ? (row.probe.enabled
                               ? (row.last_checked_at
-                                ? `${row.last_check_status === 'ok' ? 'ok' : 'failed'} · ${new Date(row.last_checked_at).toLocaleString()}`
-                                : 'configured, not run')
-                              : 'disabled')
-                            : 'not configured'}
+                                ? `${row.last_check_status === 'ok'
+                                  ? t('projects.probe.ok') : t('projects.probe.failed')} · ${new Date(row.last_checked_at).toLocaleString()}`
+                                : t('projects.probe.configured'))
+                              : t('projects.probe.disabled'))
+                            : t('projects.probe.notConfigured')}
                           {row.probe && row.probe.enabled && (
                             <div style={{ fontSize: 11 }}>
-                              {cadence(row.probe.interval_minutes)}
-                              {row.probe.next_due_at ? ` · ${dueLabel(row.probe.next_due_at)}` : ''}
+                              {cadence(t, row.probe.interval_minutes)}
+                              {row.probe.next_due_at ? ` · ${dueLabel(t, row.probe.next_due_at)}` : ''}
                             </div>
                           )}
                           {row.last_check_error && (
@@ -1247,16 +1363,19 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
                         </td>
                         <td>
                           <div className="row">
-                            <button className="mini" onClick={() => setDialog({ kind: 'edit', row })}>edit</button>
+                            <button className="mini" onClick={() => setDialog({ kind: 'edit', row })}>
+                              {t('projects.action.edit')}
+                            </button>
                             <button className="mini" onClick={() => setDialog({ kind: 'probe', row })}>
-                              probe
+                              {t('projects.action.probe')}
                             </button>
                             {row.probe && (
                               <button className="mini" disabled={busy === `check:${row.id}`}
                                 onClick={() => act(`check:${row.id}`,
                                   () => api.post(`/api/v1/deployments/${row.id}/health/check`),
-                                  `Version read from ${row.probe.url}.`)}>
-                                {busy === `check:${row.id}` ? 'checking…' : 'check now'}
+                                  t('projects.notice.versionRead', { url: row.probe.url }))}>
+                                {busy === `check:${row.id}`
+                                  ? t('projects.action.checking') : t('projects.action.checkNow')}
                               </button>
                             )}
                           </div>
@@ -1268,10 +1387,9 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
               )}
           </Card>
           <p className="muted" style={{ fontSize: 12 }}>
-            <strong>probe</strong> configures the read-only GET against the deployment's own
-            endpoint (for example <code>https://api.example/health</code>); <strong>check now</strong>
-            {' '}runs it immediately and records the version. It needs no scan authorization, and
-            the token, when there is one, is stored encrypted and never shown again.
+            <strong>{t('projects.action.probe')}</strong> {t('projects.probe.footnoteA')}{' '}
+            <code>https://api.example/health</code>{t('projects.probe.footnoteB')}{' '}
+            <strong>{t('projects.action.checkNow')}</strong> {t('projects.probe.footnoteC')}
           </p>
         </>
       )}
@@ -1284,7 +1402,9 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
 
       <ReleaseDialog open={releaseOpen} onClose={() => setReleaseOpen(false)}
         slug={project.slug} components={components} versions={versions} assets={assets}
-        onDone={(message) => { setNotice(`Created ${message}.`); load() }} />
+        onDone={(message) => {
+          setNotice(t('projects.notice.created', { message })); load()
+        }} />
 
       <ProjectDialogs dialog={dialog} setDialog={setDialog} project={project}
         components={components} deployments={deployments} assets={assets}
@@ -1299,10 +1419,14 @@ function ProjectInventory({ refSlug, initialTab = 'summary', onTab, onBack, onNa
 
 function ProjectDialogs({ dialog, setDialog, project, components, deployments = [],
                          assets = [], versions = [], onDone, onChanged, notify }) {
+  const { t } = useI18n()
   const [form, setForm] = useState({})
   const [error, setError] = useState('')
   const [localError, setLocalError] = useState('')
   const [busy, setBusy] = useState('')
+  // Which rows asked to take their subdomains with them. React state, not a DOM
+  // read: an uncontrolled checkbox inside a row that re-renders loses its tick.
+  const [withKids, setWithKids] = useState({})
   const [remoteRepos, setRemoteRepos] = useState(null)
 
   useEffect(() => {
@@ -1355,8 +1479,8 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
     setBusy('save')
     setError('')
     try {
-      await work()
-      onDone(message)
+      const result = await work()
+      onDone(typeof message === 'function' ? message(result) : message)
     } catch (e) {
       setError(String(e.message || e))
     } finally { setBusy('') }
@@ -1369,7 +1493,10 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
     try {
       await work()
       await onChanged?.()
-      notify?.(`${asset.value} updated in ${dialog.row?.environment || 'this environment'}.`)
+      notify?.(t('projects.notice.assetUpdated', {
+        value: asset.value,
+        environment: dialog.row?.environment || t('projects.notice.thisEnvironment'),
+      }))
     } catch (e) {
       setLocalError(String(e.message || e))
     } finally { setBusy('') }
@@ -1380,7 +1507,7 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
     try {
       const connections = await api.get('/api/v1/onboarding/connections')
       const scm = (connections.data?.scm || [])[0]
-      if (!scm) { setError('No code host connected. Connect one in Settings first.'); return }
+      if (!scm) { setError(t('projects.error.noCodeHost')); return }
       const listed = await api.get(`/api/v1/onboarding/connections/${scm.id}/repositories`)
       setRemoteRepos(listed.data || [])
     } catch (e) {
@@ -1390,50 +1517,45 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
 
   if (dialog.kind === 'version') {
     return (
-      <Dialog open hideFooter title="New version" onClose={close} body={(
+      <Dialog open hideFooter title={t('projects.dialog.newVersion')} onClose={close} body={(
         <form className="onb-form" onSubmit={(e) => { e.preventDefault()
           const label = (form.version || '').trim()
           if (components.length && !form.component_id) {
-            setError('Choose the component this version belongs to.')
+            setError(t('projects.error.chooseComponent'))
             return
           }
           if (!label) {
-            setError('Name the version: 1.8, 2026.02, release-42…')
+            setError(t('projects.error.nameVersion'))
             return
           }
           submit(() => api.post(`/api/v1/projects/${project.slug}/versions`, {
             version: label, component_id: form.component_id || undefined,
-            actor: 'console' }), `Version ${label} created.`) }}>
-          <p className="onb-help" style={{ margin: 0 }}>
-            A version belongs to one component. It exists before any environment runs it,
-            and an SBOM uploaded for it attaches here.
-          </p>
+            actor: 'console' }), t('projects.notice.versionCreated', { version: label })) }}>
+          <p className="onb-help" style={{ margin: 0 }}>{t('projects.dialog.versionIntro')}</p>
           {components.length ? (
             <label>
-              Component
+              {t('projects.field.component')}
               <select autoFocus value={form.component_id || ''}
                 onChange={(e) => setForm({ ...form, component_id: e.target.value })}>
-                <option value="">choose…</option>
+                <option value="">{t('projects.option.choose')}</option>
                 {components.map((component) => (
                   <option key={component.id} value={component.id}>{component.name}</option>
                 ))}
               </select>
-              <span className="onb-help">The code unit that ships this build.</span>
+              <span className="onb-help">{t('projects.field.componentHint')}</span>
             </label>
           ) : null}
           <label>
-            Version
+            {t('projects.field.version')}
             <input autoFocus={!components.length} value={form.version || ''} placeholder="1.8"
               onChange={(e) => setForm({ ...form, version: e.target.value })} />
-            <span className="onb-help">
-              Used by the SBOM upload and by every deployment of this build.
-            </span>
+            <span className="onb-help">{t('projects.field.versionHint')}</span>
           </label>
           {error && <p className="banner banner-error">{error}</p>}
           <div className="row-end">
-            <button className="mini" type="button" onClick={close}>cancel</button>
+            <button className="mini" type="button" onClick={close}>{t('common.cancel')}</button>
             <button className="btn-primary" type="submit" disabled={busy === 'save'}>
-              {busy === 'save' ? 'creating…' : 'create version'}
+              {busy === 'save' ? t('projects.action.creating') : t('projects.action.createVersion')}
             </button>
           </div>
         </form>
@@ -1444,34 +1566,33 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
   if (dialog.kind === 'version-rename') {
     const row = dialog.row
     return (
-      <Dialog open hideFooter title={`Rename ${row.version}`} onClose={close} body={(
+      <Dialog open hideFooter
+        title={t('projects.dialog.renameVersion', { version: row.version })} onClose={close} body={(
         <form className="onb-form" onSubmit={(e) => { e.preventDefault()
           const label = (form.version || '').trim()
-          if (!label) { setError('Give the version a name.'); return }
+          if (!label) { setError(t('projects.error.versionName')); return }
           submit(() => api.patch(
             `/api/v1/projects/${project.slug}/versions/${encodeURIComponent(row.version)}`
             + (row.component_id ? `?component_id=${row.component_id}` : ''),
-            { version: label }), `Version renamed to ${label}.`) }}>
-          <p className="onb-help" style={{ margin: 0 }}>
-            Renaming keeps its SBOM and every deployment that runs it — they follow the
-            new label.
-          </p>
+            { version: label }), t('projects.notice.versionRenamed', { version: label })) }}>
+          <p className="onb-help" style={{ margin: 0 }}>{t('projects.dialog.renameIntro')}</p>
           <label>
-            Version
+            {t('projects.field.version')}
             <input autoFocus value={form.version ?? row.version}
               onChange={(e) => setForm({ ...form, version: e.target.value })} />
             <span className="onb-help">
-              {row.component || 'product-wide'}
+              {row.component || t('projects.version.productWide')}
               {row.deployments?.length
-                ? ` · runs in ${row.deployments.map((use) => use.environment).join(', ')}`
-                : ' · not deployed'}
+                ? ` · ${t('projects.version.runsIn', {
+                  envs: row.deployments.map((use) => use.environment).join(', ') })}`
+                : ` · ${t('projects.version.notDeployed')}`}
             </span>
           </label>
           {error && <p className="banner banner-error">{error}</p>}
           <div className="row-end">
-            <button className="mini" type="button" onClick={close}>cancel</button>
+            <button className="mini" type="button" onClick={close}>{t('common.cancel')}</button>
             <button className="btn-primary" type="submit" disabled={busy === 'save'}>
-              {busy === 'save' ? 'saving…' : 'rename'}
+              {busy === 'save' ? t('projects.action.saving') : t('projects.action.rename')}
             </button>
           </div>
         </form>
@@ -1481,10 +1602,10 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
 
   if (dialog.kind === 'asset') {
     return (
-      <Dialog open hideFooter title="Add asset" onClose={close} body={(
+      <Dialog open hideFooter title={t('projects.dialog.addAsset')} onClose={close} body={(
         <form className="onb-form" onSubmit={(e) => { e.preventDefault()
           if (!(form.value || '').trim()) {
-            setError('Give the asset a value: a domain, a URL or an IP.')
+            setError(t('projects.error.assetValue'))
             return
           }
           submit(() => api.post(`/api/v1/projects/${project.slug}/assets`, {
@@ -1492,68 +1613,76 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
             component_id: form.component_id || undefined,
             deployment_id: form.deployment_id || undefined,
             notes: form.notes || undefined, actor: 'console' }),
-            `${form.value.trim()} recorded under ${project.name}.`) }}>
-          <p className="onb-help" style={{ margin: 0 }}>
-            Record a domain, URL or IP you know of. Nothing is contacted: recording an
-            asset never authorizes a scan.
-          </p>
+            (result) => {
+              const decision = result?.authorization || {}
+              const where = decision.request
+                ? t('projects.notice.assetAuthRequested')
+                : decision.excluded
+                  ? t('projects.notice.assetExcluded')
+                  : decision.covered
+                    ? t('projects.notice.assetCovered')
+                    : ''
+              return `${t('projects.notice.assetRecorded', {
+                value: form.value.trim(), project: project.name })}${where ? ` ${where}` : ''}`
+            }) }}>
+          <p className="onb-help" style={{ margin: 0 }}>{t('projects.dialog.assetIntro')}</p>
           <div className="onb-grid">
             <label>
-              Type
+              {t('projects.field.type')}
               <select value={form.type || 'domain'}
                 onChange={(e) => setForm({ ...form, type: e.target.value })}>
                 {ASSET_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
               </select>
             </label>
             <label>
-              Value
+              {t('projects.field.value')}
               <input autoFocus value={form.value || ''} placeholder="app.example.com"
                 onChange={(e) => setForm({ ...form, value: e.target.value })} />
             </label>
           </div>
           <div className="onb-grid">
             <label>
-              Environment <span className="onb-optional">optional</span>
+              {t('projects.field.environment')} <span className="onb-optional">{t('projects.optional')}</span>
               <select value={form.deployment_id || ''}
                 onChange={(e) => {
                   const deployment = deployments.find((row) => row.id === e.target.value)
                   setForm({ ...form, deployment_id: e.target.value,
                     component_id: deployment?.component_id || form.component_id || '' })
                 }}>
-                <option value="">no environment</option>
+                <option value="">{t('projects.option.noEnvironment')}</option>
                 {deployments
                   .filter((row) => !form.component_id || row.component_id === form.component_id)
                   .map((row) => (
                     <option key={row.id} value={row.id}>
-                      {(row.component || 'unassigned') + ' · ' + row.environment}
+                      {(row.component || t('projects.component.unassigned')) + ' · ' + row.environment}
                     </option>
                   ))}
               </select>
-              <span className="onb-help">DEV, PRE, PRO… where it answers.</span>
+              <span className="onb-help">{t('projects.field.environmentHint')}</span>
             </label>
             <label>
-              Component <span className="onb-optional">optional</span>
+              {t('projects.field.component')} <span className="onb-optional">{t('projects.optional')}</span>
               <select value={form.component_id || ''}
                 onChange={(e) => setForm({ ...form, component_id: e.target.value,
                   deployment_id: '' })}>
-                <option value="">project only — no code component</option>
+                <option value="">{t('projects.option.projectOnlyLong')}</option>
                 {components.map((component) => (
                   <option key={component.id} value={component.id}>{component.name}</option>
                 ))}
               </select>
-              <span className="onb-help">A WordPress site can skip it.</span>
+              <span className="onb-help">{t('projects.field.componentOptionalHint')}</span>
             </label>
           </div>
           <label>
-            Notes <span className="onb-optional">optional</span>
-            <input value={form.notes || ''} placeholder="Staging storefront, vendor hosted"
+            {t('projects.field.notes')} <span className="onb-optional">{t('projects.optional')}</span>
+            <input value={form.notes || ''} placeholder={t('projects.field.notesPlaceholder')}
               onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           </label>
           {error && <p className="banner banner-error">{error}</p>}
           <div className="row-end">
-            <button className="mini" type="button" onClick={close}>cancel</button>
+            <button className="mini" type="button" onClick={close}>{t('common.cancel')}</button>
             <button className="btn-primary" type="submit" disabled={busy === 'save'}>
-              {busy === 'save' ? 'saving…' : 'add asset'}
+              {busy === 'save' ? t('projects.action.saving') : t('projects.action.addAsset')}
             </button>
           </div>
         </form>
@@ -1563,38 +1692,35 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
 
   if (dialog.kind === 'component') {
     return (
-      <Dialog open hideFooter title="Add component" onClose={close} body={(
+      <Dialog open hideFooter title={t('projects.dialog.addComponent')} onClose={close} body={(
         <form className="onb-form" onSubmit={(e) => { e.preventDefault()
           if (!(form.name || '').trim()) {
-            setError('Give the component a name: Backend, Web, iOS…')
+            setError(t('projects.error.componentName'))
             return
           }
           submit(() => api.post(`/api/v1/projects/${project.slug}/components`, {
             name: form.name.trim(), kind: form.kind || 'backend', actor: 'console' }),
-            `Component ${form.name.trim()} added.`) }}>
+            t('projects.notice.componentAdded', { name: form.name.trim() })) }}>
           <div className="onb-grid">
             <label>
-              Name
+              {t('projects.field.name')}
               <input autoFocus value={form.name || ''} placeholder="Backend"
                 onChange={(e) => setForm({ ...form, name: e.target.value })} />
             </label>
             <label>
-              Kind
+              {t('projects.field.kind')}
               <select value={form.kind || 'backend'}
                 onChange={(e) => setForm({ ...form, kind: e.target.value })}>
                 {COMPONENT_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
               </select>
             </label>
           </div>
-          <span className="onb-help">
-            A part of the product: backend, web, iOS… A site with no code of yours can live
-            as a domain instead.
-          </span>
+          <span className="onb-help">{t('projects.dialog.componentIntro')}</span>
           {error && <p className="banner banner-error">{error}</p>}
           <div className="row-end">
-            <button className="mini" type="button" onClick={close}>cancel</button>
+            <button className="mini" type="button" onClick={close}>{t('common.cancel')}</button>
             <button className="btn-primary" type="submit" disabled={busy === 'save'}>
-              {busy === 'save' ? 'saving…' : 'add component'}
+              {busy === 'save' ? t('projects.action.saving') : t('projects.action.addComponent')}
             </button>
           </div>
         </form>
@@ -1604,53 +1730,57 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
 
   if (dialog.kind === 'repository') {
     return (
-      <Dialog open hideFooter title="Attach repository" onClose={close} body={(
+      <Dialog open hideFooter title={t('projects.dialog.attachRepo')} onClose={close} body={(
         <form className="onb-form" onSubmit={(e) => { e.preventDefault()
           if (!(form.remote_url || '').trim()) {
-            setError('Paste the repository URL, or pick one from the code host.')
+            setError(t('projects.error.repositoryUrl'))
             return
           }
           submit(() => api.post(`/api/v1/projects/${project.slug}/repositories`, {
             remote_url: form.remote_url.trim(),
             component_id: form.component_id || undefined,
-            actor: 'console' }), 'Repository attached to the project.') }}>
+            actor: 'console' }), t('projects.notice.repoAttached')) }}>
           <label>
-            Remote URL
+            {t('projects.field.remoteUrl')}
             <input autoFocus value={form.remote_url || ''}
               placeholder="https://gitea.example/bitsentry/aurea-api.git"
               onChange={(e) => setForm({ ...form, remote_url: e.target.value })} />
           </label>
           <label>
-            Component <span className="onb-optional">optional</span>
+            {t('projects.field.component')} <span className="onb-optional">{t('projects.optional')}</span>
             <select value={form.component_id || ''}
               onChange={(e) => setForm({ ...form, component_id: e.target.value })}>
-              <option value="">project only</option>
+              <option value="">{t('projects.option.projectOnly')}</option>
               {components.map((component) => (
                 <option key={component.id} value={component.id}>{component.name}</option>
               ))}
             </select>
-            <span className="onb-help">Which unit builds from this code.</span>
+            <span className="onb-help">{t('projects.field.repositoryComponentHint')}</span>
           </label>
           <button type="button" className="mini" onClick={loadRemoteRepositories}>
-            list from the connected code host
+            {t('projects.action.listRemote')}
           </button>
           {remoteRepos && (
             <div className="onb-repo-list">
-              {!remoteRepos.length && <p className="muted">The token sees no repository.</p>}
+              {!remoteRepos.length && (
+                <p className="muted">{t('projects.error.noRemoteRepos')}</p>
+              )}
               {remoteRepos.map((repo) => (
                 <button type="button" key={repo.url} className="onb-repo-row"
                   onClick={() => setForm({ ...form, remote_url: repo.url })}>
                   <span>{repo.name}</span>
-                  <span className="muted">{repo.private ? 'private' : 'public'}</span>
+                  <span className="muted">
+                    {repo.private ? t('projects.repo.private') : t('projects.repo.public')}
+                  </span>
                 </button>
               ))}
             </div>
           )}
           {error && <p className="banner banner-error">{error}</p>}
           <div className="row-end">
-            <button className="mini" type="button" onClick={close}>cancel</button>
+            <button className="mini" type="button" onClick={close}>{t('common.cancel')}</button>
             <button className="btn-primary" type="submit" disabled={busy === 'save'}>
-              {busy === 'save' ? 'attaching…' : 'attach'}
+              {busy === 'save' ? t('projects.action.attaching') : t('projects.action.attach')}
             </button>
           </div>
         </form>
@@ -1666,20 +1796,20 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
     const creatingVersion = form.version_choice === '__new'
       || Boolean(form.component_id && !componentVersions.length)
     return (
-      <Dialog open hideFooter title="Deploy a version" onClose={close} body={(
+      <Dialog open hideFooter title={t('projects.dialog.deploy')} onClose={close} body={(
         <form className="onb-form" onSubmit={(e) => { e.preventDefault()
           const environment = (form.environment || '').trim()
           const domain = (form.domain || '').trim()
           if (!form.component_id) {
-            setError('Choose the component being deployed.')
+            setError(t('projects.error.chooseDeployedComponent'))
             return
           }
           if (environment.length < 2) {
-            setError('Name the environment: DEV, PRE, PRO…')
+            setError(t('projects.error.nameEnvironment'))
             return
           }
           if (creatingVersion && !(form.version_label || '').trim()) {
-            setError('Name the version being deployed, or pick an existing one.')
+            setError(t('projects.error.nameDeployedVersion'))
             return
           }
           submit(async () => {
@@ -1695,34 +1825,35 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
                 type: 'domain', value: domain, deployment_id: created.data.id,
                 actor: 'console' })
             }
-          }, domain ? `${environment} deployed with ${domain}.`
-            : `${environment} deployed.`)
+          }, domain
+            ? t('projects.notice.deployedWith', { environment, domain })
+            : t('projects.notice.deployed', { environment }))
         }}>
           <div className="onb-grid">
             <label>
-              Component
+              {t('projects.field.component')}
               <select autoFocus value={form.component_id || ''}
                 onChange={(e) => setForm({ ...form, component_id: e.target.value,
                   version_id: '', version_choice: '', version_label: '' })}>
-                <option value="">choose…</option>
+                <option value="">{t('projects.option.choose')}</option>
                 {components.map((component) => (
                   <option key={component.id} value={component.id}>{component.name}</option>
                 ))}
               </select>
             </label>
             <label>
-              Environment
+              {t('projects.field.environment')}
               <input value={form.environment || ''} placeholder="PRO" list="env-options"
                 onChange={(e) => setForm({ ...form, environment: e.target.value })} />
               <datalist id="env-options">
                 {suggested.map((name) => <option key={name} value={name} />)}
               </datalist>
-              <span className="onb-help">DEV, PRE, PRO, STAGING… the name the team uses.</span>
+              <span className="onb-help">{t('projects.field.environmentNameHint')}</span>
             </label>
           </div>
 
           <label>
-            Version
+            {t('projects.field.version')}
             {!creatingVersion ? (
               <select value={form.version_id || ''}
                 onChange={(e) => {
@@ -1732,14 +1863,14 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
                     setForm({ ...form, version_id: e.target.value, version_choice: '' })
                   }
                 }}>
-                <option value="">choose a version…</option>
+                <option value="">{t('projects.option.chooseVersion')}</option>
                 {componentVersions.map((row) => (
                   <option key={row.id} value={row.id}>
                     {row.version}{row.sbom_imports ? ' · SBOM' : ''}
-                    {row.deployments.length ? ' · already running' : ''}
+                    {row.deployments.length ? ` · ${t('projects.version.alreadyRunning')}` : ''}
                   </option>
                 ))}
-                <option value="__new">＋ a version that does not exist yet…</option>
+                <option value="__new">{t('projects.option.newVersion')}</option>
               </select>
             ) : (
               <input value={form.version_label || ''} placeholder="1.8"
@@ -1747,32 +1878,29 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
             )}
             <span className="onb-help">
               {creatingVersion
-                ? 'A new version of this component, created with the deployment.'
-                : 'The version being deployed. Its SBOM lives on the Versions tab.'}
+                ? t('projects.field.deployVersionHintNew')
+                : t('projects.field.deployVersionHint')}
             </span>
           </label>
 
           <label>
-            Domain <span className="onb-optional">optional</span>
+            {t('projects.field.domain')} <span className="onb-optional">{t('projects.optional')}</span>
             <input value={form.domain || ''} placeholder="api.aurea.example"
               onChange={(e) => setForm({ ...form, domain: e.target.value })} />
-            <span className="onb-help">
-              The hostname that answers in this environment. Recorded with the deployment;
-              nothing is contacted.
-            </span>
+            <span className="onb-help">{t('projects.field.domainHint')}</span>
           </label>
 
           <label className="onb-check">
             <input type="checkbox" checked={Boolean(form.requires_auth)}
               onChange={(e) => setForm({ ...form, requires_auth: e.target.checked })} />
-            requires authentication
+            {t('projects.field.requiresAuth')}
           </label>
 
           {error && <p className="banner banner-error">{error}</p>}
           <div className="row-end">
-            <button className="mini" type="button" onClick={close}>cancel</button>
+            <button className="mini" type="button" onClick={close}>{t('common.cancel')}</button>
             <button className="btn-primary" type="submit" disabled={busy === 'save'}>
-              {busy === 'save' ? 'deploying…' : 'deploy'}
+              {busy === 'save' ? t('projects.action.deploying') : t('projects.action.deploy')}
             </button>
           </div>
         </form>
@@ -1788,11 +1916,14 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
       (version) => version.component_id === row.component_id)
     return (
       <Dialog open hideFooter
-        title={`Environment · ${row.component || 'unassigned'} · ${row.environment}`}
+        title={t('projects.dialog.environment', {
+          component: row.component || t('projects.component.unassigned'),
+          environment: row.environment,
+        })}
         onClose={close} body={(
         <form className="onb-form" onSubmit={(e) => { e.preventDefault()
           if ((form.environment ?? row.environment ?? '').trim().length < 2) {
-            setError('Name the environment: DEV, PRE, PRO…')
+            setError(t('projects.error.nameEnvironment'))
             return
           }
           submit(() => api.patch(`/api/v1/deployments/${row.id}`, {
@@ -1800,46 +1931,46 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
             version_id: form.version_id || undefined,
             exposure: form.exposure || 'unknown',
             requires_auth: Boolean(form.requires_auth), actor: 'console' }),
-            `${form.environment || row.environment} updated.`) }}>
+            t('projects.notice.environmentUpdated', {
+              environment: form.environment || row.environment })) }}>
           <div className="onb-grid">
             <label>
-              Environment
+              {t('projects.field.environment')}
               <input autoFocus value={form.environment ?? row.environment} placeholder="PRO"
                 onChange={(e) => setForm({ ...form, environment: e.target.value })} />
-              <span className="onb-help">Renaming keeps the version and its domains.</span>
+              <span className="onb-help">{t('projects.field.environmentRenameHint')}</span>
             </label>
             <label>
-              Version
+              {t('projects.field.version')}
               <select value={form.version_id || ''}
                 onChange={(e) => setForm({ ...form, version_id: e.target.value })}>
-                <option value="">keep {row.version_label || 'none'}</option>
+                <option value="">{t('projects.option.keepVersion', {
+                  version: row.version_label || t('common.none') })}</option>
                 {componentVersions.map((version) => (
                   <option key={version.id} value={version.id}>{version.version}</option>
                 ))}
               </select>
-              <span className="onb-help">What this environment runs.</span>
+              <span className="onb-help">{t('projects.field.versionRunsHint')}</span>
             </label>
             <label>
-              Exposure
+              {t('projects.field.exposure')}
               <select value={form.exposure || 'unknown'}
                 onChange={(e) => setForm({ ...form, exposure: e.target.value })}>
                 {EXPOSURES.map((value) => <option key={value} value={value}>{value}</option>)}
               </select>
-              <span className="onb-help">Does the internet reach it?</span>
+              <span className="onb-help">{t('projects.field.exposureHint')}</span>
             </label>
             <label className="onb-check">
               <input type="checkbox" checked={Boolean(form.requires_auth)}
                 onChange={(e) => setForm({ ...form, requires_auth: e.target.checked })} />
-              requires authentication
+              {t('projects.field.requiresAuth')}
             </label>
           </div>
 
           <div className="onb-inline-section">
-            <span className="onb-section-label">Domains in this environment</span>
+            <span className="onb-section-label">{t('projects.section.domains')}</span>
             {!domains.length && (
-              <p className="onb-help" style={{ margin: 0 }}>
-                No domain yet. A domain is what a scan can reach; a version alone is not.
-              </p>
+              <p className="onb-help" style={{ margin: 0 }}>{t('projects.section.noDomain')}</p>
             )}
             {domains.map((asset) => (
               <div className="row-between" key={asset.id}>
@@ -1847,13 +1978,13 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
                 <button className="mini" type="button" disabled={busy === asset.id}
                   onClick={() => actOn(asset, () => api.del(
                     `/api/v1/assets/${asset.id}/links/${asset.deployment.link_id}`))}>
-                  {busy === asset.id ? 'removing…' : 'unlink'}
+                  {busy === asset.id ? t('projects.action.removing') : t('projects.action.unlink')}
                 </button>
               </div>
             ))}
             {unattached.length > 0 && (
               <label>
-                Attach an existing asset
+                {t('projects.field.attachAsset')}
                 <select value="" onChange={(e) => {
                   const asset = unattached.find((item) => item.id === e.target.value)
                   if (!asset) return
@@ -1861,7 +1992,7 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
                     type: asset.type, value: asset.value, deployment_id: row.id,
                     actor: 'console' }))
                 }}>
-                  <option value="">choose an asset…</option>
+                  <option value="">{t('projects.option.chooseAsset')}</option>
                   {unattached.map((asset) => (
                     <option key={asset.id} value={asset.id}>
                       {asset.value} · {asset.type}
@@ -1872,16 +2003,16 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
             )}
             <button className="mini" type="button"
               onClick={() => setDialog({ kind: 'asset', presetDeployment: row.id })}>
-              add a new domain
+              {t('projects.action.addNewDomain')}
             </button>
           </div>
 
           {localError && <p className="banner banner-error">{localError}</p>}
           {error && <p className="banner banner-error">{error}</p>}
           <div className="row-end">
-            <button className="mini" type="button" onClick={close}>cancel</button>
+            <button className="mini" type="button" onClick={close}>{t('common.cancel')}</button>
             <button className="btn-primary" type="submit" disabled={busy === 'save'}>
-              {busy === 'save' ? 'saving…' : 'save changes'}
+              {busy === 'save' ? t('projects.action.saving') : t('projects.action.saveChanges')}
             </button>
           </div>
         </form>
@@ -1893,7 +2024,8 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
     const row = dialog.row
     return (
       <Dialog open hideFooter
-        title={`Version probe · ${row.component || ''} ${row.environment}`}
+        title={t('projects.dialog.probe', {
+          component: row.component || '', environment: row.environment })}
         onClose={close} body={(
         <form className="onb-form" onSubmit={(e) => { e.preventDefault()
           submit(() => api.put(`/api/v1/deployments/${row.id}/health-probe`, {
@@ -1902,57 +2034,54 @@ function ProjectDialogs({ dialog, setDialog, project, components, deployments = 
             status_path: form.status_path || 'status',
             enabled: form.enabled !== false,
             interval_minutes: Number(form.interval_minutes) || 0,
-            actor: 'console' }), 'Probe saved. Run “check now” to read the version.') }}>
-          <p className="onb-help" style={{ margin: 0 }}>
-            A GET against the deployment's own endpoint. Nothing is written to it.
-          </p>
+            actor: 'console' }), t('projects.notice.probeSaved')) }}>
+          <p className="onb-help" style={{ margin: 0 }}>{t('projects.dialog.probeIntro')}</p>
           <label>
-            Health URL
+            {t('projects.field.healthUrl')}
             <input autoFocus value={form.url || ''} placeholder="https://api.aurea.example/health"
               onChange={(e) => setForm({ ...form, url: e.target.value })} />
           </label>
           <label>
-            Bearer token <span className="onb-optional">optional</span>
+            {t('projects.field.bearerToken')} <span className="onb-optional">{t('projects.optional')}</span>
             <input type="password" value={form.token || ''}
-              placeholder={row.probe?.token_set ? 'stored — leave blank to keep it' : 'not set'}
+              placeholder={row.probe?.token_set
+                ? t('projects.field.tokenStored') : t('projects.field.tokenNotSet')}
               onChange={(e) => setForm({ ...form, token: e.target.value })} />
           </label>
           <div className="onb-grid">
             <label>
-              Version field
+              {t('projects.field.versionPath')}
               <input value={form.version_path || 'auto'} placeholder="auto"
                 onChange={(e) => setForm({ ...form, version_path: e.target.value })} />
             </label>
             <label>
-              Status field
+              {t('projects.field.statusPath')}
               <input value={form.status_path || 'status'}
                 onChange={(e) => setForm({ ...form, status_path: e.target.value })} />
             </label>
           </div>
           <label>
-            Check every
+            {t('projects.field.checkEvery')}
             <select value={String(form.interval_minutes ?? 0)}
               onChange={(e) => setForm({ ...form, interval_minutes: e.target.value })}>
-              <option value="0">manually only — I press “check now”</option>
-              <option value="15">every 15 minutes</option>
-              <option value="60">hourly</option>
-              <option value="360">every 6 hours</option>
-              <option value="1440">daily</option>
+              <option value="0">{t('projects.option.manualOnly')}</option>
+              <option value="15">{t('projects.option.every15')}</option>
+              <option value="60">{t('projects.option.hourly')}</option>
+              <option value="360">{t('projects.option.every6h')}</option>
+              <option value="1440">{t('projects.option.daily')}</option>
             </select>
-            <span className="onb-optional">
-              automatic runs come from the scheduler tick — see Operations
-            </span>
+            <span className="onb-optional">{t('projects.field.schedulerHint')}</span>
           </label>
           <label className="onb-check">
             <input type="checkbox" checked={form.enabled !== false}
               onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
-            enabled
+            {t('projects.field.enabled')}
           </label>
           {error && <p className="banner banner-error">{error}</p>}
           <div className="row-end">
-            <button className="mini" type="button" onClick={close}>cancel</button>
+            <button className="mini" type="button" onClick={close}>{t('common.cancel')}</button>
             <button className="btn-primary" type="submit" disabled={busy === 'save'}>
-              {busy === 'save' ? 'saving…' : 'save probe'}
+              {busy === 'save' ? t('projects.action.saving') : t('projects.action.saveProbe')}
             </button>
           </div>
         </form>

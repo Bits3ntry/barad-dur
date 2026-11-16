@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
+import { useI18n } from './i18n'
 import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Pill } from './ui'
 
 /* A pipeline is built in four steps, one question at a time: what it belongs to,
@@ -12,27 +13,27 @@ import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Pill } from './ui'
    the pipeline: this screen creates nothing on the platform. */
 
 const STEPS = [
-  { id: 'where', label: 'Where it runs' },
-  { id: 'what', label: 'What it checks' },
-  { id: 'when', label: 'When it runs' },
-  { id: 'file', label: 'The file' },
+  { id: 'where', labelKey: 'builder.step.where' },
+  { id: 'what', labelKey: 'builder.step.what' },
+  { id: 'when', labelKey: 'builder.step.when' },
+  { id: 'file', labelKey: 'builder.step.file' },
 ]
 
 const TRIGGER_LABEL = {
-  push: 'on every push',
-  pull_request: 'on every pull request',
-  manual: 'on demand',
+  push: 'builder.trigger.push',
+  pull_request: 'builder.trigger.pullRequest',
+  manual: 'builder.trigger.manual',
 }
 
 const PROVIDER_CHOICES = [
-  { value: '', label: 'detect from the repository' },
-  { value: 'github', label: 'GitHub Actions' },
-  { value: 'gitea', label: 'Gitea Actions' },
-  { value: 'gitlab', label: 'GitLab CI' },
-  { value: 'generic', label: 'any other CI (portable script)' },
+  { value: '', labelKey: 'builder.provider.detect' },
+  { value: 'github', labelKey: 'builder.provider.github' },
+  { value: 'gitea', labelKey: 'builder.provider.gitea' },
+  { value: 'gitlab', labelKey: 'builder.provider.gitlab' },
+  { value: 'generic', labelKey: 'builder.provider.generic' },
 ]
 
-function ActionOption({ row, on, onToggle }) {
+function ActionOption({ row, on, onToggle, t }) {
   const blocked = !row.ci_allowed
   return (
     <button type="button" onClick={() => !blocked && onToggle(row.name)}
@@ -44,8 +45,8 @@ function ActionOption({ row, on, onToggle }) {
       <span className="option-copy">
         <span className="option-title">
           {row.label}
-          {row.network && <span className="pill">touches the network</span>}
-          {blocked && <span className="pill">console only</span>}
+          {row.network && <span className="pill">{t('builder.action.network')}</span>}
+          {blocked && <span className="pill">{t('builder.action.consoleOnly')}</span>}
         </span>
         <span className="option-desc">{row.description}</span>
         <span className="option-meta mono">
@@ -58,6 +59,7 @@ function ActionOption({ row, on, onToggle }) {
 }
 
 export default function PipelineBuilder({ onBack, onDone }) {
+  const { t } = useI18n()
   const [step, setStep] = useState(0)
   const [projects, setProjects] = useState([])
   const [project, setProject] = useState('')
@@ -118,7 +120,7 @@ export default function PipelineBuilder({ onBack, onDone }) {
     [blueprint, component])
 
   const repositories = selected?.repositories || []
-  const detectedLabel = repositories[0]?.ci_label || 'portable script'
+  const detectedLabel = repositories[0]?.ci_label || t('builder.detect.portableScript')
   const hasCode = repositories.length > 0
 
   // Two actions can ask for the same task (secrets lives in both `code` and
@@ -162,19 +164,19 @@ export default function PipelineBuilder({ onBack, onDone }) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2500)
     } catch {
-      setError('the clipboard refused the file; select it and copy by hand')
+      setError(t('builder.error.clipboard'))
     }
   }
 
-  if (loading) return <Loading rows={6} label="reading the catalog" />
+  if (loading) return <Loading rows={6} label={t('builder.loading.catalog')} />
 
   if (!projects.length) {
     return (
       <div className="stack">
-        <PageHeader title="New pipeline"
-          subtitle="A pipeline announces a commit; the platform scans it and the build waits on the verdict." />
-        <EmptyState title="No project to attach a pipeline to"
-          hint="A pipeline belongs to a component of a project, and a component needs a repository. Create the project first." />
+        <PageHeader title={t('builder.title')}
+          subtitle={t('builder.subtitle')} />
+        <EmptyState title={t('builder.empty.noProject.title')}
+          hint={t('builder.empty.noProject.hint')} />
       </div>
     )
   }
@@ -192,9 +194,9 @@ export default function PipelineBuilder({ onBack, onDone }) {
   return (
     <div className="wizard">
       <PageHeader
-        title="New pipeline"
-        subtitle="Four steps, and the file your repository needs at the end. Its runs land in Pipelines as commit rows with their verdict."
-        actions={<button className="mini" onClick={onBack}>← pipelines</button>}
+        title={t('builder.title')}
+        subtitle={t('builder.subtitleFull')}
+        actions={<button className="mini" onClick={onBack}>← {t('builder.back')}</button>}
       />
 
       <ol className="wizard-rail">
@@ -204,7 +206,7 @@ export default function PipelineBuilder({ onBack, onDone }) {
             <button type="button" onClick={() => index < step && setStep(index)}
               disabled={index > step}>
               <span className="wizard-dot">{index < step ? '✓' : index + 1}</span>
-              <span className="wizard-label">{row.label}</span>
+              <span className="wizard-label">{t(row.labelKey)}</span>
             </button>
           </li>
         ))}
@@ -213,10 +215,10 @@ export default function PipelineBuilder({ onBack, onDone }) {
       {error && <ErrorBanner error={error} />}
 
       {step === 0 && (
-        <Card title="Where it runs">
+        <Card title={t('builder.step.where')}>
           <div className="wizard-fields">
             <label className="field-block">
-              <span>project</span>
+              <span>{t('builder.field.project')}</span>
               <select value={project} onChange={(event) => setProject(event.target.value)}>
                 {projects.map((row) => (
                   <option key={row.slug} value={row.slug}>{row.name}</option>
@@ -224,12 +226,12 @@ export default function PipelineBuilder({ onBack, onDone }) {
               </select>
             </label>
             <label className="field-block">
-              <span>component</span>
+              <span>{t('builder.field.component')}</span>
               <select value={component} onChange={(event) => setComponent(event.target.value)}
                 disabled={!blueprint}>
                 {(blueprint?.components || []).map((row) => (
                   <option key={row.id} value={row.id}>
-                    {row.name}{row.repositories.length ? '' : ' — no repository'}
+                    {row.name}{row.repositories.length ? '' : t('builder.field.noRepository')}
                   </option>
                 ))}
               </select>
@@ -253,17 +255,17 @@ export default function PipelineBuilder({ onBack, onDone }) {
             </ul>
           ) : (
             <p className="wizard-warning">
-              This component has no repository bound, and every action here reads a
-              checkout: the repository binding is the authorization a CI run relies
-              on. Attach it in Projects → {blueprint?.project.name || project} → components.
+              {t('builder.warning.noRepository', {
+                project: blueprint?.project.name || project,
+              })}
             </p>
           )}
 
           <div className="wizard-inline">
-            <span>target CI</span>
+            <span>{t('builder.field.targetCi')}</span>
             <select value={provider} onChange={(event) => setProvider(event.target.value)}>
               {PROVIDER_CHOICES.map((row) => (
-                <option key={row.value} value={row.value}>{row.label}</option>
+                <option key={row.value} value={row.value}>{t(row.labelKey)}</option>
               ))}
             </select>
             {!provider && <span className="muted">→ {detectedLabel}</span>}
@@ -272,31 +274,28 @@ export default function PipelineBuilder({ onBack, onDone }) {
       )}
 
       {step === 1 && (
-        <Card title="What it checks">
+        <Card title={t('builder.step.what')}>
           <div className="options">
             {(blueprint?.actions || []).map((row) => (
               <ActionOption key={row.name} row={row} on={actions.includes(row.name)}
-                onToggle={toggleIn(setActions)} />
+                onToggle={toggleIn(setActions)} t={t} />
             ))}
           </div>
           <p className="wizard-note">
-            The catalog is closed: these are the actions this platform knows how to
-            run, and each names the tasks it must produce. An action that reaches the
-            network is the platform acting alone, so it needs a grant and runs from
-            the console — a pipeline can announce, but it cannot authorize. Every flow
-            fails closed: HIGH and above block the build, and a run that did not
-            deliver all its tasks certifies nothing.
+            {t('builder.note.catalog')}
             {repeatedTasks.length > 0 && (
-              <> A task in two actions runs once per flow: <span className="mono">{
-                repeatedTasks.join(', ')
-              }</span> appears in both selections.</>
+              <>
+                {' '}{t('builder.note.repeatedBefore')}
+                <span className="mono">{repeatedTasks.join(', ')}</span>
+                {t('builder.note.repeatedAfter')}
+              </>
             )}
           </p>
         </Card>
       )}
 
       {step === 2 && (
-        <Card title="When it runs">
+        <Card title={t('builder.step.when')}>
           <div className="chip-row">
             {(blueprint?.triggers || []).map((row) => (
               <button key={row.name} type="button"
@@ -304,28 +303,26 @@ export default function PipelineBuilder({ onBack, onDone }) {
                 onClick={() => toggleIn(setTriggers)(row.name)}
                 title={row.detail}>
                 {triggers.includes(row.name) ? '✓ ' : ''}
-                {TRIGGER_LABEL[row.name] || row.label}
+                {TRIGGER_LABEL[row.name] ? t(TRIGGER_LABEL[row.name]) : row.label}
               </button>
             ))}
           </div>
 
           {triggers.includes('push') && (
             <label className="field-block" style={{ marginTop: 16 }}>
-              <span>branch the push trigger watches</span>
+              <span>{t('builder.field.branch')}</span>
               <input value={branch} onChange={(event) => setBranch(event.target.value)}
                 placeholder="main" />
             </label>
           )}
 
           <label className="field-block" style={{ marginTop: 16 }}>
-            <span>API root the runner calls — written into the file as BARAD_URL</span>
+            <span>{t('builder.field.apiUrl')}</span>
             <input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)}
               placeholder="https://barad.example.com:8090" />
           </label>
           <p className="wizard-note">
-            A CI runner does not share this console's network: <code>127.0.0.1</code> is
-            the runner's own machine. Left empty, the file reads a repository variable
-            instead of carrying an address that only works here.
+            {t('builder.note.networkBefore')}<code>127.0.0.1</code>{t('builder.note.networkAfter')}
           </p>
         </Card>
       )}
@@ -333,10 +330,10 @@ export default function PipelineBuilder({ onBack, onDone }) {
       {step === 3 && (
         <div className="wizard-result">
           {!snippet ? (
-            <Card title="The file">
-              <EmptyState title="Building the file…"
-                hint={error ? 'The platform refused the selection; read the banner above.'
-                  : 'The workflow is generated from the three previous steps.'} />
+            <Card title={t('builder.step.file')}>
+              <EmptyState title={t('builder.file.building.title')}
+                hint={error ? t('builder.file.building.refused')
+                  : t('builder.file.building.hint')} />
             </Card>
           ) : (
             <>
@@ -345,33 +342,32 @@ export default function PipelineBuilder({ onBack, onDone }) {
                   <div className="row">
                     <span className="muted">{snippet.label}</span>
                     <button className="primary-action" onClick={copy}>
-                      {copied ? 'copied ✓' : 'copy the file'}
+                      {copied ? t('builder.copy.done') : t('builder.copy.action')}
                     </button>
                   </div>
                 )}>
                 <pre className="wizard-code mono">{snippet.body}</pre>
                 <p className="wizard-note">
-                  This screen creates nothing on the platform: the file is the
-                  pipeline. Commit it and the next push announces itself — the run
-                  appears under Pipelines as a commit row with its verdict.
+                  {t('builder.note.file')}
                 </p>
               </Card>
 
-              <Card title="What makes it work">
+              <Card title={t('builder.card.howItWorks')}>
                 <ol className="wizard-notes">
                   {snippet.notes.map((note) => <li key={note}>{note}</li>)}
                 </ol>
                 <div className="chip-row">
                   {snippet.secrets.map((name) => (
-                    <span key={name} className="pill mono">{name} · secret</span>
+                    <span key={name} className="pill mono">{t('builder.secret', { name })}</span>
                   ))}
                   {snippet.variables.map((name) => (
-                    <span key={name} className="pill mono">{name} · variable</span>
+                    <span key={name} className="pill mono">{t('builder.variable', { name })}</span>
                   ))}
                 </div>
                 <p className="wizard-note">
-                  {selected?.name || 'component'} · {actions.join(' + ')} ·{' '}
-                  {triggers.map((name) => TRIGGER_LABEL[name] || name).join(' and ')}
+                  {selected?.name || t('builder.field.component')} · {actions.join(' + ')} ·{' '}
+                  {triggers.map((name) => (TRIGGER_LABEL[name] ? t(TRIGGER_LABEL[name]) : name))
+                    .join(t('builder.join.and'))}
                 </p>
               </Card>
             </>
@@ -381,21 +377,21 @@ export default function PipelineBuilder({ onBack, onDone }) {
 
       <div className="wizard-foot">
         <button className="mini" onClick={step === 0 ? onBack : () => setStep(step - 1)}>
-          {step === 0 ? 'cancel' : '← back'}
+          {step === 0 ? t('common.cancel') : `← ${t('common.back')}`}
         </button>
         <span className="muted">
-          step {step + 1} of {STEPS.length}
-          {blocked ? ' · finish this step to continue' : ''}
+          {t('builder.footer.step', { current: step + 1, total: STEPS.length })}
+          {blocked ? t('builder.footer.blocked') : ''}
         </span>
         <span className="row-end">
           {last ? (
             <button className="primary-action" onClick={() => (onDone ? onDone() : onBack())}>
-              done — go to pipelines
+              {t('builder.footer.done')}
             </button>
           ) : (
             <button className="primary-action" disabled={blocked}
               onClick={() => setStep(step + 1)}>
-              continue →
+              {t('builder.footer.continue')}
             </button>
           )}
         </span>

@@ -15,6 +15,11 @@ const PATHS = {
     ['path', { d: 'M22 12h-6l-2 3h-4l-2-3H2' }],
     ['path', { d: 'M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z' }],
   ],
+  chat: [
+    ['path', { d: 'M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z' }],
+    ['path', { d: 'M8 9h8' }],
+    ['path', { d: 'M8 13h5' }],
+  ],
   findings: [
     ['path', { d: 'm8 2 1.88 1.88' }],
     ['path', { d: 'M14.12 3.88 16 2' }],
@@ -172,6 +177,14 @@ const PATHS = {
     ['path', { d: 'M13 6h8' }],
     ['path', { d: 'M13 12h8' }],
     ['path', { d: 'M13 18h8' }],
+  ],
+  // The guide's mark: a question, because "how does this work" is the question
+  // the screen answers (there is no book glyph in the set on purpose — it reads
+  // as "docs site", and this is a screen, not an external link).
+  help: [
+    ['circle', { cx: 12, cy: 12, r: 10 }],
+    ['path', { d: 'M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3' }],
+    ['path', { d: 'M12 17h.01' }],
   ],
   search: [
     ['circle', { cx: 11, cy: 11, r: 8 }],

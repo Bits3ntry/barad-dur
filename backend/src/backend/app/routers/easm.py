@@ -37,7 +37,28 @@ def _latest_observation(session: Session, asset: models.Asset) -> dict | None:
                 .filter_by(asset_id=asset.id)
                 .order_by(models.AssetSnapshot.observed_at.desc()).first())
     if snapshot is None:
-        return None
+        # A discovered subdomain has observations but no snapshot: a run snapshots
+        # only its own target. Reading the newest host/dns row keeps the table from
+        # printing "—" for an address the platform is already holding — the panel
+        # showed it and the list did not, from the same run.
+        observation = (session.query(models.Observation)
+                       .filter_by(asset_id=asset.id)
+                       .filter(models.Observation.kind.in_(("host", "dns")))
+                       .order_by(models.Observation.observed_at.desc()).first())
+        if observation is None:
+            return None
+        value = _observation_value(observation)
+        addresses = [str(item) for item in (value.get("addresses") or [])]
+        ipv4 = value.get("ipv4") or [item for item in addresses if ":" not in item]
+        ipv6 = value.get("ipv6") or [item for item in addresses if ":" in item]
+        return {
+            "observed_at": observation.observed_at.isoformat(),
+            "source": observation.source,
+            "ipv4": ipv4,
+            "ipv6": ipv6,
+            "certificate": None,
+            "tech": [],
+        }
     try:
         data = json.loads(snapshot.data)
     except (TypeError, ValueError):

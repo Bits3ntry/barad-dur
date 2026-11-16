@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { useI18n } from './i18n'
 
 /* The deployment's outgoing mail. One relay serves invitations and every email
    notification channel, so this is a deployment setting, not an organization
@@ -20,6 +21,7 @@ const DEFAULT_FORM = {
 }
 
 export default function MailSettings({ onConfigured, defaultRecipient = '' }) {
+  const { t } = useI18n()
   const [status, setStatus] = useState(null)
   const [form, setForm] = useState(DEFAULT_FORM)
   const [testTo, setTestTo] = useState(defaultRecipient)
@@ -55,7 +57,7 @@ export default function MailSettings({ onConfigured, defaultRecipient = '' }) {
     event.preventDefault()
     setError('')
     setNotice('')
-    if (!form.host.trim()) { setError('A mail server name is required.'); return }
+    if (!form.host.trim()) { setError(t('mail.error.hostRequired')); return }
     setBusy('save')
     try {
       const r = await api.put('/api/v1/deployment/mail', {
@@ -69,7 +71,7 @@ export default function MailSettings({ onConfigured, defaultRecipient = '' }) {
       })
       setStatus(r.data)
       setForm((f) => ({ ...f, password: '' }))
-      setNotice(`Saved. Mail will leave through ${r.data.host}:${r.data.port}.`)
+      setNotice(t('mail.savedNotice', { host: r.data.host, port: r.data.port }))
       if (onConfigured) onConfigured(r.data)
     } catch (e) {
       setError(String(e.message || e))
@@ -79,12 +81,12 @@ export default function MailSettings({ onConfigured, defaultRecipient = '' }) {
   async function sendTest() {
     setError('')
     setNotice('')
-    if (!testTo.trim()) { setError('Enter an address to receive the test.'); return }
+    if (!testTo.trim()) { setError(t('mail.error.testRecipient')); return }
     setBusy('test')
     try {
       const r = await api.post('/api/v1/deployment/mail/test',
         { to: testTo.trim(), actor: 'console' })
-      setNotice(`Test delivered to ${r.data.to} via ${sourceLabel}.`)
+      setNotice(t('mail.testDelivered', { to: r.data.to, via: sourceLabel }))
     } catch (e) {
       setError(String(e.message || e))
     } finally { setBusy('') }
@@ -100,8 +102,8 @@ export default function MailSettings({ onConfigured, defaultRecipient = '' }) {
       setForm({ ...DEFAULT_FORM, host: r.data.host || '', port: r.data.port || 587,
         sender: r.data.sender || DEFAULT_FORM.sender })
       setNotice(r.data.source === 'environment'
-        ? 'Configuration removed. The deployment environment takes over.'
-        : 'Configuration removed. Email delivery is off until one of the two is set.')
+        ? t('mail.resetEnvironment')
+        : t('mail.resetOff'))
       if (onConfigured) onConfigured(r.data)
     } catch (e) {
       setError(String(e.message || e))
@@ -109,81 +111,81 @@ export default function MailSettings({ onConfigured, defaultRecipient = '' }) {
   }
 
   const sourceText = status?.source === 'database'
-    ? 'saved here (wins over the environment)'
+    ? t('mail.source.database')
     : status?.source === 'environment'
-      ? 'from the deployment environment'
-      : 'not configured'
+      ? t('mail.source.environment')
+      : t('mail.source.none')
   const sourceLabel = status?.source === 'database'
-    ? 'the saved configuration'
+    ? t('mail.sourceLabel.database')
     : status?.source === 'environment'
-      ? 'the deployment environment'
-      : 'nothing'
+      ? t('mail.sourceLabel.environment')
+      : t('mail.sourceLabel.none')
 
   return (
     <div className="stack" style={{ gap: 10 }}>
       {status && (
         <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-          Delivery: <strong>{status.configured ? `${status.host}:${status.port}` : 'off'}</strong>
+          {t('mail.status.delivery')} <strong>{status.configured ? `${status.host}:${status.port}` : t('mail.status.off')}</strong>
           {' · '}{sourceText}
-          {status.password_set ? ' · password stored' : ''}
-          {status.updated_by ? ` · last changed by ${status.updated_by}` : ''}
+          {status.password_set ? t('mail.status.passwordStored') : ''}
+          {status.updated_by ? t('mail.status.lastChangedBy', { user: status.updated_by }) : ''}
         </p>
       )}
 
       <form onSubmit={save} className="onb-form onb-grid" style={{ maxWidth: 'none' }}>
         <label>
-          Mail server
+          {t('mail.host')}
           <input value={form.host} placeholder="smtp.example.com"
             onChange={(e) => setForm({ ...form, host: e.target.value })} />
         </label>
         <label>
-          Port
+          {t('mail.port')}
           <input type="number" min="1" max="65535" value={form.port}
             onChange={(e) => setForm({ ...form, port: e.target.value })} />
-          <span className="onb-help">587 with STARTTLS, 465 implicit TLS, 25 plain relay.</span>
+          <span className="onb-help">{t('mail.portHint')}</span>
         </label>
         <label>
-          From address
+          {t('mail.sender')}
           <input value={form.sender} placeholder="barad-dur@example.com"
             onChange={(e) => setForm({ ...form, sender: e.target.value })} />
         </label>
         <label>
-          Username
-          <input value={form.user} autoComplete="off" placeholder="empty = anonymous relay"
+          {t('mail.user')}
+          <input value={form.user} autoComplete="off" placeholder={t('mail.userPlaceholder')}
             onChange={(e) => setForm({ ...form, user: e.target.value })} />
         </label>
         <label>
-          Password
+          {t('mail.password')}
           <input type="password" value={form.password} autoComplete="new-password"
-            placeholder={status?.password_set ? 'stored — leave blank to keep it' : 'not set'}
+            placeholder={status?.password_set ? t('mail.passwordStoredPlaceholder') : t('mail.passwordNotSet')}
             onChange={(e) => setForm({ ...form, password: e.target.value })} />
-          <span className="onb-help">Encrypted before it is stored; never shown again.</span>
+          <span className="onb-help">{t('mail.passwordHint')}</span>
         </label>
         <label className="onb-check">
           <input type="checkbox" checked={form.starttls}
             onChange={(e) => setForm({ ...form, starttls: e.target.checked })} />
-          <span>STARTTLS</span>
-          <span className="onb-help">Most relays on port 587 require it; turn it off for a plain local relay.</span>
+          <span>{t('mail.starttls')}</span>
+          <span className="onb-help">{t('mail.starttlsHint')}</span>
         </label>
         <div className="onb-form-actions row" style={{ gap: 10 }}>
           <button className="btn-primary" type="submit" disabled={busy === 'save'}>
-            {busy === 'save' ? 'Saving…' : 'Save mail server'}
+            {busy === 'save' ? t('mail.saving') : t('mail.save')}
           </button>
           {status?.source === 'database' && (
             <button type="button" className="mini quiet" onClick={useEnvironment}
-              disabled={busy === 'reset'}>use environment instead</button>
+              disabled={busy === 'reset'}>{t('mail.useEnvironment')}</button>
           )}
         </div>
       </form>
 
       <div className="onb-inline-form" style={{ maxWidth: 'none' }}>
-        <input value={testTo} placeholder="send a test to…" type="email"
+        <input value={testTo} placeholder={t('mail.testPlaceholder')} type="email"
           onChange={(e) => setTestTo(e.target.value)} />
         <span className="onb-help" style={{ alignSelf: 'center' }}>
-          A configuration only counts once a server accepts a message.
+          {t('mail.testHint')}
         </span>
         <button type="button" className="mini" onClick={sendTest} disabled={busy === 'test'}>
-          {busy === 'test' ? 'sending…' : 'send test'}
+          {busy === 'test' ? t('mail.testSending') : t('mail.testSend')}
         </button>
       </div>
 

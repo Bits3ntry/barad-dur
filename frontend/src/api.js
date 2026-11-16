@@ -1,4 +1,7 @@
-const DEFAULTS = { url: '', key: '', token: '', refresh_token: '', expires_at: '' }
+// `org` is the organisation the console is working in. It travels as `X-Org` on
+// every request and is only meaningful for a signed-in person: an API key is
+// bound to one organisation, and the API refuses to be pointed elsewhere.
+const DEFAULTS = { url: '', key: '', token: '', refresh_token: '', expires_at: '', org: '' }
 
 function read() {
   try {
@@ -83,7 +86,7 @@ function describeError(detail) {
 }
 
 async function request(path, options = {}) {
-  const { url, key, token } = read()
+  const { url, key, token, org } = read()
   // Empty URL = same-origin: in dev the Vite proxy forwards /api to the
   // platform (no CORS); a full URL addresses a remote deployment directly.
   const base = (url || '').replace(/\/$/, '')
@@ -93,6 +96,9 @@ async function request(path, options = {}) {
   }
   const headers = {
     ...(token ? { Authorization: `Bearer ${token}` } : key ? { 'X-API-Key': key } : {}),
+    // Sent only when a person chose an organisation: a key's own org is the
+    // answer for a key, and the API rejects the header when it disagrees.
+    ...(org && token ? { 'X-Org': org } : {}),
     ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
     ...(options.headers || {}),
   }
@@ -128,16 +134,40 @@ async function request(path, options = {}) {
   }
 
   let message = `HTTP ${response.status}`
+  let detail = null
   try {
     const body = await response.json()
+    // The reason codes travel on the error: the API answers with `{code, at}`
+    // so the console can translate, and a screen that only had a message would
+    // have to parse prose to find out which stage it was.
+    detail = body.detail ?? null
     message += `: ${describeError(body.detail)}`
   } catch { /* bounded: keep the status as the reason */ }
-  throw new Error(message)
+  const error = new Error(message)
+  error.status = response.status
+  error.detail = detail
+  throw error
+}
+
+/* Who is pressing this button.
+
+   The session stores `email` when the person signed in with a password, but a
+   session restored from one API key has no address — and an empty actor fails
+   server-side validation with "String should have at least 1 character", which is
+   what a promote clicked from such a session used to answer. The identity is a
+   label for the audit row, so it falls back to the console, never to nothing. */
+export function actorName() {
+  const settings = read()
+  return (settings.email || settings.user || settings.actor || 'console').trim() || 'console'
 }
 
 export const api = {
   settings: read,
   save,
+  /* Switching is a reload, not a re-render: every screen holds data resolved for
+     the previous organisation, and a console that keeps a cached projects list
+     from the old one is worse than a second of white. */
+  setOrg: (id) => save({ org: id || '' }),
   get: (path) => request(path),
   post: (path, body, options = {}) => request(path, {
     ...options,
@@ -148,4 +178,14 @@ export const api = {
   put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
   postRaw: (path, raw) => request(path, { method: 'POST', body: raw, headers: { 'Content-Type': 'application/octet-stream' } }),
   del: (path, body) => request(path, { method: 'DELETE', ...(body ? { body: JSON.stringify(body) } : {}) }),
+  // A document is fetched as bytes, not JSON, and the credential travels in a
+  // header — which a plain <a href> cannot carry. Same origin, same credentials.
+  getBlob: async (path) => {
+    const settings = read()
+    const headers = settings.key ? { 'X-API-Key': settings.key }
+      : settings.token ? { Authorization: `Bearer ${settings.token}` } : {}
+    const response = await fetch(`${settings.url}${path}`, { headers })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    return response.blob()
+  },
 }

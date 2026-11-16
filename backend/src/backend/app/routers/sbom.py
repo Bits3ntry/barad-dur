@@ -1,5 +1,6 @@
 """SBOM ingestion endpoints."""
 import json
+import os
 import time
 from urllib.parse import unquote
 
@@ -10,9 +11,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.app.versions import pick_version
-from backend.app import auth, ingest, models, scm_client
+from backend.app import auth, ingest, models, sbom_match, scm_client
 from backend.app.db import get_session
 from backend.app.gates import NON_OPEN
+from backend.app.status import CLOSED_STATUSES
 
 router = APIRouter(prefix="/api/v1", tags=["sbom"])
 
@@ -21,7 +23,7 @@ ALLOWED_SOURCES = ("cli", "web", "ci", "api")
 # A finding somebody disposed of — resolved, accepted, false positive, suppressed
 # — is not silent: it is counted apart from the open list, because "nothing here"
 # and "somebody looked and decided" are different answers.
-SETTLED_STATUSES = NON_OPEN | {"suppressed"}
+SETTLED_STATUSES = NON_OPEN
 
 
 class ReceiptResponse(BaseModel):
@@ -39,6 +41,9 @@ def upload_sbom(
     component: str | None = Query(
         default=None,
         description="component the version belongs to (name or slug); omit for a product-wide release"),
+    create_component: bool = Query(
+        default=False,
+        description="create the component when it is not catalogued yet (manual upload only)"),
     source: str = Query(default="api"),
     filename: str | None = Query(default=None),
     artifact_digest: str | None = Query(default=None, max_length=128,
@@ -64,18 +69,18 @@ def upload_sbom(
         result = ingest.ingest_document(
             session, org.id, body, source=source, filename=filename,
             project_override=project, version_override=version,
-            component_override=component)
+            component_override=component, create_component=create_component)
     except (ingest.SbomDocumentError, ValueError, json.JSONDecodeError) as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(error)) from None
     receipt = session.get(models.SbomImport, result["import_id"])
-    version = session.get(models.ProjectVersion, receipt.project_version_id)
+    version_row = session.get(models.ProjectVersion, receipt.project_version_id)
     artifact = None
     if artifact_digest:
         artifact = (session.query(models.Artifact)
                     .filter_by(org_id=org.id, digest=artifact_digest.strip()).one_or_none())
         if artifact is None:
             artifact = models.Artifact(
-                org_id=org.id, project_version_id=version.id,
+                org_id=org.id, project_version_id=version_row.id,
                 name=(artifact_name or filename or f"build-{artifact_digest[:12]}"),
                 digest=artifact_digest.strip(), digest_algorithm="sha256",
                 provenance=artifact_provenance, source=source)
@@ -93,7 +98,127 @@ def upload_sbom(
                             "provenance": artifact.provenance,
                             "project_version_id": artifact.project_version_id}
                            if artifact else None)
+    # Where the build landed, in the identity the console navigates by: the
+    # receipt's numbers answer "did it work", this answers "take me to it".
+    project_row = session.get(models.Project, version_row.project_id)
+    component_row = (session.get(models.ApplicationComponent, version_row.component_id)
+                     if version_row.component_id else None)
+    payload["build"] = ({
+        "project": project_row.slug, "project_name": project_row.name,
+        "component": component_row.slug if component_row else None,
+        "component_name": component_row.name if component_row else None,
+        "version": version_row.version, "version_id": version_row.id,
+    } if project_row else None)
     return JSONResponse(status_code=status_code, content=payload)
+
+
+@router.post("/sbom/analyze")
+def analyze_sbom(
+    body: bytes = Body(...),
+    filename: str | None = Query(default=None, max_length=255),
+    org: models.Organization = Depends(auth.require_org),
+    session: Session = Depends(get_session),
+):
+    """What this document would become, before anything is written.
+
+    The manual upload asks a person to place a build by hand. That decision needs
+    the facts the document carries — which project and component the artifact
+    names, which version, how much is inside it, and whether the exact same bytes
+    already landed — plus the ranked candidates when the artifact names nothing,
+    which is the normal case for Trivy (its root component is the scanned path).
+
+    Read-only: the same body is then `POST /sbom` with what the operator chose.
+    """
+    if len(body) > MAX_BODY_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "SBOM body exceeds 50 MB")
+    if not body.lstrip()[:1] == b"{":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "body must be a JSON object")
+    try:
+        document = json.loads(body)
+        parsed = ingest.parse(document)
+    except (ingest.SbomDocumentError, ValueError, json.JSONDecodeError) as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(error)) from None
+
+    match = sbom_match.detect(session, org.id, parsed, filename)
+    detected = match["detected"]
+    digest = ingest.content_sha256(body)
+
+    # An identical re-upload is not a failure: it is `unchanged`, and saying so
+    # before the person presses the button stops a pointless second import.
+    duplicate = None
+    if detected["project"] and detected["version"]:
+        project_row = (session.query(models.Project)
+                       .filter_by(org_id=org.id, slug=detected["project"]["slug"])
+                       .one_or_none())
+        if project_row is not None:
+            component_id = detected["component"]["id"] if detected["component"] else None
+            version_row = (session.query(models.ProjectVersion)
+                           .filter_by(project_id=project_row.id,
+                                      version=detected["version"],
+                                      component_id=component_id).one_or_none())
+            if version_row is not None:
+                receipt = (session.query(models.SbomImport)
+                           .filter_by(project_version_id=version_row.id,
+                                      content_sha256=digest).one_or_none())
+                if receipt is not None:
+                    duplicate = {"import_id": receipt.id, "version_id": version_row.id,
+                                 "imported_at": (receipt.created_at.isoformat()
+                                                 if receipt.created_at else None)}
+
+    components = parsed["components"]
+    return {"data": {
+        "filename": filename,
+        "content_sha256": digest,
+        "bytes": len(body),
+        "format": {"bom_format": document.get("bomFormat"),
+                   "spec_version": parsed.get("spec_version")},
+        "counts": {"components": len(components),
+                   "direct": sum(1 for row in components if row["is_direct"]),
+                   "containers": len(parsed.get("containers") or []),
+                   "vulnerabilities": len(parsed["vulnerabilities"])},
+        **match,
+        "duplicate": duplicate,
+        "warnings": _analyze_warnings(match, parsed),
+    }}
+
+
+@router.get("/sbom/ingest")
+def ingest_instructions(org: models.Organization = Depends(auth.require_org)):
+    """Which action feeds a build, and whether the operator configured a public URL.
+
+    A CLI posting from a terminal needs a consumer-reachable address, and the
+    platform cannot infer one: behind the console's proxy the request arrives with
+    the proxy's host and no port, which is not where a terminal can post. So the
+    configured `PLATFORM_PUBLIC_URL` is answered when it exists and left `null`
+    otherwise — the console then hands out the origin it is being read at, which
+    is exactly the address whose `/api` it already uses.
+    """
+    configured = os.environ.get("PLATFORM_PUBLIC_URL", "").rstrip("/")
+    return {"data": {
+        "api_url": configured or None,
+        "action": "supply-chain",
+        "code_action": "code",
+    }}
+
+
+def _analyze_warnings(match: dict, parsed: dict) -> list[str]:
+    """What the person has to supply because the artifact does not.
+
+    Machine codes, translated by the console: a sentence composed here would be
+    the one string on the screen the i18n gate cannot see.
+    """
+    warnings = []
+    if match["document"]["root_names_nothing"]:
+        warnings.append("root_names_nothing")
+    if not match["detected"]["project"]:
+        warnings.append("project_not_detected")
+    if not match["detected"]["component"] and match["detected"]["project"]:
+        warnings.append("component_not_detected")
+    if not match["detected"]["version"]:
+        warnings.append("version_missing")
+    if not parsed["components"]:
+        warnings.append("no_components")
+    return warnings
 
 
 @router.get("/imports/{import_id}")
@@ -292,7 +417,7 @@ def baseline_diff(project: str = Query(...), version: str = Query(...),
 # a BOM" and the version endpoint answers "what is inside this one" — the two
 # questions the Dependency-Track screen is built on.
 
-CLOSED_FINDING_STATUSES = ("closed", "resolved", "false_positive")
+CLOSED_FINDING_STATUSES = CLOSED_STATUSES
 
 # What a finding costs a component, before the exploitability multipliers. The
 # numbers are policy, not physics: they exist so "which package should I look at
@@ -887,33 +1012,12 @@ def bom_version(project: str = Query(...), version: str = Query(...),
 def _ancestry(session, version_id: str, component) -> list[dict]:
     """The chain from one package up to whatever the application declares.
 
-    "I have a CVE in brotli" is only actionable as "brotli came in through
-    axios", so the drawer answers with the path, not just the immediate parent.
-    A cycle (possible in a hand-written BOM) stops the walk instead of looping.
+    The walk lives in `backend.app.ancestry` because the advisory page and the
+    package sheet answer the same question for one row; this name stays so the
+    build graph keeps reading the way it did.
     """
-    links = {link.component_id: link for link in
-             session.query(models.VersionComponent)
-             .filter_by(project_version_id=version_id).all()}
-    if not links:
-        return []
-    by_purl = {}
-    for row in (session.query(models.Component)
-                .filter(models.Component.id.in_(set(links))).all()):
-        if row.purl:
-            by_purl[row.purl] = row
-    path: list[dict] = []
-    seen = {component.id}
-    current = component
-    while len(path) < 16:
-        link = links.get(current.id)
-        parent = by_purl.get(link.parent_purl) if link and link.parent_purl else None
-        if parent is None or parent.id in seen:
-            break
-        path.append({"id": parent.id, "name": parent.name, "version": parent.version,
-                     "purl": parent.purl})
-        seen.add(parent.id)
-        current = parent
-    return path
+    from backend.app.ancestry import ancestry
+    return ancestry(session, version_id, component)
 
 
 # Small, short-lived cache: walking fifteen issues in one file should cost one

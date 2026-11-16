@@ -247,6 +247,7 @@ def parse(document: dict) -> dict:
     return {
         "project_name": root["name"],
         "project_version": version if isinstance(version, str) and version else None,
+        "spec_version": spec,
         "components": rows,
         # Named here so the writer can retire the links an older parser created
         # for them: those rows are files masquerading as packages.
@@ -376,12 +377,14 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
                     filename: str | None = None,
                     project_override: str | None = None,
                     version_override: str | None = None,
-                    component_override: str | None = None) -> dict:
+                    component_override: str | None = None,
+                    create_component: bool = False) -> dict:
     """Idempotent ingestion: one receipt per (project_version, content hash).
 
     A version belongs to a component, so an SBOM for the backend must not land on
     the web's `1.7.4`. `component_override` names it; without one the document is
-    a product-wide release.
+    a product-wide release. `create_component` lets a hand-delivered upload
+    catalogue the component it names — the screen asked the person first.
 
     Returns {'status': 'created'|'duplicate', 'import_id', ...receipt fields}.
     """
@@ -395,7 +398,8 @@ def ingest_document(session, org_id: str, raw: bytes, *, source: str,
     project = _project(session, org_id, project_name)
     component_id = None
     if component_override:
-        component = _component(session, project, component_override)
+        component = _component(session, project, component_override,
+                               create=create_component, org_id=org_id)
         component_id = component.id
     project_version = _project_version(session, project, version, component_id)
     digest = content_sha256(raw)
@@ -519,16 +523,30 @@ def _project(session, org_id: str, name: str) -> models.Project:
     return project
 
 
-def _component(session, project: models.Project, name: str) -> models.ApplicationComponent:
-    """Resolve a component by slug or name; an SBOM may not invent one."""
+def _component(session, project: models.Project, name: str,
+               create: bool = False, org_id: str | None = None
+               ) -> models.ApplicationComponent:
+    """Resolve a component by slug or name; an SBOM may not invent one.
+
+    `create` exists for the hand-delivered upload: a person picking "backend" in
+    the console is the act that catalogues it, which is what the pipeline does
+    inheriting the component from the repository. Nothing is invented silently —
+    the screen asks first and the flag is what the answer becomes.
+    """
     slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in name).strip("-")[:128]
     row = (session.query(models.ApplicationComponent)
            .filter(models.ApplicationComponent.project_id == project.id,
                    (models.ApplicationComponent.slug == slug)
                    | (models.ApplicationComponent.name == name)).one_or_none())
     if row is None:
-        raise SbomDocumentError(
-            f"component not found in {project.name}: {name} (create it in the project first)")
+        if not create:
+            raise SbomDocumentError(
+                f"component not found in {project.name}: {name} (create it in the project first)")
+        row = models.ApplicationComponent(
+            org_id=org_id or project.org_id, project_id=project.id,
+            name=name, slug=slug, kind="backend")
+        session.add(row)
+        session.flush()
     return row
 
 

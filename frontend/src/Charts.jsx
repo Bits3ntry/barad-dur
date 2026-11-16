@@ -1,12 +1,32 @@
 import React from 'react'
+import { useI18n } from './i18n'
 
-/* ── SVG chart primitives (lightweight, no third-party dependency) ── */
+/* ── SVG chart primitives (lightweight, no third-party dependency) ──
+   Every colour comes from a semantic token, so a chart reads the same in both
+   themes and a severity hue is never invented locally. `tone` names a severity
+   (critical | high | medium | low | info) or a state (accent | ok | muted). */
+
+const ink = (tone) => {
+  if (!tone || tone === 'accent') return 'var(--action-bg)'
+  if (tone === 'ok') return 'var(--sev-low)'
+  if (tone === 'muted') return 'var(--fg-subtle)'
+  return `var(--sev-${tone})`
+}
+
+const GRID = 'var(--border-subtle)'
+const LABEL = 'var(--fg-subtle)'
+const SURFACE = 'var(--surface-card)'
+
+const AXIS_FONT = 10
 
 /* Single axis + gridline chart. */
-export function LineChart({ data, height = 160, color = '#ff7b00', gridColor = 'var(--line)' }) {
+export function LineChart({ data, height = 160, tone = 'accent', color,
+                           gridColor = GRID }) {
+  const { t } = useI18n()
+  const stroke = color || ink(tone)
   const w = 600
   const h = height
-  const pad = { top: 10, bottom: 24, left: 44, right: 10 }
+  const pad = { top: 12, bottom: 26, left: 46, right: 12 }
   const innerW = w - pad.left - pad.right
   const innerH = h - pad.top - pad.bottom
 
@@ -22,62 +42,69 @@ export function LineChart({ data, height = 160, color = '#ff7b00', gridColor = '
   })
 
   const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
-  const areaPath = `${linePath} L ${points[points.length - 1].x} ${pad.top + innerH} L ${points[0].x} ${pad.top + innerH} Z`
+  const areaPath = `${linePath} L ${points[points.length - 1].x} ${pad.top + innerH}`
+    + ` L ${points[0].x} ${pad.top + innerH} Z`
 
   const gridLines = []
   for (let i = 0; i <= 4; i++) {
     const y = pad.top + (i / 4) * innerH
     gridLines.push(
       <line key={i} x1={pad.left} y1={y} x2={w - pad.right} y2={y}
-        stroke={gridColor} strokeDasharray="3 3" strokeWidth="1" />
+        style={{ stroke: gridColor }} strokeDasharray="3 3" strokeWidth="1" />
     )
   }
 
   const xLabels = []
   for (let i = 0; i < points.length; i += Math.max(1, Math.floor(points.length / 5))) {
     xLabels.push(
-      <text key={i} x={points[i].x} y={h - 6} textAnchor="middle" fontSize="9"
-        fill="#8b949e">{points[i].label || ''}</text>
+      <text key={i} x={points[i].x} y={h - 8} textAnchor="middle" fontSize={AXIS_FONT}
+        style={{ fill: LABEL }}>{points[i].label || ''}</text>
     )
   }
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="chart" role="img" aria-label="line chart">
+    <svg viewBox={`0 0 ${w} ${h}`} className="chart" role="img" aria-label={t('chart.lineAria')}>
       <g>{gridLines}</g>
-      <path d={areaPath} fill={color} opacity="0.12" />
-      <path d={linePath} fill="none" stroke={color} strokeWidth="2.5"
+      <path d={areaPath} style={{ fill: stroke }} opacity="0.10" />
+      <path d={linePath} fill="none" style={{ stroke }} strokeWidth="2.5"
         strokeLinejoin="round" strokeLinecap="round" />
       {points.map((p, i) => (
-        <circle key={i} cx={p.x} cy={p.y} r={p.value >= max ? 4 : 3}
-          fill={p.value >= max ? '#180606' : '#fff'}
-          stroke={color} strokeWidth="2" />
+        <circle key={i} cx={p.x} cy={p.y} r={p.value >= max ? 3.5 : 2.5}
+          style={{ fill: p.value >= max ? stroke : SURFACE, stroke }} strokeWidth="2" />
       ))}
       {xLabels}
-      <text x={w - pad.right} y={pad.top + innerH + 14} textAnchor="end" fontSize="9"
-        fill="#8b949e" fontFamily="monospace">
+      <text x={pad.left - 8} y={pad.top + 4} textAnchor="end" fontSize={AXIS_FONT}
+        style={{ fill: LABEL }}>{max}</text>
+      <text x={pad.left - 8} y={pad.top + innerH + 4} textAnchor="end" fontSize={AXIS_FONT}
+        style={{ fill: LABEL }}>{min}</text>
+      <text x={w - pad.right} y={pad.top - 1} textAnchor="end" fontSize={AXIS_FONT + 1}
+        style={{ fill: LABEL }} fontFamily="ui-monospace, monospace">
         {data[data.length - 1].value}
       </text>
     </svg>
   )
 }
 
-/* Bar chart with categorical colors. */
-export function BarChart({ data, height = 160, colors = ['#6bcb77', '#ffd166', '#ff9c3f', '#ff5a5a', '#8b949e'] }) {
+/* Bar chart with categorical tones (one per bar, in order). */
+export function BarChart({ data, height = 160, tones = ['critical', 'high', 'medium', 'low', 'info'],
+                           colors }) {
+  const { t } = useI18n()
   const w = 600
   const h = height
-  const pad = { top: 10, bottom: 24, left: 44, right: 10 }
+  const pad = { top: 12, bottom: 26, left: 46, right: 12 }
   const innerW = w - pad.left - pad.right
   const innerH = h - pad.top - pad.bottom
 
   const max = Math.max(...data.map((d) => d.value), 1)
-  const barWidth = Math.min(44, (innerW / data.length) * 0.7)
+  const barWidth = Math.min(46, (innerW / Math.max(data.length, 1)) * 0.66)
   const gap = (innerW - barWidth * data.length) / (data.length + 1)
 
   const bars = data.map((d, i) => {
     const barH = (d.value / max) * innerH
     const x = pad.left + gap + i * (barWidth + gap)
     const y = pad.top + innerH - barH
-    return { x, y, barH, ...d }
+    const tone = d.tone || tones[i % tones.length]
+    return { x, y, barH, tone, ...d }
   })
 
   const gridLines = []
@@ -85,41 +112,46 @@ export function BarChart({ data, height = 160, colors = ['#6bcb77', '#ffd166', '
     const y = pad.top + (i / 4) * innerH
     gridLines.push(
       <line key={i} x1={pad.left} y1={y} x2={w - pad.right} y2={y}
-        stroke="#30363d" strokeDasharray="3 3" strokeWidth="1" />
+        style={{ stroke: GRID }} strokeDasharray="3 3" strokeWidth="1" />
     )
   }
 
   const xLabels = bars.map((b, i) => (
-    <text key={i} x={b.x + barWidth / 2} y={h - 6} textAnchor="middle" fontSize="9"
-      fill="#8b949e">{b.label || ''}</text>
+    <text key={i} x={b.x + barWidth / 2} y={h - 8} textAnchor="middle" fontSize={AXIS_FONT}
+      style={{ fill: LABEL }}>{b.label || ''}</text>
   ))
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="chart" role="img" aria-label="bar chart">
+    <svg viewBox={`0 0 ${w} ${h}`} className="chart" role="img" aria-label={t('chart.barAria')}>
       <g>{gridLines}</g>
       {bars.map((b, i) => (
-        <rect key={i} x={b.x} y={b.y} width={barWidth} height={b.barH}
-          fill={colors[i % colors.length]} rx="2">
-          <title>{b.label}: {b.value}</title>
-        </rect>
+        <g key={i}>
+          <rect x={b.x} y={b.y} width={barWidth} height={Math.max(b.barH, b.value ? 2 : 0)}
+            rx="3" style={{ fill: colors ? colors[i % colors.length] : ink(b.tone) }}>
+            <title>{b.label}: {b.value}</title>
+          </rect>
+          <text x={b.x + barWidth / 2} y={Math.max(b.y - 6, 10)} textAnchor="middle"
+            fontSize={AXIS_FONT + 1} fontWeight="620"
+            style={{ fill: b.value ? 'var(--fg-strong)' : LABEL }}>{b.value}</text>
+        </g>
       ))}
       {xLabels}
     </svg>
   )
 }
 
-/* Donut/pie chart for severity distribution. */
+/* Donut for a distribution. Each datum may name its own `tone`. */
 export function DonutChart({ data, height = 160 }) {
+  const { t } = useI18n()
   const w = 600
   const h = height
-  const pad = { top: 10, bottom: 10, left: 10, right: 10 }
   const cx = w / 2
   const cy = h / 2
-  const radius = Math.min(w, h) / 2 - 16
-  const innerRadius = radius * 0.6
+  const radius = Math.min(w, h) / 2 - 18
+  const innerRadius = radius * 0.62
 
   const total = data.reduce((sum, d) => sum + d.value, 0)
-  const colors = ['#ff5a5a', '#ff9c3f', '#ffd166', '#6bcb77', '#8b949e']
+  const fallback = ['critical', 'high', 'medium', 'low', 'info']
   const legend = []
 
   let angle = -Math.PI / 2
@@ -130,48 +162,51 @@ export function DonutChart({ data, height = 160 }) {
     const largeArc = frac > 0.5 ? 1 : 0
     angle = endAngle
 
+    const tone = d.tone || fallback[i % fallback.length]
     const x1 = cx + radius * Math.cos(startAngle)
     const y1 = cy + radius * Math.sin(startAngle)
     const x2 = cx + radius * Math.cos(endAngle)
     const y2 = cy + radius * Math.sin(endAngle)
 
     legend.push(
-      <li key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <span style={{ width: 10, height: 10, borderRadius: '2px', display: 'inline-block',
-          background: colors[i % colors.length] }} />
-        <span style={{ fontSize: 12.5 }}>{d.label}: {d.value}</span>
+      <li key={i} className="chart-legend-row">
+        <i className={`chart-swatch sev-bar-${tone}`} aria-hidden="true" />
+        <span>{d.label}</span>
+        <strong>{d.value}</strong>
       </li>
     )
 
-    return {
-      x1, y1, x2, y2, startAngle, endAngle, largeArc,
-      color: colors[i % colors.length], value: d.value,
-    }
+    return { x1, y1, x2, y2, startAngle, endAngle, largeArc, tone, value: d.value }
   })
 
   const arcPaths = arcs.map((a, i) => {
     if (a.value === 0 || total <= 0) return null
     return (
-      <path key={i} d={`M ${cx} ${cy} L ${a.x1} ${a.y1} A ${radius} ${radius} 0 ${a.largeArc} 1 ${a.x2} ${a.y2} Z`}
-        fill={a.color} stroke="var(--panel)" strokeWidth="1">
+      <path key={i}
+        d={`M ${cx} ${cy} L ${a.x1} ${a.y1} A ${radius} ${radius} 0 ${a.largeArc} 1 ${a.x2} ${a.y2} Z`}
+        style={{ fill: ink(a.tone) }} stroke={SURFACE} strokeWidth="1.5">
         <title>{a.value}</title>
       </path>
     )
   })
 
   return (
-    <div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="chart" role="img" aria-label="donut chart">
+    <div className="chart-donut">
+      <svg viewBox={`0 0 ${w} ${h}`} className="chart" role="img" aria-label={t('chart.donutAria')}>
         {arcPaths}
         {total <= 0 && (
           <circle cx={cx} cy={cy} r={(radius + innerRadius) / 2} fill="none"
-            stroke="var(--line-strong)" strokeWidth={radius - innerRadius} />
+            style={{ stroke: GRID }} strokeWidth={radius - innerRadius} />
         )}
-        <circle cx={cx} cy={cy} r={radius} fill="none" stroke="var(--line)" strokeWidth="8" />
-        <circle cx={cx} cy={cy} r={innerRadius} fill="none" stroke="var(--panel)" strokeWidth="8" />
+        <circle cx={cx} cy={cy} r={(radius + innerRadius) / 2} fill="none"
+          style={{ stroke: GRID }} strokeWidth={radius - innerRadius}
+          strokeDasharray={total > 0 ? 'none' : '4 4'} />
+        <text x={cx} y={cy + 2} textAnchor="middle" fontSize="26" fontWeight="650"
+          style={{ fill: 'var(--fg-strong)' }}>{total}</text>
+        <text x={cx} y={cy + 20} textAnchor="middle" fontSize="10"
+          style={{ fill: LABEL, letterSpacing: '0.08em' }}>{t('chart.open')}</text>
       </svg>
-      <ul style={{ listStyle: 'none', padding: 0, margin: 8  } }
-        className="chart-legend">{legend}</ul>
+      <ul className="chart-legend">{legend}</ul>
     </div>
   )
 }
@@ -179,7 +214,6 @@ export function DonutChart({ data, height = 160 }) {
 /* Simple stat with progress bar for SLA/remediation. */
 export function ProgressBar({ label, value, max, tone = 'info' }) {
   const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0
-  const barColor = tone === 'bad' ? '#ff5a5a' : tone === 'warn' ? '#ffd166' : '#6bcb77'
   return (
     <div className="progress">
       <span className="progress-label">{label}</span>
@@ -190,5 +224,3 @@ export function ProgressBar({ label, value, max, tone = 'info' }) {
     </div>
   )
 }
-
-

@@ -1,0 +1,25 @@
+# Local bring-up override for a checkout that is NOT the original machine.
+#
+#   docker compose -f compose.yaml -f compose.local.yaml up -d
+#
+# Two differences from compose.yaml, both environment facts rather than design:
+#
+#   1. No migration dumps. `docker/postgres/init-restore.sh` fails closed unless
+#      /migration-backup holds the verified dtrack.dump and defectdojo.dump, so
+#      on a fresh machine the cluster must be initialized *without* that script.
+#      The role/database (`barad` / `barad_platform`) and the readiness marker
+#      are created afterwards by scripts/local-bootstrap.sh.
+#   2. The scaler's mount of the compose file uses this checkout's absolute path
+#      instead of /Volumes/980PRO/... — Compose stamps the working directory into
+#      labels, so the path must be the one the daemon actually sees.
+services:
+  postgres:
+    volumes: !override
+      - postgres-db:/var/lib/postgresql
+
+  shauron-scaler:
+    environment:
+      SHAURON_COMPOSE_FILE: /Users/saf/HUB/Workspace/Councilbox/CYB/Barad-d-r/compose.yaml
+    volumes: !override
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /Users/saf/HUB/Workspace/Councilbox/CYB/Barad-d-r:/Users/saf/HUB/Workspace/Councilbox/CYB/Barad-d-r:ro

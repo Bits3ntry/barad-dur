@@ -43,6 +43,13 @@ compose.yaml -> unified PostgreSQL, Dependency-Track, DefectDojo, Valkey, Trivy 
 
 Unit and contract tests are rooted at `tests/`. Compose syntax is validated with `docker compose config --quiet`. Operational tests must create explicitly named isolated targets and record the actual remote identifiers and outcomes in [AUDIT.md](AUDIT.md). A test or document must not claim live service behavior without that record.
 
-## Excluded components
+## Components outside this architecture
 
-No dashboard, custom API, MCP, AI worker, Syft, or CycloneDX CLI is part of this architecture.
+No Syft and no CycloneDX CLI: the scanning engines, including the SBOM generator, run
+in the `shauron` execution plane.
+
+An AI harness is being added in phases (see
+[../planning/ai-harness-and-mcp.md](../planning/ai-harness-and-mcp.md)). F0 ships the
+tool gateway, the `deployment.chain` / `exposure.verdict` endpoints and an MCP
+transport over the same catalog. There is no model call, no chat surface and no
+autonomous execution yet; those are F1 onwards.

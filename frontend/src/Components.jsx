@@ -1,13 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
-import { Card, Dialog, EmptyState, ErrorBanner, Loading, PageHeader, Pager, Stat, usePage } from './ui'
+import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Pager, Stat, usePage } from './ui'
 import Sbom from './Sbom'
+import SbomIngest from './SbomIngest'
+import { useI18n } from './i18n'
 
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN']
 
 function SeverityStrip({ counts = {} }) {
+  const { t } = useI18n()
   const shown = SEVERITIES.filter((severity) => counts[severity] > 0)
-  if (!shown.length) return <span className="muted">none</span>
+  if (!shown.length) return <span className="muted">{t('common.none')}</span>
   return <span className="discovery-severity">
     {shown.map((severity) => (
       <span key={severity} className={`sev sev-${severity.toLowerCase()}`}>
@@ -47,20 +50,21 @@ function deployedTree(inventories, profiles) {
    release, so it gets its own pager — a single long history must not bury the
    component that follows it in the tree. */
 function VersionTable({ project, component, onOpenVersion }) {
+  const { t, tCount } = useI18n()
   const paged = usePage(component.versions, 10)
   return (
     <>
-      <table className="discovery-version-table"><thead><tr><th>version</th><th>environments</th><th>security</th><th>critical</th><th>KEV</th><th></th></tr></thead><tbody>
+      <table className="discovery-version-table"><thead><tr><th>{t('components.col.version')}</th><th>{t('components.col.environments')}</th><th>{t('components.col.security')}</th><th>{t('components.col.critical')}</th><th>KEV</th><th></th></tr></thead><tbody>
         {paged.rows.map((version) => {
           const profile = version.profile
           const findings = profile?.findings
           return <tr key={version.id}>
             <td className="mono title"><button className="version-open" onClick={() => onOpenVersion?.(project.slug, component.slug || component.name, version.version)}>{version.version}</button></td>
             <td>{version.environments.map((environment) => <span className="pill env-pill" key={environment}>{environment}</span>)}</td>
-            <td>{profile ? <><span className={findings.total ? 'sev sev-high' : 'pill'}>{findings.total} finding{findings.total === 1 ? '' : 's'}</span><SeverityStrip counts={findings.by_severity} /></> : <span className="muted">unavailable</span>}</td>
+            <td>{profile ? <><span className={findings.total ? 'sev sev-high' : 'pill'}>{tCount('components.count.findings', findings.total)}</span><SeverityStrip counts={findings.by_severity} /></> : <span className="muted">{t('components.unavailable')}</span>}</td>
             <td>{profile ? findings.by_severity.CRITICAL : '—'}</td>
             <td>{profile ? findings.kev : '—'}</td>
-            <td className="row-action"><button className="mini" onClick={() => onOpenVersion?.(project.slug, component.slug || component.name, version.version)}>details</button></td>
+            <td className="row-action"><button className="mini" onClick={() => onOpenVersion?.(project.slug, component.slug || component.name, version.version)}>{t('common.details')}</button></td>
           </tr>
         })}
       </tbody></table>
@@ -71,7 +75,9 @@ function VersionTable({ project, component, onOpenVersion }) {
   )
 }
 
-export default function Components({ projects, focus = {}, onChanged, onOpenProject, onOpenVersion, onBack }) {
+export default function Components({ projects, focus = {}, onChanged, onOpenProject, onOpenVersion,
+  onOpenFinding, onBack, onOpenComponent }) {
+  const { t, tCount } = useI18n()
   const [tree, setTree] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -80,13 +86,7 @@ export default function Components({ projects, focus = {}, onChanged, onOpenProj
   const [openProjects, setOpenProjects] = useState(() => new Set())
   const [openComponents, setOpenComponents] = useState(() => new Set())
   const [importOpen, setImportOpen] = useState(false)
-  const [importProject, setImportProject] = useState('')
-  const [importVersion, setImportVersion] = useState('')
-  const [importFile, setImportFile] = useState(null)
-  const [importBusy, setImportBusy] = useState(false)
-  const [importNote, setImportNote] = useState('')
-  const [receipt, setReceipt] = useState(null)
-  const fileInput = useRef(null)
+  const [imported, setImported] = useState(null)
 
   async function load() {
     if (!projects.length) { setTree([]); return }
@@ -118,7 +118,7 @@ export default function Components({ projects, focus = {}, onChanged, onOpenProj
       setTree(nextTree)
       setOpenProjects(new Set(nextTree.map((entry) => entry.project.slug)))
       if (failed.length) {
-        setError(`${failed.length} deployed version security profile${failed.length === 1 ? '' : 's'} could not be loaded.`)
+        setError(tCount('components.error.profiles', failed.length))
       }
     } catch (problem) {
       setError(String(problem.message || problem))
@@ -165,82 +165,63 @@ export default function Components({ projects, focus = {}, onChanged, onOpenProj
   }
 
   function openImport() {
-    setImportProject(projects[0]?.slug || '')
-    setImportVersion('')
-    setImportFile(null)
-    setImportNote('')
     setImportOpen(true)
-  }
-
-  async function pickFile(file) {
-    if (!file) return
-    setImportFile(file); setImportNote('')
-    try {
-      const document = JSON.parse(await file.text())
-      const component = document?.metadata?.component || {}
-      if (component.version) setImportVersion(String(component.version))
-      if (!importProject && component.name && !String(component.name).startsWith('/')) {
-        setImportProject(String(component.name))
-      }
-    } catch { setImportNote('That file is not JSON; the upload will be rejected.') }
-  }
-
-  async function submitImport() {
-    if (!importFile) { setImportNote('Pick a CycloneDX JSON file.'); return }
-    if (!importProject.trim() || !importVersion.trim()) {
-      setImportNote('Project and version are both required.'); return
-    }
-    setImportBusy(true); setImportNote('')
-    try {
-      const params = new URLSearchParams({ source: 'web', project: importProject.trim(),
-        version: importVersion.trim(), filename: importFile.name })
-      const response = await api.postRaw(`/api/v1/sbom?${params}`, await importFile.arrayBuffer())
-      setReceipt(response)
-      setImportOpen(false)
-      if (onChanged) await onChanged()
-      await load()
-    } catch (problem) { setImportNote(String(problem.message || problem)) }
-    finally { setImportBusy(false) }
   }
 
   if (focus.projectSlug && focus.version) {
     // The version view lives here when the route carries a version, so it needs
     // the same "open that other build" callback the standalone screen gets.
-    return <Sbom focus={focus} embedded onOpen={onOpenVersion} onBack={onBack} />
+    return <Sbom focus={focus} embedded onOpen={onOpenVersion}
+      onOpenFinding={onOpenFinding} onOpenComponent={onOpenComponent} onBack={onBack} />
   }
 
   return (
     <div className="stack">
-      <PageHeader title="Components"
-        subtitle="Deployed application versions only. Projects remains the full ownership catalog."
-        actions={<><button className="mini" onClick={openImport}>import SBOM…</button><button className="mini" onClick={load}>refresh</button></>} />
+      <PageHeader title={t('components.title')}
+        subtitle={t('components.subtitle')}
+        actions={<><button className="mini" onClick={openImport}>{t('components.import')}</button><button className="mini" onClick={load}>{t('common.refresh')}</button></>} />
 
       <Card tight>
         <div className="metrics">
-          <Stat label="projects deployed" value={totals.projects} />
-          <Stat label="components deployed" value={totals.components} />
-          <Stat label="versions running" value={totals.versions} />
-          <Stat label="open findings" value={totals.findings} tone={totals.findings ? 'warn' : ''} />
-          <Stat label="critical" value={totals.critical} tone={totals.critical ? 'bad' : ''} />
+          <Stat label={t('components.stat.projects')} value={totals.projects} />
+          <Stat label={t('components.stat.components')} value={totals.components} />
+          <Stat label={t('components.stat.versions')} value={totals.versions} />
+          <Stat label={t('components.stat.findings')} value={totals.findings} tone={totals.findings ? 'warn' : ''} />
+          <Stat label={t('components.stat.critical')} value={totals.critical} tone={totals.critical ? 'bad' : ''} />
         </div>
       </Card>
 
       <div className="toolbar discovery-toolbar">
-        <input value={query} placeholder="filter project, component, version or environment"
+        <input value={query} placeholder={t('components.filterPlaceholder')}
           onChange={(event) => setQuery(event.target.value)} />
         <label className="row" style={{ gap: 6 }}>
           <input type="checkbox" checked={onlyRisk} onChange={(event) => setOnlyRisk(event.target.checked)} />
-          only versions with findings
+          {t('components.onlyRisk')}
         </label>
         <span className="spacer" />
-        <span className="count">{loading ? 'loading…' : `${totals.versions} deployed version${totals.versions === 1 ? '' : 's'}`}</span>
+        <span className="count">{loading ? t('common.loading') : tCount('components.deployedVersions', totals.versions)}</span>
       </div>
 
       {error && <ErrorBanner error={error} onRetry={load} />}
-      {receipt && <div className="banner banner-ok">import {receipt.status} — {receipt.receipt.counts.components_created} created, {receipt.receipt.counts.components_updated} updated</div>}
-      {loading && !tree.length && <Loading rows={6} label="Loading deployed components" />}
-      {!loading && !visibleTree.length && !error && <EmptyState title="No deployed component versions"
-        hint={tree.length ? 'Clear the filters to see deployed versions.' : 'Record a component version and link it to an environment in Projects. Un-deployed catalog entries stay in Projects.'} />}
+      {imported && (
+        <div className="banner banner-ok">
+          {imported.status === 'duplicate'
+            ? t('sbom.ingest.result.unchanged')
+            : t('sbom.ingest.result.saved', {
+              created: imported.receipt?.counts?.components_created ?? 0,
+              updated: imported.receipt?.counts?.components_updated ?? 0,
+            })}{' '}
+          {imported.build && onOpenVersion && (
+            <button className="mini" onClick={() => onOpenVersion(imported.build.project,
+              imported.build.component, imported.build.version)}>
+              {t('sbom.ingest.result.open')}
+            </button>
+          )}
+        </div>
+      )}
+      {loading && !tree.length && <Loading rows={6} label={t('components.loadingTree')} />}
+      {!loading && !visibleTree.length && !error && <EmptyState title={t('components.empty.title')}
+        hint={tree.length ? t('components.empty.hintFiltered') : t('components.empty.hint')} />}
 
       <div className="discovery-tree">
         {visibleTree.map(({ project, components }) => {
@@ -250,9 +231,9 @@ export default function Components({ projects, focus = {}, onChanged, onOpenProj
             <header className="discovery-project-head">
               <button className="discovery-toggle" type="button" onClick={() => toggle(setOpenProjects, projectKey)} aria-expanded={projectOpen}>
                 <span className="caret" aria-hidden="true">{projectOpen ? '▾' : '▸'}</span>
-                <span><strong>{project.name}</strong><span className="muted">{project.slug} · {components.length} deployed component{components.length === 1 ? '' : 's'}</span></span>
+                <span><strong>{project.name}</strong><span className="muted">{project.slug} · {tCount('components.deployedComponents', components.length)}</span></span>
               </button>
-              <button className="mini" onClick={() => onOpenProject?.(project.slug, 'components')}>view project</button>
+              <button className="mini" onClick={() => onOpenProject?.(project.slug, 'components')}>{t('components.viewProject')}</button>
             </header>
             {projectOpen && <div className="discovery-component-list">
               {components.map((component) => {
@@ -261,7 +242,7 @@ export default function Components({ projects, focus = {}, onChanged, onOpenProj
                 return <section key={component.id} className="discovery-component">
                   <button className="discovery-toggle discovery-component-head" type="button" onClick={() => toggle(setOpenComponents, componentKey)} aria-expanded={componentOpen}>
                     <span className="caret" aria-hidden="true">{componentOpen ? '▾' : '▸'}</span>
-                    <span><strong>{component.name}</strong><span className="muted">{component.kind} · {component.versions.length} running version{component.versions.length === 1 ? '' : 's'}</span></span>
+                    <span><strong>{component.name}</strong><span className="muted">{component.kind} · {tCount('components.runningVersions', component.versions.length)}</span></span>
                   </button>
                   {componentOpen && <VersionTable project={project} component={component}
                     onOpenVersion={onOpenVersion} />}
@@ -272,19 +253,15 @@ export default function Components({ projects, focus = {}, onChanged, onOpenProj
         })}
       </div>
 
-      <Dialog open={importOpen} title="Import an SBOM" confirmLabel="import" onClose={() => setImportOpen(false)} onConfirm={submitImport}>
-        <div className="stack">
-          <label className="field-label" htmlFor="sbom-file">CycloneDX JSON</label>
-          <input id="sbom-file" ref={fileInput} type="file" accept=".json,application/json" onChange={(event) => pickFile(event.target.files[0])} />
-          <label className="field-label" htmlFor="sbom-project">project</label>
-          <input id="sbom-project" value={importProject} list="sbom-projects" onChange={(event) => setImportProject(event.target.value)} />
-          <datalist id="sbom-projects">{projects.map((project) => <option key={project.slug} value={project.slug} />)}</datalist>
-          <label className="field-label" htmlFor="sbom-version">version</label>
-          <input id="sbom-version" value={importVersion} onChange={(event) => setImportVersion(event.target.value)} />
-          <p className="muted" style={{ fontSize: 12 }}>{importBusy ? 'importing…' : 'The SBOM is attached to the named project version.'}</p>
-          {importNote && <div className="banner banner-error">{importNote}</div>}
-        </div>
-      </Dialog>
+      <SbomIngest open={importOpen} onClose={() => setImportOpen(false)}
+        projects={projects}
+        onUploaded={async (response) => {
+          setImported(response)
+          setImportOpen(false)
+          if (onChanged) await onChanged()
+          await load()
+        }}
+        onOpenBuild={(build) => onOpenVersion?.(build.project, build.component, build.version)} />
     </div>
   )
 }

@@ -227,3 +227,70 @@ def test_isolation(jira_client_fixture):
     audit = test_client.get("/api/v1/audit?action=jira.",
                             headers=headers).json()
     assert audit["total"] >= 1 and audit["chain_ok"] is True
+
+
+@pytest.fixture()
+def saved_connection(tmp_path, monkeypatch, jira_server):
+    """The console's normal case: no JIRA_* in the environment, one connection
+    saved for the org. The bridge must work — it used to read only the env."""
+    monkeypatch.setenv("PLATFORM_DATABASE_URL", f"sqlite:///{tmp_path}/jira-saved.db")
+    for name in ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    ISSUES.clear()
+    CALLS.clear()
+    app = create_app()
+    session = session_factory()()
+    models.Base.metadata.create_all(session.get_bind())
+
+    org = models.Organization(slug="poc", name="POC")
+    session.add(org)
+    session.flush()
+    key = create_key(session, org.id, "jira-saved")
+
+    project = models.Project(org_id=org.id, slug="saria", name="Saria")
+    session.add(project)
+    session.flush()
+    version = models.ProjectVersion(project_id=project.id, version="1.0")
+    session.add(version)
+    session.flush()
+    finding = models.Finding(
+        org_id=org.id, project_id=project.id, kind="dependency", source="osv",
+        fingerprint="dep|saria|saved|node", title="node 20 buffer overflow",
+        severity="HIGH", last_seen_version_id=version.id, status="open")
+    session.add(finding)
+
+    from backend.app import secrets as secret_store
+
+    session.add(models.IntegrationConnection(
+        org_id=org.id, kind="tickets", provider="jira", base_url=jira_server,
+        account="saved@example.dev", secret_cipher=secret_store.seal(session, "token-123"),
+        config="{}", access="read"))
+    session.commit()
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(app), {"X-API-Key": key}, finding.id, jira_server
+
+
+def test_saved_connection_enables_the_screen(saved_connection):
+    from backend.app import jira_client
+
+    test_client, headers, finding_id, base_url = saved_connection
+    # The legacy env check is false; the org's saved connection is the truth.
+    assert jira_client.configured() is False
+    listing = test_client.get("/api/v1/jira/links", headers=headers).json()
+    assert listing["jira_configured"] is True
+    assert listing["jira_target"] == {"base_url": base_url,
+                                      "account": "saved@example.dev"}
+
+    created = test_client.post("/api/v1/jira/links", json={
+        "finding_id": finding_id, "project_key": "SEC", "actor": "console",
+        "send_now": True}, headers=headers)
+    assert created.status_code == 200, created.text
+    assert created.json()["jira_configured"] is True
+    assert created.json()["data"]["issue_key"]
+
+    listing = test_client.get("/api/v1/jira/links", headers=headers).json()
+    assert listing["data"][0]["finding_title"] == "node 20 buffer overflow"
+    assert listing["data"][0]["finding_severity"] == "HIGH"
+    assert listing["data"][0]["project_slug"] == "saria"

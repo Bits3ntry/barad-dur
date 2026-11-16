@@ -10,10 +10,11 @@ A scope row never runs anything. A wildcard row is a rule, not a host: it does
 not create an asset and does not expand into names. A concrete row creates or
 links the canonical asset with provenance `scope`.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.app import auth, models, scoping
@@ -180,6 +181,121 @@ def targets(target_type: str | None = Query(default=None),
     if status_filter:
         data = [row for row in data if row["status"] == status_filter]
     return {"data": data, "total": len(data)}
+
+
+@router.get("/candidates")
+def candidates(q: str = Query(default="", max_length=255),
+               limit: int = Query(default=8, ge=1, le=100),
+               org: models.Organization = Depends(auth.require_org),
+               session: Session = Depends(get_session)):
+    """What already exists, so declaring scope picks instead of retyping.
+
+    Scope is a declaration list and the estate is an inventory, so typing a host
+    from memory is how one target ends up twice — as an asset and as a hand-made
+    rule with a different value. This searches the assets the organization already
+    has **and** the targets its active grants already name, and answers for each
+    one: which grant covers it, and whether it is already declared.
+
+    Read-only. The declaration itself is still `POST /targets`, taking what the
+    operator picked.
+    """
+    from backend.app import authorization
+
+    needle = (q or "").strip()
+    if len(needle) < 2:
+        return {"data": [], "total": 0, "q": needle}
+
+    assets = (session.query(models.Asset)
+              .filter(models.Asset.org_id == org.id,
+                      models.Asset.value.ilike(f"%{needle}%"))
+              .order_by(models.Asset.value).limit(limit).all())
+    asset_ids = [row.id for row in assets]
+    values = [row.value.lower() for row in assets]
+
+    declared: dict[tuple[str, str], models.ScopeTarget] = {}
+    if values:
+        for target in (session.query(models.ScopeTarget)
+                       .filter(models.ScopeTarget.org_id == org.id,
+                               func.lower(models.ScopeTarget.value).in_(values)).all()):
+            declared[(target.target_type, (target.value or "").lower())] = target
+
+    now = models.utcnow()
+
+    def _live(grant: models.ScanGrant) -> datetime | None:
+        until = grant.valid_until
+        if until is not None and until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        return None if until is not None and until < now else until
+
+    def _widen(current: dict | None, level: str, until: datetime | None) -> dict:
+        rank = authorization.SCAN_LEVEL_ORDER.index(level)
+        if current and authorization.SCAN_LEVEL_ORDER.index(current["level"]) >= rank:
+            return current
+        return {"level": level, "valid_until": until.isoformat() if until else None}
+
+    covered: dict[str, dict] = {}
+    if asset_ids:
+        for grant in (session.query(models.ScanGrant)
+                      .filter(models.ScanGrant.org_id == org.id,
+                              models.ScanGrant.status == "active",
+                              models.ScanGrant.asset_id.in_(asset_ids)).all()):
+            until = _live(grant)
+            if grant.valid_until is not None and until is None:
+                continue
+            level = (authorization.level_for_capabilities(
+                authorization.authorization_capabilities(grant)) or grant.level)
+            covered[grant.asset_id] = _widen(covered.get(grant.asset_id), level, until)
+
+    projects = {row.id: row.name for row in
+                (session.query(models.Project).filter_by(org_id=org.id).all())}
+
+    data = []
+    seen: set[tuple[str, str]] = set()
+    for asset in assets:
+        target_type = asset.type if asset.type in SCOPE_TYPES else "domain"
+        key = (target_type, asset.value.lower())
+        seen.add(key)
+        row = declared.get(key)
+        data.append({
+            "type": target_type, "value": asset.value, "asset_id": asset.id,
+            "project": projects.get(asset.project_id),
+            "authorized": covered.get(asset.id),
+            "in_scope": row is not None,
+            "scope_target_id": row.id if row else None,
+            "source": "asset",
+        })
+
+    # A granted pattern has no asset row of its own (`*.example.com` is a rule),
+    # and it is exactly the kind of target an operator declares by hand today.
+    for grant in (session.query(models.ScanGrant)
+                  .filter(models.ScanGrant.org_id == org.id,
+                          models.ScanGrant.status == "active").all()):
+        until = _live(grant)
+        if grant.valid_until is not None and until is None:
+            continue
+        level = (authorization.level_for_capabilities(
+            authorization.authorization_capabilities(grant)) or grant.level)
+        for target in (session.query(models.ScanGrantTarget)
+                       .filter_by(grant_id=grant.id).all()):
+            if needle.lower() not in (target.target_value or "").lower():
+                continue
+            key = (target.target_type, (target.target_value or "").lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            row = declared.get(key)
+            data.append({
+                "type": target.target_type, "value": target.target_value,
+                "asset_id": None, "project": None,
+                "authorized": {"level": level,
+                               "valid_until": until.isoformat() if until else None},
+                "in_scope": row is not None,
+                "scope_target_id": row.id if row else None,
+                "source": "grant",
+            })
+
+    data.sort(key=lambda item: (item["in_scope"], item["value"].lower()))
+    return {"data": data[:limit], "total": len(data), "q": needle}
 
 
 @router.post("/targets")

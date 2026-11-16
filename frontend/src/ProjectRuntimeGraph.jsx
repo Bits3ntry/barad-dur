@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { Card, EmptyState } from './ui'
 import { degrees, hash, radiusFor } from './graphForce'
 import useForceGraph from './useForceGraph'
+import { useI18n } from './i18n'
 
 /* ───────────────────────── the running-now graph ─────────────────────────
 
@@ -23,6 +24,14 @@ const TYPE_META = {
   asset: { title: 'asset', column: 4 },
 }
 const TYPE_ORDER = Object.keys(TYPE_META)
+
+/* Relation names are written into the edges as stable identifiers; the label a
+   reader sees is a catalogue entry keyed by this map, so the drawing order and
+   the physics never depend on the active language. */
+const RELATION_KEYS = {
+  contains: 'contains', 'has code': 'hasCode', 'uses code': 'usesCode',
+  ships: 'ships', 'runs as': 'runsAs', 'is exposed by': 'isExposedBy', owns: 'owns',
+}
 
 function buildGraph(data) {
   const nodes = []
@@ -91,6 +100,10 @@ function detail(node) {
 /* ─────────────────────────────── component ─────────────────────────────── */
 
 export default function ProjectRuntimeGraph({ data }) {
+  const { t, tCount, tOr } = useI18n()
+  const typeLabel = (type) => tOr(`projectRuntime.type.${TYPE_META[type]?.title}`, type)
+  const relationLabel = (relation) => tOr(`projectRuntime.relation.${RELATION_KEYS[relation] || relation}`,
+    relation)
   const graph = useMemo(() => buildGraph(data), [data])
   const degree = useMemo(() => degrees(graph.nodes, graph.edges), [graph])
 
@@ -105,7 +118,7 @@ export default function ProjectRuntimeGraph({ data }) {
   const needle = query.trim().toLowerCase()
   const visibleNodes = useMemo(() => nodes.filter((node) => {
     if (hiddenTypes.has(node.type)) return false
-    if (needle && !`${TYPE_META[node.type].title} ${node.label} ${detail(node)}`
+    if (needle && !`${typeLabel(node.type)} ${node.label} ${detail(node)}`
       .toLowerCase().includes(needle)) return false
     return true
   }), [nodes, hiddenTypes, needle])
@@ -171,8 +184,8 @@ export default function ProjectRuntimeGraph({ data }) {
   }, [nodes])
 
   if (graph.nodes.length <= 1) {
-    return <EmptyState title="No runtime relationships are recorded yet"
-      hint="Add a component, version, deployment and asset to make the running surface visible." />
+    return <EmptyState title={t('projectRuntime.empty.title')}
+      hint={t('projectRuntime.empty.hint')} />
   }
 
   return (
@@ -180,7 +193,7 @@ export default function ProjectRuntimeGraph({ data }) {
       {/* The four counters live once, on the summary card above this graph:
           repeating them here made the same numbers appear twice on one screen. */}
       <div className="graph-toolbar">
-        <div className="graph-chips" role="group" aria-label="filter by kind">
+        <div className="graph-chips" role="group" aria-label={t('projectRuntime.filterByKind')}>
           {TYPE_ORDER.filter((type) => typeCounts.get(type)).map((type) => {
             const off = hiddenTypes.has(type)
             return (
@@ -192,30 +205,30 @@ export default function ProjectRuntimeGraph({ data }) {
                   return next
                 })}>
                 <span className="graph-chip-dot" />
-                {TYPE_META[type].title}
+                {typeLabel(type)}
                 <span className="graph-chip-count">{typeCounts.get(type)}</span>
               </button>
             )
           })}
         </div>
         <div className="graph-tools">
-          <input className="graph-filter" value={query} placeholder="filter nodes"
-            aria-label="filter nodes by name"
+          <input className="graph-filter" value={query} placeholder={t('projectRuntime.filterNodes')}
+            aria-label={t('projectRuntime.filterNodesAria')}
             onChange={(event) => setQuery(event.target.value)} />
           <button type="button" className="mini" onClick={() => zoomBy(1 / 1.25)}
-            aria-label="zoom out">−</button>
+            aria-label={t('projectRuntime.zoomOut')}>−</button>
           <button type="button" className="mini graph-zoom" onClick={() => zoomBy(1 / view.zoom)}
-            aria-label="reset zoom">{Math.round(view.zoom * 100)}%</button>
+            aria-label={t('projectRuntime.resetZoom')}>{Math.round(view.zoom * 100)}%</button>
           <button type="button" className="mini" onClick={() => zoomBy(1.25)}
-            aria-label="zoom in">+</button>
-          <button type="button" className="mini" onClick={fit}>fit</button>
-          <button type="button" className="mini" onClick={resetLayout}>reset</button>
+            aria-label={t('projectRuntime.zoomIn')}>+</button>
+          <button type="button" className="mini" onClick={fit}>{t('projectRuntime.fit')}</button>
+          <button type="button" className="mini" onClick={resetLayout}>{t('projectRuntime.reset')}</button>
         </div>
       </div>
 
       <div className="project-graph-wrap" ref={engine.wrapRef}>
         <svg className="project-graph" ref={engine.svgRef} viewBox={`0 0 ${engine.VIEW.w} ${engine.VIEW.h}`}
-          role="img" aria-label={`Running now graph for ${data.project.name}`}
+          role="img" aria-label={t('projectRuntime.ariaLabel', { project: data.project.name })}
           {...engine.svgHandlers}>
           <g transform={`translate(${engine.VIEW.w / 2 + view.x} ${engine.VIEW.h / 2 + view.y}) scale(${view.zoom})`}>
             {visibleEdges.map((edge) => {
@@ -228,7 +241,7 @@ export default function ProjectRuntimeGraph({ data }) {
                 <line key={`${edge.from}->${edge.to}`}
                   className={`graph-edge${dim ? ' dim' : ''}${hot ? ' hot' : ''}`}
                   x1={from.x} y1={from.y} x2={to.x} y2={to.y}>
-                  <title>{edge.relation}</title>
+                  <title>{relationLabel(edge.relation)}</title>
                 </line>
               )
             })}
@@ -245,7 +258,7 @@ export default function ProjectRuntimeGraph({ data }) {
                   <text key={`label-${edge.from}->${edge.to}`} className="graph-edge-label"
                     x={from.x + (to.x - from.x) * 0.36} y={from.y + (to.y - from.y) * 0.36 - 5}
                     textAnchor="middle">
-                    {edge.relation}
+                    {relationLabel(edge.relation)}
                   </text>
                 )
               })}
@@ -258,7 +271,7 @@ export default function ProjectRuntimeGraph({ data }) {
                 <g key={node.id} transform={`translate(${point.x},${point.y})`}
                   className={`graph-node type-${node.type}${dim ? ' dim' : ''}${isFocus ? ' focus' : ''}${point.fixed ? ' pinned' : ''}`}
                   role="button" tabIndex="0"
-                  aria-label={`${TYPE_META[node.type].title} ${node.label}, ${node.degree} connections`}
+                  aria-label={`${typeLabel(node.type)} ${node.label}, ${tCount('projectRuntime.connections', node.degree)}`}
                   {...engine.nodeHandlers(point, node)}
                   onPointerEnter={() => setHovered(node.id)}
                   onPointerLeave={() => setHovered((current) => (current === node.id ? null : current))}
@@ -273,48 +286,48 @@ export default function ProjectRuntimeGraph({ data }) {
                   <text x={node.r + 7} y={4} className="graph-node-label">
                     {node.label.length > 32 ? `${node.label.slice(0, 31)}…` : node.label}
                   </text>
-                  <title>{`${TYPE_META[node.type].title} · ${node.label}${detail(node) ? ` · ${detail(node)}` : ''} · ${node.degree} connections`}</title>
+                  <title>{`${typeLabel(node.type)} · ${node.label}${detail(node) ? ` · ${detail(node)}` : ''} · ${tCount('projectRuntime.connections', node.degree)}`}</title>
                 </g>
               )
             })}
           </g>
         </svg>
         {!visibleNodes.length && (
-          <p className="graph-empty">Every kind is filtered out. Turn one back on above.</p>
+          <p className="graph-empty">{t('projectRuntime.allFiltered')}</p>
         )}
         <span className="graph-hint">
-          drag a node to move it · drag the canvas to pan · scroll to zoom · double-click releases it
+          {t('projectRuntime.hint')}
         </span>
       </div>
 
       <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-        Node size is the number of recorded relationships. The graph reads inventory;
-        it does not scan or infer a link that no record carries.
-        {isolated > 0 && ` ${isolated} visible ${isolated === 1 ? 'item has' : 'items have'} no connection to the rest — a filter is hiding the other end.`}
+        {t('projectRuntime.sizeNote')}
+        {isolated > 0 && ` ${tCount('projectRuntime.isolated', isolated)}`}
       </p>
 
       {selectedNode && (
-        <Card title={`${TYPE_META[selectedNode.type].title} · ${selectedNode.label}`}
-          actions={<button className="mini" onClick={() => setSelected(null)}>clear focus</button>}>
+        <Card title={`${typeLabel(selectedNode.type)} · ${selectedNode.label}`}
+          actions={<button className="mini" onClick={() => setSelected(null)}>{t('projectRuntime.clearFocus')}</button>}>
           <p className="muted" style={{ marginTop: 0 }}>
-            {detail(selectedNode) || 'No additional metadata has been recorded for this item.'}
-            {' · '}{selectedNode.degree} {selectedNode.degree === 1 ? 'connection' : 'connections'}
+            {detail(selectedNode) || t('projectRuntime.noMetadata')}
+            {' · '}{tCount('projectRuntime.connections', selectedNode.degree)}
           </p>
           <div className="graph-neighbor-list">
             {selectedLinks.map(({ edge, other, outgoing }) => (
               <button key={`${edge.from}-${edge.to}`} type="button" className="graph-neighbor"
                 onClick={() => setSelected(other.id)}>
-                <span className="graph-neighbor-rel">{outgoing ? edge.relation : '←'}</span>
-                <span className={`graph-neighbor-type type-${other.type}`}>{TYPE_META[other.type].title}</span>
+                <span className="graph-neighbor-rel">{outgoing ? relationLabel(edge.relation) : '←'}</span>
+                <span className={`graph-neighbor-type type-${other.type}`}>{typeLabel(other.type)}</span>
                 <span className="graph-neighbor-label">{other.label}</span>
               </button>
             ))}
-            {!selectedLinks.length && <p className="muted">No recorded relationship reaches this item.</p>}
+            {!selectedLinks.length && <p className="muted">{t('projectRuntime.noRelation')}</p>}
           </div>
         </Card>
       )}
 
-      <Card title="Relationship list" actions={<span className="count">screen-reader and narrow-screen fallback</span>}>
+      <Card title={t('projectRuntime.relationshipList')}
+        actions={<span className="count">{t('projectRuntime.listFallback')}</span>}>
         <div className="project-graph-list">
           {visibleEdges.map((edge) => {
             const from = nodes.find((node) => node.id === edge.from)
@@ -322,7 +335,7 @@ export default function ProjectRuntimeGraph({ data }) {
             return (
               <button key={`${edge.from}-${edge.to}`} className="project-graph-row"
                 onClick={() => setSelected(edge.to)}>
-                <span>{from?.label}</span><b>{edge.relation}</b><span>{to?.label}</span>
+                <span>{from?.label}</span><b>{relationLabel(edge.relation)}</b><span>{to?.label}</span>
               </button>
             )
           })}

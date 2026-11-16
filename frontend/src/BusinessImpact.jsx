@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { Card, EmptyState, ErrorBanner, Loading, PageHeader, Pager, Stat, Table, usePage } from './ui'
+import { useI18n } from './i18n'
 
 /* Business impact answers one question per application: how much open work is
    there, how much is late, and what carries it. It is a count of real rows, not
@@ -18,6 +19,7 @@ function priorityCells(row) {
 }
 
 export default function BusinessImpact({ onNavigate }) {
+  const { t, tCount } = useI18n()
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -43,9 +45,9 @@ export default function BusinessImpact({ onNavigate }) {
   return (
     <div className="stack">
       <PageHeader
-        title="Business impact"
-        subtitle="Open work per application, counted from findings, assets and deployments"
-        actions={<button className="mini" onClick={load}>refresh</button>}
+        title={t('impact.title')}
+        subtitle={t('impact.subtitle')}
+        actions={<button className="mini" onClick={load}>{t('common.refresh')}</button>}
       />
 
       {error && <ErrorBanner error={error} onRetry={load} />}
@@ -56,38 +58,38 @@ export default function BusinessImpact({ onNavigate }) {
         <>
           <div className="row" style={{ flexWrap: 'wrap' }}>
             <Stat value={totals.projects ?? 0}
-              label={totals.projects === 1 ? 'application' : 'applications'} />
+              label={tCount('impact.stat.applications', totals.projects ?? 0)} />
             <Stat value={totals.open_findings ?? 0}
-              label={totals.open_findings === 1 ? 'open finding' : 'open findings'} />
+              label={tCount('impact.stat.openFindings', totals.open_findings ?? 0)} />
             <Stat value={totals.assets ?? 0}
-              label={totals.assets === 1 ? 'asset' : 'assets'} />
+              label={tCount('impact.stat.assets', totals.assets ?? 0)} />
             <Stat value={totals.production_deployments ?? 0}
-              label={totals.production_deployments === 1
-                ? 'production deployment' : 'production deployments'} />
+              label={tCount('impact.stat.deployments', totals.production_deployments ?? 0)} />
             <Stat value={coverage.assets_without_project ?? 0}
-              label={coverage.assets_without_project === 1
-                ? 'asset without project' : 'assets without project'}
-              hint="coverage gap, not a business signal" />
+              label={tCount('impact.stat.assetsWithoutProject', coverage.assets_without_project ?? 0)}
+              hint={t('impact.stat.assetsWithoutProject.hint')} />
           </div>
 
           <div className="toolbar">
-            <span className="count">{rows.length} application{rows.length === 1 ? '' : 's'}</span>
+            <span className="count">{tCount('impact.count.applications', rows.length)}</span>
             <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
-              total={paged.total} perPage={paged.perPage} unit="applications"
+              total={paged.total} perPage={paged.perPage} unit={t('impact.unit.applications')}
               className="row-end" />
           </div>
 
-          <Card title="Per application">
+          <Card title={t('impact.table.title')}>
             <Table
-              head={['PROJECT', 'OPEN', 'P0', 'P1', 'P2', 'P3', 'UNTRIAGED', 'LATE', 'UNASSIGNED',
-                'CVES', 'ASSETS', 'PROD DEPLOYS', 'LAST SEEN']}
+              head={[t('impact.col.project'), t('impact.col.open'), 'P0', 'P1', 'P2', 'P3',
+                t('impact.col.untriaged'), t('impact.col.late'), t('impact.col.unassigned'),
+                t('impact.col.cves'), t('impact.col.assets'), t('impact.col.prodDeploys'),
+                t('impact.col.lastSeen')]}
               empty={rows.length === 0}
             >
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={13}>
-                    <EmptyState title="No applications yet"
-                      hint="Impact is counted per project; create one and import findings, assets or deployments." />
+                    <EmptyState title={t('impact.empty.title')}
+                      hint={t('impact.empty.hint')} />
                   </td>
                 </tr>
               ) : paged.rows.map((row) => (
@@ -107,7 +109,7 @@ export default function BusinessImpact({ onNavigate }) {
                   <td className="muted">{row.assets || '—'}</td>
                   <td className="muted">{row.production_deployments || '—'}</td>
                   <td className="muted">
-                    {row.last_seen_at ? new Date(row.last_seen_at).toLocaleDateString() : 'never'}
+                    {row.last_seen_at ? new Date(row.last_seen_at).toLocaleDateString() : t('common.never')}
                   </td>
                 </tr>
               ))}
@@ -115,16 +117,16 @@ export default function BusinessImpact({ onNavigate }) {
           </Card>
 
           <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
-            total={paged.total} perPage={paged.perPage} unit="applications"
+            total={paged.total} perPage={paged.perPage} unit={t('impact.unit.applications')}
             className="row-end" />
 
-          <Card title="What this page does not claim">
+          <Card title={t('impact.caveat.title')}>
             <p className="muted" style={{ margin: 0 }}>
-              {data.model?.note || 'counts only'}.
-              {' '}Criticality: {data.model?.criticality || 'unknown'} — so ranking
-              applications here means “most open work”, not “most important”.
-              {' '}{coverage.projects_without_assets ?? 0} application(s) have no asset
-              linked; nothing was observed there, which is not the same as clean.
+              {t('impact.caveat.body', {
+                note: data.model?.note || t('impact.caveat.note'),
+                criticality: data.model?.criticality || t('common.unknown'),
+                n: coverage.projects_without_assets ?? 0,
+              })}
             </p>
           </Card>
         </>

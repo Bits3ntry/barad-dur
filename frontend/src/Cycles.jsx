@@ -1,42 +1,67 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import {
-  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Pager, Table, Tabs, usePage,
+  Dialog, EmptyState, ErrorBanner, Input, PageHeader, Pager, Select, Table, usePage,
 } from './ui'
+import { useI18n } from './i18n'
 
-/* A cycle is a time-boxed evaluation: charter, explicit selection, a frozen
-   reference on activation, criteria verdicts on review. It grants nothing. */
+/* The cycles list is an index, not a workspace: a cycle is a screen of its own
+   (#cycles::<uuid>) where its charter, scope, ledger and outcome live. Creating
+   one lands you there, because a cycle with nothing filled in is a draft you are
+   about to work on. */
 
-const STATES = ['planning', 'active', 'review', 'closed']
-const VERDICTS = [
-  { value: 'met', label: 'met' },
-  { value: 'not_met', label: 'not met' },
-  { value: 'not_measurable', label: 'not measurable' },
-  { value: 'pending', label: 'pending' },
-]
+const KINDS = ['sweep', 'campaign', 'pentest_external', 'pentest_internal',
+  'supply_chain', 'ai_redteam']
 
 const EMPTY = {
-  name: '', description: '', owner: '', starts_on: '', ends_on: '',
-  objectives: '', success_criteria: '', projects: '', groups: '',
-  environments: '', whole_org: false,
+  name: '', description: '', notes: '', owner: '', kind: 'sweep',
+  starts_on: '', ends_on: '', projects: '', groups: '', environments: '',
+  whole_org: false, components: [], profile_ids: [],
 }
 
 export default function Cycles() {
+  const { t, tOr } = useI18n()
   const [cycles, setCycles] = useState([])
-  const [cycle, setCycle] = useState(null)
-  const [preview, setPreview] = useState(null)
-  const [candidates, setCandidates] = useState([])
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ ...EMPTY })
-  const [reviewOpen, setReviewOpen] = useState(false)
-  const [review, setReview] = useState({ results: '', learnings: '', criteria: [] })
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [jewels, setJewels] = useState([])
+  const [profiles, setProfiles] = useState([])
+  const [plan, setPlan] = useState(null)
 
   // A cycle closes but is never deleted, so the index only grows: it pages.
   const paged = usePage(cycles, 25)
 
   useEffect(() => { load() }, [])
+
+  useEffect(() => {
+    if (!creating) return
+    Promise.all([
+      api.get('/api/v1/threat-model/crown-jewels'),
+      api.get('/api/v1/threat-model'),
+    ]).then(([jewelList, threat]) => {
+      setJewels(jewelList.data || [])
+      setProfiles(threat.profiles || [])
+    }).catch((e) => setError(String(e.message || e)))
+  }, [creating])
+
+  // What the cycle would execute, computed before it exists: the plan is the
+  // reason the form asks for jewels and profiles at all.
+  useEffect(() => {
+    if (!creating) return
+    const timer = setTimeout(() => {
+      if (!form.components.length && !form.profile_ids.length) {
+        setPlan(null)
+        return
+      }
+      api.post('/api/v1/threat-model/plan', {
+        components: form.components, profile_ids: form.profile_ids,
+      }).then((r) => setPlan(r.data || null))
+        .catch((e) => setError(String(e.message || e)))
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [creating, form.components, form.profile_ids])
 
   function load() {
     api.get('/api/v1/cycles')
@@ -48,150 +73,74 @@ export default function Cycles() {
     return value.split(',').map((item) => item.trim()).filter(Boolean)
   }
 
+  function open(cycleId) {
+    window.location.hash = `cycles::${cycleId}`
+  }
+
   async function createCycle() {
     if (!form.name.trim()) return
+    setBusy(true)
+    setError('')
     try {
-      const body = {
+      const created = await api.post('/api/v1/cycles', {
         name: form.name.trim(),
         description: form.description || null,
         owner: form.owner || null,
+        kind: form.kind,
         starts_on: form.starts_on ? `${form.starts_on}T00:00:00+00:00` : null,
         ends_on: form.ends_on ? `${form.ends_on}T00:00:00+00:00` : null,
-        charter: {
-          objectives: csv(form.objectives),
-          success_criteria: csv(form.success_criteria),
-        },
+        notes: form.notes || null,
+        charter: { objectives: [], success_criteria: [],
+                   profile_ids: form.profile_ids },
         selection: {
           projects: csv(form.projects),
           groups: csv(form.groups),
           environments: csv(form.environments),
+          components: form.components,
           whole_org: form.whole_org,
         },
         actor: 'console',
-      }
-      const created = await api.post('/api/v1/cycles', body)
+      })
       setCreating(false)
       setForm({ ...EMPTY })
-      setNotice(`created ${created.data.name} in planning`)
       load()
-      openCycle(created.data.id)
+      open(created.data.id)
     } catch (e) {
       setError(String(e.message || e))
-    }
-  }
-
-  async function openCycle(cycleId) {
-    if (cycle?.id === cycleId) { setCycle(null); setPreview(null); return }
-    try {
-      const [{ data }, previewResponse] = await Promise.all([
-        api.get(`/api/v1/cycles/${cycleId}`),
-        api.post(`/api/v1/cycles/${cycleId}/preview`, {}),
-      ])
-      setCycle(data)
-      setPreview(previewResponse.data)
-      setCandidates([])
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-  }
-
-  async function activate() {
-    if (!cycle) return
-    try {
-      const result = await api.post(
-        `/api/v1/cycles/${cycle.id}/activate?actor=console`, {})
-      setNotice(`activated: ${result.membership} members frozen`)
-      openCycle(cycle.id)
-      setCycle(null)
-      load()
-      setTimeout(() => openCycle(cycle.id), 50)
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-  }
-
-  async function linkAuto() {
-    try {
-      const result = await api.post(`/api/v1/cycles/${cycle.id}/link-findings`,
-        { auto: true, actor: 'console' })
-      setNotice(`${result.data.linked} findings linked from the frozen projects`)
-      openCycle(cycle.id)
-      setCycle(null)
-      load()
-      setTimeout(() => openCycle(cycle.id), 50)
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-  }
-
-  async function loadCandidates() {
-    try {
-      const result = await api.get(`/api/v1/cycles/${cycle.id}/candidates`)
-      setCandidates(result.data || [])
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-  }
-
-  async function submitReview() {
-    try {
-      await api.post(`/api/v1/cycles/${cycle.id}/review`, {
-        results: review.results || null,
-        learnings: review.learnings || null,
-        criteria: review.criteria.map((item) => ({
-          name: item.name, verdict: item.verdict, note: item.note || null,
-        })),
-        actor: 'console',
-      })
-      setReviewOpen(false)
-      setReview({ results: '', learnings: '', criteria: [] })
-      setNotice('review recorded; the cycle is in review')
-      openCycle(cycle.id)
-      setCycle(null)
-      load()
-      setTimeout(() => openCycle(cycle.id), 50)
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-  }
-
-  async function close() {
-    try {
-      await api.post(`/api/v1/cycles/${cycle.id}/close?actor=console`, {})
-      setNotice('cycle closed; history kept and the inventory keeps running')
-      openCycle(cycle.id)
-      setCycle(null)
-      load()
-      setTimeout(() => openCycle(cycle.id), 50)
-    } catch (e) {
-      setError(String(e.message || e))
+    } finally {
+      setBusy(false)
     }
   }
 
   return (
     <div className="stack">
       <PageHeader
-        title="Cycles"
-        subtitle="Time-boxed evaluations · a cycle freezes a reference and grants no authorization"
+        title={t('cycles.title')}
+        subtitle={t('cycles.subtitle')}
         actions={<>
-          <button className="primary-action" onClick={() => setCreating(true)}>new cycle</button>
+          <button className="primary-action" onClick={() => setCreating(true)}>
+            {t('cycles.action.new')}
+          </button>
           <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
             total={paged.total} perPage={paged.perPage} unit="cycles" />
         </>}
       />
 
       {error && <ErrorBanner error={error} />}
-      {notice && <div className="banner banner-ok">{notice}</div>}
 
       {cycles.length ? (
         <>
-          <Table head={['name', 'state', 'owner', 'window', 'members', 'findings', '']}>
+          <Table head={[t('cycles.col.name'), t('cycles.col.kind'), t('cycles.col.state'),
+            t('common.owner'), t('cycles.col.window'), t('cycles.col.members'),
+            t('cycles.col.findings'), '']}>
             {paged.rows.map((row) => (
-              <tr key={row.id} className={cycle?.id === row.id ? 'selected' : ''}>
+              <tr key={row.id}>
                 <td className="title">{row.name}
                   <div className="muted" style={{ fontSize: 11.5 }}>{row.description}</div>
                 </td>
-                <td><span className={row.state === 'active' ? 'pill' : 'muted'}>{row.state}</span></td>
+                <td className="muted">{tOr(`cycles.kind.${row.kind}`, row.kind || 'sweep')}</td>
+                <td><span className={row.state === 'active' ? 'pill' : 'muted'}>
+                  {tOr(`cycles.state.${row.state}`, row.state)}</span></td>
                 <td className="muted">{row.owner || '—'}</td>
                 <td className="muted">
                   {row.starts_on ? new Date(row.starts_on).toLocaleDateString() : '—'}
@@ -200,9 +149,9 @@ export default function Cycles() {
                 </td>
                 <td>{row.members}</td>
                 <td>{row.linked_findings}</td>
-                <td>
-                  <button className="mini" onClick={() => openCycle(row.id)}>
-                    {cycle?.id === row.id ? 'hide' : 'open'}
+                <td className="nowrap">
+                  <button className="mini" onClick={() => open(row.id)}>
+                    {t('common.open')}
                   </button>
                 </td>
               </tr>
@@ -212,162 +161,77 @@ export default function Cycles() {
             total={paged.total} perPage={paged.perPage} unit="cycles" className="row-end" />
         </>
       ) : (
-        !error && <EmptyState title="No cycles yet"
-          hint="Create one with an explicit selection: projects, groups or environments. An empty selection is incomplete, and 'whole organization' must be explicit." />
+        !error && <EmptyState title={t('cycles.empty.title')}
+          hint={t('cycles.empty.hint')} />
       )}
 
-      {cycle && (
-        <div className="detail" style={{ marginTop: 12 }}>
-          <dl>
-            <dt>state</dt>
-            <dd>
-              <span className="pill">{cycle.state}</span>
-              {cycle.snapshot_at && (
-                <span className="muted"> frozen {new Date(cycle.snapshot_at).toLocaleString()}</span>
-              )}
-            </dd>
-            <dt>charter</dt>
-            <dd className="muted">
-              {(cycle.charter.objectives || []).join(' · ') || 'no objectives recorded'}
-            </dd>
-            <dt>selection</dt>
-            <dd className="muted">
-              {JSON.stringify(cycle.selection)}
-            </dd>
-            {preview && (
-              <>
-                <dt>preview</dt>
-                <dd>
-                  {preview.members} members
-                  {preview.incomplete && <span className="sev sev-medium"> · incomplete</span>}
-                  {preview.gaps.map((gap) => (
-                    <div key={gap} className="muted" style={{ fontSize: 11.5 }}>{gap}</div>
-                  ))}
-                  <div className="muted" style={{ fontSize: 11.5 }}>{preview.note}</div>
-                </dd>
-              </>
-            )}
-            <dt>actions</dt>
-            <dd>
-              <div className="row">
-                {cycle.state === 'planning' && (
-                  <button className="mini" disabled={preview?.incomplete} onClick={activate}>
-                    activate and freeze
-                  </button>
-                )}
-                {['active', 'review'].includes(cycle.state) && (
-                  <button className="mini" onClick={linkAuto}>link project findings</button>
-                )}
-                {cycle.state === 'active' && (
-                  <button className="mini" onClick={() => {
-                    setReview({ results: '', learnings: '', criteria: [
-                      { name: 'no critical open', verdict: 'pending', note: '' },
-                    ] })
-                    setReviewOpen(true)
-                  }}>record review</button>
-                )}
-                {cycle.state === 'review' && (
-                  <button className="mini" onClick={close}>close cycle</button>
-                )}
-                {cycle.snapshot_at && (
-                  <button className="mini" onClick={loadCandidates}>candidates</button>
-                )}
-              </div>
-            </dd>
-            {cycle.review?.results && (
-              <>
-                <dt>review</dt>
-                <dd className="muted">
-                  {cycle.review.results}
-                  {(cycle.review.criteria || []).map((item) => (
-                    <div key={item.name} style={{ fontSize: 11.5 }}>
-                      {item.name}: <strong>{item.verdict}</strong>
-                    </div>
-                  ))}
-                </dd>
-              </>
-            )}
-            {candidates.length > 0 && (
-              <>
-                <dt>outside the reference</dt>
-                <dd className="muted">
-                  {candidates.map((item) => (
-                    <div key={item.asset.id} className="occ-row">
-                      {item.asset.value} · discovered {new Date(item.discovered_at).toLocaleDateString()}
-                    </div>
-                  ))}
-                  <div style={{ fontSize: 11.5 }}>these belong to the next cycle</div>
-                </dd>
-              </>
-            )}
-          </dl>
-        </div>
-      )}
-
-      <Dialog open={creating} title="New cycle"
-        onClose={() => setCreating(false)} onConfirm={createCycle} confirmLabel="create">
+      <Dialog open={creating} title={t('cycles.dialog.new.title')}
+        onClose={() => setCreating(false)} onConfirm={createCycle}
+        confirmLabel={busy ? t('common.saving') : t('cycles.action.create')}>
         <div className="stack">
-          <Input label="name" value={form.name}
+          <Input label={t('cycles.field.name')} value={form.name}
             onChange={(v) => setForm((s) => ({ ...s, name: v }))} />
-          <Input label="description" value={form.description}
+          <Input label={t('cycles.field.description')} value={form.description}
             onChange={(v) => setForm((s) => ({ ...s, description: v }))} />
-          <Input label="owner" value={form.owner}
+          <div className="field">
+            <label className="field-label">{t('cycles.field.jewels')}</label>
+            <select multiple size={4} value={form.components}
+              onChange={(e) => setForm((s) => ({
+                ...s, components: [...e.target.selectedOptions].map((o) => o.value),
+              }))}>
+              {jewels.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.project_name ? `${item.project_name} › ` : ''}{item.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label className="field-label">{t('cycles.field.profiles')}</label>
+            <select multiple size={3} value={form.profile_ids}
+              onChange={(e) => setForm((s) => ({
+                ...s, profile_ids: [...e.target.selectedOptions].map((o) => o.value),
+              }))}>
+              {profiles.map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </select>
+          </div>
+          {plan && (
+            <div className="banner">
+              {t('cycles.dialog.plan', plan.coverage)}
+            </div>
+          )}
+          <Input label={t('cycles.field.notes')} textarea rows={3} value={form.notes}
+            hint={t('cycles.field.notesHint')}
+            onChange={(v) => setForm((s) => ({ ...s, notes: v }))} />
+          <Select label={t('cycles.field.kind')} value={form.kind}
+            options={KINDS.map((value) => ({
+              value, label: tOr(`cycles.kind.${value}`, value),
+            }))}
+            onChange={(v) => setForm((s) => ({ ...s, kind: v }))} />
+          <Input label={t('cycles.field.owner')} value={form.owner}
             onChange={(v) => setForm((s) => ({ ...s, owner: v }))} />
           <div className="row">
-            <Input label="starts on" type="date" value={form.starts_on}
+            <Input label={t('cycles.field.startsOn')} type="date" value={form.starts_on}
               onChange={(v) => setForm((s) => ({ ...s, starts_on: v }))} />
-            <Input label="ends on" type="date" value={form.ends_on}
+            <Input label={t('cycles.field.endsOn')} type="date" value={form.ends_on}
               onChange={(v) => setForm((s) => ({ ...s, ends_on: v }))} />
           </div>
-          <Input label="objectives" value={form.objectives} hint="comma separated"
-            onChange={(v) => setForm((s) => ({ ...s, objectives: v }))} />
-          <Input label="success criteria" value={form.success_criteria} hint="comma separated"
-            onChange={(v) => setForm((s) => ({ ...s, success_criteria: v }))} />
-          <Input label="projects (slugs)" value={form.projects} hint="aurea, aurea-web"
+          <Input label={t('cycles.field.projects')} value={form.projects}
+            hint="aurea, aurea-web"
             onChange={(v) => setForm((s) => ({ ...s, projects: v }))} />
-          <Input label="inventory groups" value={form.groups}
+          <Input label={t('cycles.field.groups')} value={form.groups}
             onChange={(v) => setForm((s) => ({ ...s, groups: v }))} />
-          <Input label="environments" value={form.environments} hint="production, staging"
+          <Input label={t('cycles.field.environments')} value={form.environments}
+            hint="production, staging"
             onChange={(v) => setForm((s) => ({ ...s, environments: v }))} />
           <label className="check">
             <input type="checkbox" checked={form.whole_org}
               onChange={(e) => setForm((s) => ({ ...s, whole_org: e.target.checked }))} />
-            <span>whole organization (explicit)</span>
+            <span>{t('cycles.field.wholeOrg')}</span>
           </label>
-        </div>
-      </Dialog>
-
-      <Dialog open={reviewOpen} title="Record the cycle review"
-        onClose={() => setReviewOpen(false)} onConfirm={submitReview} confirmLabel="save review">
-        <div className="stack">
-          <Input label="results" textarea rows={3} value={review.results}
-            onChange={(v) => setReview((s) => ({ ...s, results: v }))} />
-          <Input label="learnings" textarea rows={2} value={review.learnings}
-            onChange={(v) => setReview((s) => ({ ...s, learnings: v }))} />
-          {review.criteria.map((item, index) => (
-            <div key={index} className="row">
-              <input value={item.name} placeholder="criterion"
-                onChange={(e) => setReview((s) => {
-                  const criteria = [...s.criteria]
-                  criteria[index] = { ...criteria[index], name: e.target.value }
-                  return { ...s, criteria }
-                })} />
-              <select value={item.verdict}
-                onChange={(e) => setReview((s) => {
-                  const criteria = [...s.criteria]
-                  criteria[index] = { ...criteria[index], verdict: e.target.value }
-                  return { ...s, criteria }
-                })}>
-                {VERDICTS.map((verdict) => (
-                  <option key={verdict.value} value={verdict.value}>{verdict.label}</option>
-                ))}
-              </select>
-            </div>
-          ))}
-          <span className="muted">
-            "not measurable" is a legitimate verdict: it says the cycle could not
-            measure the criterion, which is different from failing it.
-          </span>
+          <span className="muted">{t('cycles.dialog.new.hint')}</span>
         </div>
       </Dialog>
     </div>

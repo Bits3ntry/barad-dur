@@ -1,0 +1,102 @@
+# The worker: one image with the whole toolset inside it.
+#
+# Why not a container per tool on the worker: it would need the Docker socket,
+# and a scanner that parses hostile banners is the last process you want able to
+# start privileged containers. Inside, `SHAURON_TOOL_RUNTIME=local` makes the
+# runner execute these binaries as child processes, with the same contract — the
+# tool writes a file, the adapter reads it.
+#
+# One image for every role is deliberate: a replica that appears because the queue
+# grew is identical to the one that was already running, so nothing "works on the
+# first worker and not on the second".
+FROM shauron-scan:redteam
+
+USER root
+
+# nmap: ports and service versions. whatweb: the technology fingerprint the basic
+# profile needs. curl+unzip: to fetch the ProjectDiscovery binaries, which have no
+# distro package.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      nmap whatweb curl unzip ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG NAABU_VERSION=2.7.0
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in amd64) goarch=amd64 ;; arm64) goarch=arm64 ;; *) echo "unsupported $arch" >&2; exit 1 ;; esac; \
+    curl -fsSL -o /tmp/naabu.zip \
+      "https://github.com/projectdiscovery/naabu/releases/download/v${NAABU_VERSION}/naabu_${NAABU_VERSION}_linux_${goarch}.zip"; \
+    unzip -q /tmp/naabu.zip -d /usr/local/bin naabu; \
+    chmod 0755 /usr/local/bin/naabu; \
+    rm -f /tmp/naabu.zip; \
+    naabu -version
+
+# ffuf: the content-discovery step of the deep web profile. Without it the step
+# reported `ffuf is not installed in this worker image` and the run finished with
+# coverage=partial — a worker missing one binary is a profile that silently stops
+# at paths.
+ARG FFUF_VERSION=2.3.0
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in amd64) goarch=amd64 ;; arm64) goarch=arm64 ;; *) echo "unsupported $arch" >&2; exit 1 ;; esac; \
+    curl -fsSL -o /tmp/ffuf.tgz \
+      "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_${goarch}.tar.gz"; \
+    tar -xzf /tmp/ffuf.tgz -C /usr/local/bin ffuf; \
+    chmod 0755 /usr/local/bin/ffuf; \
+    rm -f /tmp/ffuf.tgz; \
+    ffuf -V
+
+# The adapter hard-codes `-w /opt/wordlists/top.txt` and no image in this tree
+# shipped that file, so every deep run ended with `stat /opt/wordlists/top.txt: no
+# such file or directory`. SecLists' common.txt is the smallest list that answers
+# "what is standing here" without turning the step into a brute force (4.7k paths,
+# MIT).
+ARG WORDLIST_URL=https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt
+RUN set -eux; \
+    mkdir -p /opt/wordlists; \
+    curl -fsSL -o /opt/wordlists/top.txt "$WORDLIST_URL"; \
+    test -s /opt/wordlists/top.txt; \
+    wc -l /opt/wordlists/top.txt
+
+# The scanner code travels with the image. Dependencies come along: the sandbox
+# base ships the barad CLI's own set, which does not include everything shauron
+# imports (notably the `httpx` client), and `--no-deps` made the build fail on the
+# sanity check below instead of shipping a worker that cannot scan.
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY shauron ./shauron
+RUN pip install --no-cache-dir --force-reinstall .
+
+# `pip install httpx` (the Python HTTP client the scanner uses) also drops a
+# console script called `httpx`, which shadows ProjectDiscovery's httpx on PATH.
+# The effect was silent and specific: every `probe.httpx` step died with
+# "httpx produced no output: exit 1" while the rest of the deep profile passed.
+# The library stays; the impostor script goes.
+ARG HTTPX_VERSION=1.12.0
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in amd64) goarch=amd64 ;; arm64) goarch=arm64 ;; *) echo "unsupported $arch" >&2; exit 1 ;; esac; \
+    curl -fsSL -o /tmp/httpx.zip \
+      "https://github.com/projectdiscovery/httpx/releases/download/v${HTTPX_VERSION}/httpx_${HTTPX_VERSION}_linux_${goarch}.zip"; \
+    rm -f /usr/local/bin/httpx; \
+    unzip -q /tmp/httpx.zip -d /usr/local/bin httpx; \
+    chmod 0755 /usr/local/bin/httpx; \
+    rm -f /tmp/httpx.zip; \
+    httpx -version 2>&1 | head -1; \
+    python3 -c "import httpx; print('python httpx kept:', httpx.__version__)"
+
+# The switch that turns the runner from "docker run per tool" into "exec the tool".
+ENV SHAURON_TOOL_RUNTIME=local \
+    SHAURON_PLATFORM=http://host.docker.internal:8090 \
+    PYTHONUNBUFFERED=1
+
+# Tools write their cache and config under HOME/XDG (nuclei keeps its templates
+# config there). Built as root, those directories exist owned by root, so the
+# runtime user cannot write them and every tool that tries fails at startup.
+RUN mkdir -p /var/tmp/.config /var/tmp/.cache /app/runs \
+ && chown -R 65534:65534 /var/tmp /app
+
+USER 65534:65534
+ENTRYPOINT ["shauron"]
+CMD ["worker", "--loops", "100000", "--interval", "5", "--out-dir", "/var/tmp/runs"]

@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { PageHeader, Pager, usePage } from './ui'
+import { useI18n } from './i18n'
 
 export default function Licenses({ projects }) {
+  const { t } = useI18n()
   const [policies, setPolicies] = useState([])
   const [exceptions, setExceptions] = useState([])
   const [form, setForm] = useState({
@@ -73,11 +75,11 @@ export default function Licenses({ projects }) {
 
   return (
     <div className="stack">
-      <PageHeader title="License compliance" />
+      <PageHeader title={t('licenses.title')} />
       <div className="toolbar">
         <select value={evalState.project}
           onChange={(e) => setEvalState((s) => ({ ...s, project: e.target.value, version: '' }))}>
-          <option value="">select project…</option>
+          <option value="">{t('licenses.selectProject')}</option>
           {projects.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
         </select>
         <select value={evalState.version}
@@ -85,26 +87,26 @@ export default function Licenses({ projects }) {
           disabled={!(project?.versions?.length)}>
           {(project?.versions || []).map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
-        <button onClick={evaluate} disabled={!evalState.project || !evalState.version}>evaluate licenses</button>
-        <span className="count">{policies.length} policies</span>
+        <button onClick={evaluate} disabled={!evalState.project || !evalState.version}>{t('licenses.evaluate')}</button>
+        <span className="count">{t('licenses.count.policies', { n: policies.length })}</span>
       </div>
       {error && <div className="banner banner-error">{error}</div>}
       {evalState.error && <div className="banner banner-error">{evalState.error}</div>}
       {counts && (
         <>
           <div className="toolbar">
-            <span className="pill">policy: {evalState.result.policy?.name || 'none'}</span>
-            <span className="pill">{counts.components} components</span>
-            <span className={`pill ${counts.denied ? 'sev sev-critical' : ''}`}>{counts.denied} denied</span>
-            <span className="pill">{counts.unknown} unknown</span>
-            <span className="pill">{counts.excepted} excepted</span>
-            <span className="pill">{counts.unlicensed} unlicensed</span>
+            <span className="pill">{t('licenses.policy', { name: evalState.result.policy?.name || t('common.none') })}</span>
+            <span className="pill">{t('licenses.count.components', { n: counts.components })}</span>
+            <span className={`pill ${counts.denied ? 'sev sev-critical' : ''}`}>{t('licenses.count.denied', { n: counts.denied })}</span>
+            <span className="pill">{t('licenses.count.unknown', { n: counts.unknown })}</span>
+            <span className="pill">{t('licenses.count.excepted', { n: counts.excepted })}</span>
+            <span className="pill">{t('licenses.count.unlicensed', { n: counts.unlicensed })}</span>
             <Pager page={verdictPage.page} pages={verdictPage.pages}
               onChange={verdictPage.setPage} total={verdictPage.total}
               perPage={verdictPage.perPage} unit="components" className="row-end" />
           </div>
           <table>
-            <thead><tr><th>component</th><th>version</th><th>license</th><th>verdict</th><th>reason</th></tr></thead>
+            <thead><tr><th>{t('licenses.col.component')}</th><th>{t('licenses.col.version')}</th><th>{t('licenses.col.license')}</th><th>{t('licenses.col.verdict')}</th><th>{t('licenses.col.reason')}</th></tr></thead>
             <tbody>
               {verdictPage.rows.map((row, index) => (
                 <tr key={`${row.identity_key}-${row.license}-${verdictStart + index}`} className={row.verdict === 'denied' ? '' : 'muted-row'}>
@@ -127,13 +129,13 @@ export default function Licenses({ projects }) {
         </>
       )}
       <div className="row">
-        <h2 className="section">license policies</h2>
+        <h2 className="section">{t('licenses.policies')}</h2>
         <Pager page={policyPage.page} pages={policyPage.pages}
           onChange={policyPage.setPage} total={policyPage.total}
-          perPage={policyPage.perPage} unit="policies" className="row-end" />
+          perPage={policyPage.perPage} unit={t('licenses.unit.policies')} className="row-end" />
       </div>
       <table>
-        <thead><tr><th>name</th><th>scope</th><th>allow</th><th>deny</th><th>status</th><th></th></tr></thead>
+        <thead><tr><th>{t('licenses.col.name')}</th><th>{t('licenses.col.scope')}</th><th>{t('licenses.col.allow')}</th><th>{t('licenses.col.deny')}</th><th>{t('common.status')}</th><th></th></tr></thead>
         <tbody>
           {policyPage.rows.map((p) => (
             <tr key={p.id} className={p.status === 'disabled' ? 'muted-row' : ''}>
@@ -142,53 +144,53 @@ export default function Licenses({ projects }) {
               <td>{p.allow_list || '—'}</td>
               <td>{p.deny_list || '—'}</td>
               <td><span className={`status st-${p.status}`}>{p.status}</span></td>
-              <td><button onClick={() => togglePolicy(p)}>{p.status === 'active' ? 'disable' : 'enable'}</button></td>
+              <td><button onClick={() => togglePolicy(p)}>{p.status === 'active' ? t('licenses.disable') : t('licenses.enable')}</button></td>
             </tr>
           ))}
         </tbody>
       </table>
       <Pager page={policyPage.page} pages={policyPage.pages}
         onChange={policyPage.setPage} total={policyPage.total}
-        perPage={policyPage.perPage} unit="policies" className="row-end" />
+        perPage={policyPage.perPage} unit={t('licenses.unit.policies')} className="row-end" />
       <div className="card">
-        <input placeholder="policy name" value={form.name}
+        <input placeholder={t('licenses.form.name')} value={form.name}
           onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
         <select value={form.scope_type} onChange={(e) => setForm((f) => ({ ...f, scope_type: e.target.value }))}>
-          <option value="org">organization-wide</option>
-          <option value="project">project-specific</option>
+          <option value="org">{t('licenses.scope.org')}</option>
+          <option value="project">{t('licenses.scope.project')}</option>
         </select>
         {form.scope_type === 'project' && (
           <select value={form.scope_id} onChange={(e) => setForm((f) => ({ ...f, scope_id: e.target.value }))}>
-            <option value="">select project…</option>
+            <option value="">{t('licenses.selectProject')}</option>
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         )}
-        <input placeholder="allow list (comma SPDX ids)" value={form.allow_list}
+        <input placeholder={t('licenses.form.allow')} value={form.allow_list}
           onChange={(e) => setForm((f) => ({ ...f, allow_list: e.target.value }))} />
-        <input placeholder="deny list (comma SPDX ids)" value={form.deny_list}
+        <input placeholder={t('licenses.form.deny')} value={form.deny_list}
           onChange={(e) => setForm((f) => ({ ...f, deny_list: e.target.value }))} />
         <select value={form.unknown_action} onChange={(e) => setForm((f) => ({ ...f, unknown_action: e.target.value }))}>
-          <option value="warn">unknown: warn</option>
-          <option value="allow">unknown: allow</option>
-          <option value="deny">unknown: deny</option>
+          <option value="warn">{t('licenses.unknown.warn')}</option>
+          <option value="allow">{t('licenses.unknown.allow')}</option>
+          <option value="deny">{t('licenses.unknown.deny')}</option>
         </select>
-        <button onClick={createPolicy}>create policy</button>
+        <button onClick={createPolicy}>{t('licenses.createPolicy')}</button>
       </div>
       <div className="row">
-        <h2 className="section">exceptions</h2>
+        <h2 className="section">{t('licenses.exceptions')}</h2>
         <Pager page={exceptionPage.page} pages={exceptionPage.pages}
           onChange={exceptionPage.setPage} total={exceptionPage.total}
-          perPage={exceptionPage.perPage} unit="exceptions" className="row-end" />
+          perPage={exceptionPage.perPage} unit={t('licenses.unit.exceptions')} className="row-end" />
       </div>
       <table>
-        <thead><tr><th>component identity</th><th>license</th><th>approved by</th><th>expires</th><th>reason</th></tr></thead>
+        <thead><tr><th>{t('licenses.col.componentIdentity')}</th><th>{t('licenses.col.license')}</th><th>{t('licenses.col.approvedBy')}</th><th>{t('licenses.col.expires')}</th><th>{t('licenses.col.reason')}</th></tr></thead>
         <tbody>
           {exceptionPage.rows.map((x) => (
             <tr key={x.id}>
               <td className="muted">{x.component_identity}</td>
               <td>{x.license_id}</td>
               <td>{x.approved_by}</td>
-              <td>{x.expires_at ? new Date(x.expires_at).toLocaleDateString() : 'never'}</td>
+              <td>{x.expires_at ? new Date(x.expires_at).toLocaleDateString() : t('common.never')}</td>
               <td>{x.reason}</td>
             </tr>
           ))}
@@ -196,19 +198,19 @@ export default function Licenses({ projects }) {
       </table>
       <Pager page={exceptionPage.page} pages={exceptionPage.pages}
         onChange={exceptionPage.setPage} total={exceptionPage.total}
-        perPage={exceptionPage.perPage} unit="exceptions" className="row-end" />
+        perPage={exceptionPage.perPage} unit={t('licenses.unit.exceptions')} className="row-end" />
       <div className="toolbar">
-        <input placeholder="component identity key" value={exForm.component_identity}
+        <input placeholder={t('licenses.form.componentIdentity')} value={exForm.component_identity}
           onChange={(e) => setExForm((f) => ({ ...f, component_identity: e.target.value }))} />
-        <input placeholder="license id" value={exForm.license_id}
+        <input placeholder={t('licenses.form.licenseId')} value={exForm.license_id}
           onChange={(e) => setExForm((f) => ({ ...f, license_id: e.target.value }))} />
-        <input placeholder="reason" value={exForm.reason}
+        <input placeholder={t('licenses.form.reason')} value={exForm.reason}
           onChange={(e) => setExForm((f) => ({ ...f, reason: e.target.value }))} />
-        <input placeholder="approved_by" value={exForm.approved_by}
+        <input placeholder={t('licenses.form.approvedBy')} value={exForm.approved_by}
           onChange={(e) => setExForm((f) => ({ ...f, approved_by: e.target.value }))} />
-        <button onClick={createException}>create exception</button>
+        <button onClick={createException}>{t('licenses.createException')}</button>
       </div>
-      {!policies.length && !error && <p className="empty">No license policies yet.</p>}
+      {!policies.length && !error && <p className="empty">{t('licenses.empty.policies')}</p>}
     </div>
   )
 }

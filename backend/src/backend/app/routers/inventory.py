@@ -1,18 +1,20 @@
 """Inventory and project listing endpoints."""
+import json
 from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app import auth, models, severity as severity_mod
+from backend.app import auth, cvss, models, severity as severity_mod
+from backend.app.ancestry import ancestry, links_of
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
 router = APIRouter(prefix="/api/v1", tags=["inventory"])
 
 SEVERITIES = severity_mod.SEVERITIES
-CLOSED_STATUSES = {"resolved", "suppressed", "false_positive"}
+from backend.app.status import CLOSED_STATUSES
 
 
 def _serialize_version_profile(session: Session, org_id: str,
@@ -618,3 +620,216 @@ def component_impact(component_id: str | None = Query(default=None),
                      "total_findings": sum(row["findings"] for row in usages),
                      "open_findings": sum(row["open_findings"] for row in usages),
                      "usages": usages}}
+
+
+# ── one component's sheet ────────────────────────────────────────────────────
+#
+# A component is a package@version (`identity_key` is the purl), so this page is
+# the reverse of the advisory screen: instead of "what does this CVE touch", it
+# answers "what does this package carry", across every build that ships it. The
+# advisory is the group, because that is the row somebody fixes.
+
+# `findings.status` has two spellings for settled and both mean closed here.
+COMPONENT_SETTLED = {"resolved", "closed", "false_positive", "accepted_risk",
+                     "suppressed"}
+
+
+def _component_settled(finding: models.Finding) -> bool:
+    return (finding.status or "").lower() in COMPONENT_SETTLED
+
+
+def _finding_detail(finding: models.Finding) -> dict:
+    """The per-finding JSON blob, when the ingest left one (cvss, fix, advisory)."""
+    raw = finding.detail or ""
+    if not raw.strip().startswith("{"):
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+@router.get("/components/{component_id}")
+def component_sheet(component_id: str,
+                    org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    """One package@version: where it is used, and every advisory it carries."""
+    component = session.get(models.Component, component_id)
+    if component is None or component.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "component not found in this organization")
+
+    findings = [row for row in
+                (session.query(models.Finding)
+                 .filter_by(org_id=org.id, component_id=component.id).all())
+                if row.kind == "vulnerability"]
+
+    # Where it ships: one entry per build, folded under its project so the page
+    # answers "which product do I upgrade" before "which build".
+    builds: dict[tuple, dict] = {}
+    # One link map per build: the sheet answers "who pulls this in" for every
+    # build that ships the package, and walking them one query at a time is what
+    # turns a page of six builds into eighteen round trips.
+    build_links: dict[str, dict] = {}
+    for link in (session.query(models.VersionComponent)
+                 .filter_by(component_id=component.id).all()):
+        version = session.get(models.ProjectVersion, link.project_version_id)
+        if version is None:
+            continue
+        project = session.get(models.Project, version.project_id)
+        if project is None or project.org_id != org.id:
+            continue
+        if version.id not in build_links:
+            build_links[version.id] = links_of(session, version.id)
+        mine = [row for row in findings if row.last_seen_version_id == version.id]
+        builds[(project.id, version.id)] = {
+            "project": {"id": project.id, "slug": project.slug, "name": project.name},
+            "version": {"id": version.id, "label": version.version},
+            "direct": bool(link.is_direct),
+            # The path that explains a transitive package: nearest parent first.
+            # Empty means the BOM stated no parent, which is not "top level".
+            "chain": ancestry(session, version.id, component,
+                              links=build_links[version.id]),
+            "manifest": link.manifest_path or component.manifest_path,
+            "findings": len(mine),
+            "open_findings": sum(1 for row in mine if not _component_settled(row)),
+            "last_import_at": (version.updated_at.isoformat()
+                               if getattr(version, "updated_at", None) else None),
+        }
+    projects: dict[str, dict] = {}
+    for row in builds.values():
+        bucket = projects.setdefault(row["project"]["id"], {
+            "project": row["project"], "builds": []})
+        bucket["builds"].append(row)
+    for bucket in projects.values():
+        bucket["builds"].sort(key=lambda row: row["version"]["label"], reverse=True)
+
+    advisory_ids = {row.vulnerability_id for row in findings if row.vulnerability_id}
+    advisories = {}
+    if advisory_ids:
+        advisories = {row.id: row for row in
+                      session.query(models.Vulnerability)
+                      .filter(models.Vulnerability.id.in_(advisory_ids)).all()}
+
+    def advisory_of(finding) -> models.Vulnerability | None:
+        return advisories.get(finding.vulnerability_id) if finding.vulnerability_id else None
+
+    cve_ids: set[str] = set()
+    for row in findings:
+        advisory = advisory_of(row)
+        if advisory is not None and advisory.cve_id:
+            cve_ids.add(advisory.cve_id)
+    kev = {}
+    if cve_ids:
+        kev = {row.cve_id: row for row in
+               session.query(models.KevEntry)
+               .filter(models.KevEntry.cve_id.in_(cve_ids)).all()}
+    epss = {}
+    if cve_ids:
+        epss = {row.cve_id: row for row in
+                session.query(models.EpssScore)
+                .filter(models.EpssScore.cve_id.in_(cve_ids)).all()}
+
+    groups: dict[str, dict] = {}
+    for finding in findings:
+        advisory = advisory_of(finding)
+        ref = ((advisory.cve_id or advisory.source_id) if advisory is not None
+               else (finding.rule_id or finding.title or "unnamed"))
+        detail = _finding_detail(finding)
+        bucket = groups.setdefault(ref.lower(), {
+            "ref": ref,
+            "cve_id": advisory.cve_id if advisory is not None else None,
+            "title": advisory.title if advisory is not None else finding.title,
+            "url": advisory.url if advisory is not None else finding.url,
+            "severity": "UNKNOWN",
+            "cvss_scores": [],
+            "vector": advisory.cvss_vector if advisory is not None else None,
+            "fixed_versions": set(),
+            "findings": 0, "open_findings": 0,
+            "statuses": set(),
+            "projects": set(),
+            "kev": bool(advisory is not None and advisory.cve_id in kev),
+            "epss": None,
+            "first_seen_at": None, "last_seen_at": None,
+        })
+        severity = severity_mod.canonical(finding.severity)
+        if severity_mod.rank(severity) < severity_mod.rank(bucket["severity"]):
+            bucket["severity"] = severity
+        if isinstance(detail.get("cvss_score"), (int, float)):
+            bucket["cvss_scores"].append(float(detail["cvss_score"]))
+        elif isinstance(detail.get("cvss"), (int, float)):
+            # The runtime ingest (NVD) names it `cvss`.
+            bucket["cvss_scores"].append(float(detail["cvss"]))
+        fixed = detail.get("fixed_version")
+        if isinstance(fixed, str) and fixed:
+            bucket["fixed_versions"].add(fixed)
+        bucket["findings"] += 1
+        if not _component_settled(finding):
+            bucket["open_findings"] += 1
+        bucket["statuses"].add(finding.status)
+        project = builds.get((finding.project_id, finding.last_seen_version_id), {})
+        if project.get("project"):
+            bucket["projects"].add(project["project"]["slug"])
+        if bucket["epss"] is None and advisory is not None and advisory.cve_id in epss:
+            bucket["epss"] = {"score": epss[advisory.cve_id].epss,
+                              "percentile": epss[advisory.cve_id].percentile}
+        stamp = finding.first_seen_at
+        if stamp and (bucket["first_seen_at"] is None or stamp < bucket["first_seen_at"]):
+            bucket["first_seen_at"] = stamp
+        stamp = finding.last_seen_at
+        if stamp and (bucket["last_seen_at"] is None or stamp > bucket["last_seen_at"]):
+            bucket["last_seen_at"] = stamp
+
+    rows = []
+    for bucket in groups.values():
+        if bucket["cvss_scores"]:
+            bucket["cvss"] = {"known": True, "score": max(bucket["cvss_scores"]),
+                              "derived": False}
+        else:
+            # NVD-side rows carry only the vector; the base score is arithmetic.
+            computed = cvss.base_score(bucket["vector"])
+            bucket["cvss"] = {"known": computed is not None, "score": computed,
+                              "derived": computed is not None}
+        del bucket["cvss_scores"]
+        bucket["fix"] = {"available": bool(bucket["fixed_versions"]),
+                         "versions": sorted(bucket["fixed_versions"])}
+        del bucket["fixed_versions"]
+        bucket["projects"] = sorted(bucket["projects"])
+        bucket["statuses"] = sorted(status for status in bucket["statuses"] if status)
+        bucket["first_seen_at"] = (bucket["first_seen_at"].isoformat()
+                                   if bucket["first_seen_at"] else None)
+        bucket["last_seen_at"] = (bucket["last_seen_at"].isoformat()
+                                  if bucket["last_seen_at"] else None)
+        rows.append(bucket)
+    rows.sort(key=lambda row: (severity_mod.rank(row["severity"]),
+                               -int(row["kev"]), -row["open_findings"], row["ref"]))
+
+    by_severity = {level: 0 for level in severity_mod.SEVERITIES}
+    for row in rows:
+        by_severity[row["severity"]] = by_severity.get(row["severity"], 0) + 1
+    return {"data": {
+        "component": {"id": component.id, "name": component.name,
+                      "version": component.version, "purl": component.purl,
+                      "license": component.license,
+                      "manifest_path": component.manifest_path,
+                      "identity_key": component.identity_key},
+        "usage": {"projects": list(projects.values()),
+                  "totals": {"projects": len(projects), "builds": len(builds),
+                             "direct": sum(1 for row in builds.values() if row["direct"])}},
+        "advisories": rows,
+        "counters": {
+            "advisories": len(rows),
+            "findings": sum(row["findings"] for row in rows),
+            "open": sum(row["open_findings"] for row in rows),
+            "kev": sum(1 for row in rows if row["kev"]),
+            "fixable": sum(1 for row in rows if row["fix"]["available"]),
+            "by_severity": by_severity,
+        },
+        "coverage": {
+            "kind": "dependency advisories only (code weaknesses and secrets belong "
+                    "to the source, not to the package)",
+            "scanned": ("this package answered in a scanned build" if builds
+                        else "no build carries it"),
+        },
+    }}

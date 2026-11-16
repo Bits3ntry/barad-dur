@@ -41,7 +41,9 @@ router = APIRouter(prefix="/api/v1", tags=["inventory-projects"])
 
 # A settled finding still happened: it is counted beside the open ones, never
 # dropped, or a build whose only result was dismissed reads as an unscanned one.
-SETTLED_STATUSES = NON_OPEN | {"suppressed"}
+# Closure has one spelling list (`app/status.py`): a build the project table
+# calls 212 findings and the build page calls 96 are the same build.
+SETTLED_STATUSES = NON_OPEN
 EXPOSURES = {"public", "internal", "unknown"}
 SOURCES = {"manual", "pipeline", "health", "discovery"}
 PROBE_TIMEOUT = 8.0
@@ -762,6 +764,11 @@ class ProjectAssetIn(BaseModel):
         default=None, max_length=64,
         description="Environment that serves this asset (DEV, PRE, PRO…)")
     notes: str | None = Field(default=None, max_length=4000)
+    level: str = Field(default="simple", max_length=16,
+                       description="simple | advanced | redteam — the request's ask")
+    include_children: bool = Field(
+        default=False,
+        description="file every subdomain this asset covers, not only the asset")
     actor: str = Field(default="console", max_length=320)
 
 
@@ -829,8 +836,24 @@ def add_project_asset(ref: str, payload: ProjectAssetIn,
                              source="manual", detail=payload.notes)
         session.add(asset)
         session.flush()
+    previous_project = asset.project_id
     asset.project_id = project.id
     asset.classification_status = "owned"
+    # Filing a parent files its estate: 200 subdomains discovered by crt.sh are not
+    # 200 decisions. Children follow unless they already belong somewhere else —
+    # that is an override, and an override is a decision the operator already made.
+    # Filing is a human decision, one asset at a time unless the operator asks for
+    # the estate: `include_children` is that ask, never a default. A cascade nobody
+    # requested is 268 assets moved into a project by a click meant for one.
+    inherited = 0
+    if getattr(payload, "include_children", False):
+        from backend.app.routers.easm import _cascade_project
+        inherited = _cascade_project(session, org.id, asset, previous_project)
+        if inherited:
+            for row in (session.query(models.Asset)
+                        .filter_by(org_id=org.id, project_id=project.id,
+                                   classification_status="unclassified").all()):
+                row.classification_status = "owned"
     if payload.notes:
         asset.detail = payload.notes
 
@@ -854,15 +877,29 @@ def add_project_asset(ref: str, payload: ProjectAssetIn,
                                          entity_type="deployment",
                                          relation="exposes",
                                          entity_id=deployment.id))
+    # Declaring is not scanning. The domain exists either way; what it does not
+    # have yet is permission, and that question is opened here so it lands in
+    # Grants in the same breath as the declaration.
+    from backend.app import authorization
+    if payload.level not in authorization.SCAN_LEVELS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"level must be one of {sorted(authorization.SCAN_LEVELS)}")
+    decision = authorization.ensure_authorization(
+        session, org.id, asset, payload.actor, level=payload.level)
     _audit_log(session, org.id, payload.actor, "inventory.asset_added", "asset",
                asset.id, f"{kind} {value} -> {project.slug}"
-               + (f" ({deployment.environment})" if deployment else ""))
+               + (f" ({deployment.environment})" if deployment else "")
+               + (f"; {inherited} descendant(s) filed with it" if inherited else "")
+               + ("; authorization requested" if decision.get("request") else
+                  "; already covered" if decision["covered"] else
+                  "; excluded from scope"))
     session.commit()
     return {"data": _asset_data(
         asset, component.name if component else None,
         {"id": deployment.id, "environment": deployment.environment,
          "component": component.name if component else None,
-         "version_label": deployment.version_label} if deployment else None)}
+         "version_label": deployment.version_label} if deployment else None),
+        "authorization": decision, "inherited": inherited}
 
 
 class DeploymentIn(BaseModel):
@@ -1312,21 +1349,28 @@ def tick_probes(payload: ProbeTickIn = None,
 
 @router.get("/inventory/unassigned")
 def unassigned_assets(limit: int = Query(default=200, le=500),
+                      offset: int = Query(default=0, ge=0),
                       org: models.Organization = Depends(auth.require_org),
                       session: Session = Depends(get_session)):
-    """Discovered assets nobody has catalogued yet, plus the projects to file them."""
-    rows = (session.query(models.Asset)
+    """Discovered assets nobody has catalogued yet, plus the projects to file them.
+
+    `total` is a real count, not the size of this page: reporting 200 because the
+    page is 200 made an estate of 268 look complete, and the 68 missing ones
+    invisible with no way to reach them.
+    """
+    base = (session.query(models.Asset)
             .filter(models.Asset.org_id == org.id,
                     models.Asset.archived_at.is_(None),
                     (models.Asset.project_id.is_(None))
-                    | (models.Asset.classification_status != "owned"))
-            .order_by(models.Asset.discovered_at.desc()).limit(limit).all())
+                    | (models.Asset.classification_status != "owned")))
+    total = base.count()
+    rows = (base.order_by(models.Asset.value).offset(offset).limit(limit).all())
     projects = [{"id": row.id, "name": row.name, "slug": row.slug}
                 for row in (session.query(models.Project)
                             .filter_by(org_id=org.id)
                             .order_by(models.Project.name).all())]
-    return {"data": [_asset_data(row) for row in rows], "total": len(rows),
-            "projects": projects}
+    return {"data": [_asset_data(row) for row in rows], "total": total,
+            "limit": limit, "offset": offset, "projects": projects}
 
 
 class CatalogIn(BaseModel):
@@ -1335,6 +1379,9 @@ class CatalogIn(BaseModel):
     deployment_id: str | None = None
     relation: str = Field(default="serves", max_length=32)
     actor: str = Field(default="console", max_length=320)
+    include_children: bool = Field(
+        default=False,
+        description="file the subdomains this asset covers as well")
 
 
 @router.post("/assets/{asset_id}/catalog")
@@ -1348,8 +1395,15 @@ def catalog_asset(asset_id: str, payload: CatalogIn = None,
     if asset is None or asset.org_id != org.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
     project = _project_row(session, org, payload.project)
+    previous_project = asset.project_id
     asset.project_id = project.id
     asset.classification_status = "owned"
+    # Manual by default. Filing `dominio.com` moves its estate only when the
+    # operator ticks it — 268 assets are not a side effect of one click.
+    inherited = 0
+    if payload.include_children:
+        from backend.app.routers.easm import _cascade_project
+        inherited = _cascade_project(session, org.id, asset, previous_project)
     entity_type, entity_id = "project", project.id
     if payload.deployment_id:
         deployment = session.get(models.Deployment, payload.deployment_id)
@@ -1372,6 +1426,7 @@ def catalog_asset(asset_id: str, payload: CatalogIn = None,
                                      added_at=models.utcnow()))
     _audit_log(session, org.id, payload.actor, "inventory.asset_catalogued",
                "asset", asset.id,
-               f"{asset.type}:{asset.value} -> {project.slug}/{entity_type}")
+               f"{asset.type}:{asset.value} -> {project.slug}/{entity_type}"
+               + (f"; {inherited} subdomain(s) with it" if inherited else ""))
     session.commit()
-    return {"data": _asset_data(asset)}
+    return {"data": _asset_data(asset), "inherited": inherited}
