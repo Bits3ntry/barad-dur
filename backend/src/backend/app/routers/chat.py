@@ -846,6 +846,17 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
     # The mission's ledger row belongs to this thread: the field agent then speaks in
     # the conversation it was proposed from (A6).
     agent_router._mission_run(session_db, mission, thread.id)
+    # "Si le estoy mandando algo ya le doy permisos": a target the operator typed into the
+    # conversation, covered by an active grant, does not wait for a second yes. The gate
+    # stays for what the estate did not authorise — there it asks, inline.
+    auto = source == "chat.declared" and decision.allowed
+    if auto:
+        mission.status = "approved"
+        mission.approved_by = f"chat:{actor}"
+        mission.approved_at = now
+        session_db.flush()
+        agent_router._first_task(session_db, mission)
+
     signed = shauron_signing.sign_ticket(session_db, {
         "schema": "barad-mission-v1", "mission_id": mission.id, "org_id": org.id,
         "origin": "chat-proposal", "profile": mission.profile,
@@ -856,13 +867,25 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
     mission.signature = signed[shauron_signing.SIGNATURE_FIELD]
     return {"mission": agent_router._mission_data(mission, tasks=0),
             "target": origin, "declared": value, "source": source, "ids": ids,
-            "plan": plan_row}
+            "plan": plan_row, "auto": auto}
 
 
 def _proposal_answer(result: dict, capability: str) -> str:
     """What the operator reads. It names the next action, never the outcome."""
     if "mission" in result:
         mission = result["mission"]
+        if result.get("auto"):
+            return (
+                "**La misión está aprobada y la tarea en cola** — la pediste vos contra ese "
+                "host y el parque lo tiene autorizado, así que no te la devuelvo para un "
+                "segundo sí.\n\n"
+                f"- misión `{mission['id'][:12]}…` · capability `{capability}` · "
+                f"perfil `{mission['profile']}`\n"
+                f"- target: {result['target']} (desde {result['source']})\n"
+                f"- prueba exigida: "
+                f"{', '.join((mission['evidence'] or {}).get('required') or [])}\n"
+                + (f"\n{planner.describe(result['plan'])}\n\n" if result.get("plan") else "")
+                + "El worker la levanta en segundos y devuelve request/response/veredicto.")
         return (
             "Armé la misión y está esperando tu aprobación — no ejecuta nada hasta que "
             "la apruebes.\n\n"

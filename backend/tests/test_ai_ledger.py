@@ -729,10 +729,11 @@ def test_a_declared_target_starts_a_mission_from_the_chat(context, monkeypatch):
                           "' OR 1=1-- y decime si entra como admin"},
         headers=headers).json()["data"]
     answer = body["turn"]["content"]
-    assert "esperando tu aprobación" in answer
+    assert "está aprobada y la tarea en cola" in answer, \
+        "a host the operator typed is consent; the gate is for what the estate did not grant"
 
     mission = session.query(models.AgentMission).one()
-    assert mission.status == "awaiting_approval"
+    assert mission.status == "approved"
     assert mission.capability == "validate"
     targets = json.loads(mission.targets)
     assert targets[0]["value"] == "https://app.example.test", \
@@ -825,8 +826,8 @@ def test_an_active_verb_without_a_mention_still_proposes_a_mission(context, monk
                                        "sigue activo"},
                      headers=headers).json()["data"]
     answer = body["turn"]["content"]
-    assert "esperando tu aprobación" in answer
     assert "No nombraste un agente" in answer, "it says what it inferred"
+    assert "tarea en cola" in answer
     mission = session.query(models.AgentMission).one()
     assert mission.capability == "validate"
     assert json.loads(mission.targets)[0]["value"] == "https://app.example.test"
@@ -841,3 +842,22 @@ def test_a_question_about_a_host_is_not_an_action(context):
                      headers=headers).json()["data"]
     assert "No armé la misión" not in body["turn"]["content"]
     assert "No nombraste un agente" not in body["turn"]["content"]
+
+
+def test_a_typed_target_is_authorised_by_the_ask_itself(context, monkeypatch):
+    """"Si le estoy mandando algo ya le doy permisos": a host the operator typed, covered
+    by an active grant, is approved on creation and the task is queued — no second yes.
+    The gate stays for what the estate did not authorise (the tests above)."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "probá https://app.example.test/rest/user/login "
+                                       "con ' OR 1=1--"},
+                     headers=headers).json()["data"]
+    assert "está aprobada y la tarea en cola" in body["turn"]["content"]
+    mission = session.query(models.AgentMission).one()
+    assert mission.status == "approved"
+    assert mission.approved_by.startswith("chat:")
+    assert session.query(models.AgentTask).filter_by(mission_id=mission.id).count() == 1
