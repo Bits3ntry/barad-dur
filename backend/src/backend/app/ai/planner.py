@@ -119,6 +119,46 @@ def parse(answer: str) -> dict | None:
     return None
 
 
+FORMAT_PROMPT = """You convert an analysis into a machine-readable plan. You have no tools and
+you do not investigate: everything you need is in the text below.
+
+Return **one JSON object and nothing else**, in exactly this shape:
+
+{"technique": {"known": true|false, "summary": "...", "sources": ["ids the analysis cites"]},
+ "hypothesis": "one sentence",
+ "steps": [{"n": 1, "method": "GET|POST|...", "path": "/exact/endpoint",
+            "payload": "body or null", "expect": "the observable that decides the step"}],
+ "success_signal": "the single observable that makes the verdict VULNERABLE",
+ "safety": "read_only" | "active",
+ "needs_grant": true|false,
+ "open_questions": ["what the analysis could not establish"]}
+
+If the analysis says no documented technique exists, `technique.known` is false and the
+steps are the probe that would falsify the hypothesis. Never invent a path, a version or
+an id that the analysis does not contain: put it in `open_questions` instead."""
+
+
+def format_plan(session: Session, provider, api_key: str, analysis: str) -> dict | None:
+    """A second call whose only job is the shape.
+
+    The planner answers in prose when the finding is rich — three attempts at asking for
+    the object inside the same call failed, because the model prioritises the reasoning
+    over the format requested at the end of it. Formatting is a different job: no tools, no
+    reasoning, one object out.
+    """
+    if not (analysis or "").strip():
+        return None
+    try:
+        result = engine.complete(
+            provider, api_key,
+            [{"role": "system", "content": FORMAT_PROMPT},
+             {"role": "user", "content": analysis[:12000]}],
+            [])
+    except Exception:
+        return None
+    return parse(result.get("content") or "")
+
+
 def plan(session: Session, org: models.Organization, *, actor: str,
          question: str) -> tuple[dict | None, str]:
     """Run the planner once. Returns `(plan, prose)`: when there is no plan, the prose is
@@ -135,8 +175,19 @@ def plan(session: Session, org: models.Organization, *, actor: str,
         orchestrator.execute(session, run, agent=spec())
     except Exception as error:  # a planner that dies must not take the proposal with it
         return None, f"the planner failed: {error}"
-    answer = run.answer or ""
-    return parse(answer), answer.strip()
+    answer = (run.answer or "").strip()
+    plan_row = parse(answer)
+    if plan_row is None and answer and provider is not None:
+        # The shape, in its own call: the planner's prose already did the thinking.
+        from backend.app import secrets
+        try:
+            api_key = (secrets.open_sealed(session, provider.secret_cipher)
+                       if provider.secret_cipher else "")
+        except Exception:
+            api_key = ""
+        if api_key:
+            plan_row = format_plan(session, provider, api_key, answer)
+    return plan_row, answer
 
 
 def describe(plan_row: dict, limit: int = 5) -> str:

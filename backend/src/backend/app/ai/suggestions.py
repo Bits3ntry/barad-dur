@@ -26,6 +26,7 @@ ACTIONS = {
     "open_screen": "abrir una pantalla con lo que la respuesta acaba de nombrar",
     "validate_finding": "pedir una misión de validación para un hallazgo",
     "open_run": "abrir el recibo de una corrida",
+    "approve_mission": "aprobar una misión que espera un humano",
 }
 
 SCREENS = {"projects", "assets", "findings", "missions", "prompts", "ai-runs",
@@ -93,6 +94,16 @@ def validate(session: Session, org: models.Organization, raw) -> list[dict]:
                 # path is the only door, and it still stops at the human gate.
                 out.append({"action": action, "label": label, "finding_id": finding_id,
                             "prompt": f"@angmar validá el impacto de {finding_id}"})
+        elif action == "approve_mission":
+            mission_id = str(item.get("mission_id") or "").strip()
+            row = session.get(models.AgentMission, mission_id) if mission_id else None
+            if (row is not None and row.org_id == org.id
+                    and row.status == "awaiting_approval"):
+                # The button approves in place: the operator does not leave the thread
+                # to say yes to something the thread just described.
+                out.append({"action": action, "label": label,
+                            "mission_id": mission_id,
+                            "href": f"#missions::{mission_id}"})
         elif action == "open_run":
             run_id = str(item.get("run_id") or "").strip()
             row = session.get(models.AiRun, run_id) if run_id else None
@@ -115,6 +126,7 @@ Allowed `action` values, nothing else:
 - `open_screen` — {"action":"open_screen","label":"...","screen":"projects|assets|findings|missions|prompts|ai-runs|inventory|settings","q":"optional search"}
 - `validate_finding` — {"action":"validate_finding","label":"...","finding_id":"<32 hex from a tool answer>"}
 - `open_run` — {"action":"open_run","label":"...","run_id":"<run id from this conversation>"}
+- `approve_mission` — {"action":"approve_mission","label":"...","mission_id":"<id>"}
 
 At most three. Every id must come from a tool answer in this run; a button that points
 at something you did not read is dropped by the platform. If nothing useful applies,

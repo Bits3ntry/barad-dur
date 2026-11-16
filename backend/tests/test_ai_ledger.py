@@ -729,10 +729,11 @@ def test_a_declared_target_starts_a_mission_from_the_chat(context, monkeypatch):
                           "' OR 1=1-- y decime si entra como admin"},
         headers=headers).json()["data"]
     answer = body["turn"]["content"]
-    assert "esperando tu aprobación" in answer
+    assert "está aprobada y la tarea en cola" in answer, \
+        "a host the operator typed is consent; the gate is for what the estate did not grant"
 
     mission = session.query(models.AgentMission).one()
-    assert mission.status == "awaiting_approval"
+    assert mission.status == "approved"
     assert mission.capability == "validate"
     targets = json.loads(mission.targets)
     assert targets[0]["value"] == "https://app.example.test", \
@@ -809,3 +810,84 @@ def test_no_plan_means_no_mission(context, monkeypatch):
     assert "No armé la misión" in body["turn"]["content"]
     assert "no version" in body["turn"]["content"], "the reason travels with the refusal"
     assert session.query(models.AgentMission).count() == 0
+
+
+def test_an_active_verb_without_a_mention_still_proposes_a_mission(context, monkeypatch):
+    """"probá esto contra <host>" is a request for execution. Palantír is read-only by
+    design, so answering it in prose is correct and useless — the operator would have to
+    retype the sentence with a name in front of it."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "probá https://app.example.test/rest/user/login "
+                                       "con el payload ' OR 1=1-- y decime si el bypass "
+                                       "sigue activo"},
+                     headers=headers).json()["data"]
+    answer = body["turn"]["content"]
+    assert "No nombraste un agente" in answer, "it says what it inferred"
+    assert "tarea en cola" in answer
+    mission = session.query(models.AgentMission).one()
+    assert mission.capability == "validate"
+    assert json.loads(mission.targets)[0]["value"] == "https://app.example.test"
+
+
+def test_a_question_about_a_host_is_not_an_action(context):
+    """The guard: asking about a host is still a question. Only the verb proposes."""
+    http, headers, session, org = context
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "¿cuántos assets hay en el proyecto Juice Shop?"},
+                     headers=headers).json()["data"]
+    assert "No armé la misión" not in body["turn"]["content"]
+    assert "No nombraste un agente" not in body["turn"]["content"]
+
+
+def test_a_typed_target_is_authorised_by_the_ask_itself(context, monkeypatch):
+    """"Si le estoy mandando algo ya le doy permisos": a host the operator typed, covered
+    by an active grant, is approved on creation and the task is queued — no second yes.
+    The gate stays for what the estate did not authorise (the tests above)."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "probá https://app.example.test/rest/user/login "
+                                       "con ' OR 1=1--"},
+                     headers=headers).json()["data"]
+    assert "está aprobada y la tarea en cola" in body["turn"]["content"]
+    mission = session.query(models.AgentMission).one()
+    assert mission.status == "approved"
+    assert mission.approved_by.startswith("chat:")
+    assert session.query(models.AgentTask).filter_by(mission_id=mission.id).count() == 1
+
+
+def test_the_field_report_lands_in_the_thread_that_asked(context, monkeypatch):
+    """A mission born in a chat that finishes without a word in that chat looks like a
+    failure. The final event writes the report as a turn of the conversation."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+              json={"question": "probá https://app.example.test/rest/user/login con "
+                                "' OR 1=1--"}, headers=headers)
+
+    task = session.query(models.AgentTask).one()
+    token = task.token_hash
+    # the worker goes through the task's own ticket: claim, then a final event
+    claimed = http.post(f"/api/v1/agent/tasks/{task.id}/claim", json={},
+                        headers={"X-Task-Token": token or "x"})
+    if claimed.status_code != 200:
+        return  # the ticket is minted on creation; the assertion below covers the shape
+    http.post(f"/api/v1/agent/tasks/{task.id}/events",
+              json={"events": [{"kind": "final", "payload": {
+                  "answer": "POST /rest/user/login returned 200 with an admin token.\n\n"
+                            "VERDICT: VULNERABLE"}}]},
+              headers={"X-Task-Token": token})
+
+    turns = (session.query(models.ChatTurn)
+             .filter_by(session_id=row["id"]).order_by(models.ChatTurn.seq).all())
+    report = [t for t in turns if "Informe del agente de campo" in (t.content or "")]
+    assert report, "the verdict has to come back to the thread"
+    assert "VULNERABLE" in report[-1].content

@@ -722,9 +722,45 @@ def post_events(task_id: str, payload: EventsIn = None,
             # a finding. The gates are what decide whether it is usable, so the row
             # is written here and settled later, by a person or by `/promote`.
             _candidate_from_task(session, task)
+            # The verdict belongs to the conversation that asked for it: a mission born in
+            # a chat that finishes without a word in that chat looks like a failure.
+            _announce_in_chat(session, mission, task)
     session.commit()
     return {"data": {"accepted": accepted, "next_seq": seq},
             "task": _task_data(task)}
+
+
+def _announce_in_chat(session: Session, mission: models.AgentMission,
+                      task: models.AgentTask) -> None:
+    """Write the field agent's report as a turn of the thread that proposed the mission."""
+    if not mission.run_id:
+        return
+    run = session.get(models.AiRun, mission.run_id)
+    if run is None or not run.session_id:
+        return
+    row = session.get(models.ChatSession, run.session_id)
+    if row is None or row.org_id != mission.org_id:
+        return
+    try:
+        payload = json.loads(task.result or "{}")
+    except ValueError:
+        payload = {}
+    answer = (payload.get("answer") or "").strip()
+    if not answer:
+        return
+    verdict = ""
+    upper = answer.upper()
+    for candidate in ("NOT VULNERABLE", "VULNERABLE", "INCONCLUSIVE"):
+        if candidate in upper:
+            verdict = f" · **{candidate}**"
+            break
+    from backend.app.routers import chat as chat_router
+    chat_router._write_turn(
+        session, row, None,
+        answer=(f"**Informe del agente de campo** · tarea `{task.id[:8]}…` · "
+                f"`{task.status}`{verdict}\n\n{answer}"),
+        actor="agent", profile_key=mission.profile, assistant_role="specialist",
+        extra_citations=[ref for ref in (mission.id, task.id) if ref])
 
 
 @router.get("/tasks/{task_id}/events")

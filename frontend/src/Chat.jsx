@@ -33,6 +33,7 @@ function shortRef(ref) {
 export function useSessions() {
   const [sessions, setSessions] = useState([])
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const reload = useCallback(async () => {
     try {
       const body = await api.get('/api/v1/ai/sessions')
@@ -143,6 +144,18 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
   // A suggestion is either a place to go or a sentence to send — never a new endpoint.
   // The platform already validated both before the button reached the screen.
   const takeSuggestion = async (suggestion) => {
+    // Approving happens here: the button is the "sí", so it posts and reloads the thread
+    // instead of taking the operator to another screen to repeat it.
+    if (suggestion.action === "approve_mission" && suggestion.mission_id) {
+      try {
+        await api.post(`/api/v1/agent/missions/${suggestion.mission_id}/approve`, {})
+        await load()
+        setNotice("Misión aprobada — el worker la toma en segundos.")
+      } catch (caught) {
+        setError(String(caught.message || caught))
+      }
+      return
+    }
     if (suggestion.href) {
       const [screen, arg] = suggestion.href.replace(/^#/, "").split("::")
       if (screen === "ai-runs" && arg) onNavigate?.("ai-runs", { runId: arg })
@@ -227,6 +240,7 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
   }
   return (
     <div className={`chat${compact ? ' chat-compact' : ''}`}>
+      {notice && <Banner kind="info">{notice}</Banner>}
       {error && <Banner kind="error">{error}</Banner>}
       <div className="chat-log">
         {turns.length === 0 && (
