@@ -33,7 +33,6 @@ function shortRef(ref) {
 export function useSessions() {
   const [sessions, setSessions] = useState([])
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
   const reload = useCallback(async () => {
     try {
       const body = await api.get('/api/v1/ai/sessions')
@@ -62,6 +61,8 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
   const [startedAt, setStartedAt] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState('')
+  // The confirmation of an in-place action (mission approved, cycle created).
+  const [notice, setNotice] = useState('')
   const endRef = useRef(null)
 
   useEffect(() => {
