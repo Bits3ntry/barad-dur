@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
-import { Card, Drawer, EmptyState, ErrorBanner, Loading, Pager, PageHeader, SeverityBadge, Tabs } from './ui'
+import { Card, EmptyState, ErrorBanner, Loading, Pager, PageHeader, SeverityBadge, Tabs,
+  queueHash } from './ui'
 import SbomGraph from './SbomGraph'
+import SbomIngest from './SbomIngest'
+import { useI18n } from './i18n'
 
 /* Supply chain reads a BOM as a document about a build, not as a project tab.
    The index answers "which builds have a BOM"; opening one answers "what does
@@ -12,18 +15,30 @@ import SbomGraph from './SbomGraph'
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN']
 const PER_PAGE = 25
 const NUMERIC_SORTS = new Set(['risk', 'findings', 'epss', 'kev', 'internal'])
+/* A manifest-less root is grouped under one sentinel: the comparison that
+   decides which roots are "the app itself" must not depend on the display
+   language, so the sentinel is a constant and only the label is translated. */
+const DECLARED_BY_APP = 'declared by the application'
 
-function relative(iso) {
-  if (!iso) return 'never'
+function relative(iso, t) {
+  if (!iso) return t('sbom.time.never')
   const ms = Date.now() - new Date(iso).getTime()
-  if (!Number.isFinite(ms)) return 'never'
+  if (!Number.isFinite(ms)) return t('sbom.time.never')
   const minutes = Math.round(ms / 60000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 1) return t('sbom.time.justNow')
+  if (minutes < 60) return t('sbom.time.minutes', { n: minutes })
   const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
+  if (hours < 24) return t('sbom.time.hours', { n: hours })
   const days = Math.round(hours / 24)
-  return days === 1 ? 'yesterday' : `${days}d ago`
+  return days === 1 ? t('sbom.time.yesterday') : t('sbom.time.days', { n: days })
+}
+
+/* Severity names are the API's, so the word comes from common.json — then
+   lower-cased, because these screens print it as a word, not as a badge. A
+   value the catalogue does not know prints itself. */
+function sevWord(tOr, value) {
+  const word = String(value || 'unknown').toLowerCase()
+  return tOr(`severity.${word}`, word).toLowerCase()
 }
 
 function severityClass(value) {
@@ -42,8 +57,9 @@ function epssLabel(value) {
 }
 
 function SeverityVector({ counts }) {
+  const { t, tOr } = useI18n()
   const total = SEVERITIES.reduce((sum, key) => sum + (counts?.[key] || 0), 0)
-  if (!total) return <span className="sbom-clean">no findings</span>
+  if (!total) return <span className="sbom-clean">{t('sbom.clean')}</span>
   return (
     <div className="sbom-vector">
       {SEVERITIES.map((severity) => (
@@ -51,7 +67,7 @@ function SeverityVector({ counts }) {
           <span className={`sbom-count-value ${(counts?.[severity] ?? 0) === 0 ? 'is-zero' : ''}`}>
             {counts?.[severity] ?? 0}
           </span>
-          <span className="sbom-count-label">{severity.toLowerCase()}</span>
+          <span className="sbom-count-label">{sevWord(tOr, severity)}</span>
         </div>
       ))}
     </div>
@@ -62,12 +78,13 @@ function SeverityVector({ counts }) {
    count and its colour the severity. "1 high, 2 low" is one glance, not five
    badges to compare. */
 function SeverityBar({ counts, compact = false }) {
+  const { tOr } = useI18n()
   const total = SEVERITIES.reduce((sum, key) => sum + (counts?.[key] || 0), 0)
   if (!total) return <span className="sbom-clean">—</span>
   return (
     <div className={`sbom-bar${compact ? ' compact' : ''}`}
       title={SEVERITIES.filter((s) => counts?.[s])
-        .map((s) => `${counts[s]} ${s.toLowerCase()}`).join(' · ')}>
+        .map((s) => `${counts[s]} ${sevWord(tOr, s)}`).join(' · ')}>
       {SEVERITIES.filter((severity) => counts?.[severity]).map((severity) => (
         <span key={severity}
           className={`sbom-bar-seg sev-${severity.toLowerCase()}`}
@@ -80,18 +97,25 @@ function SeverityBar({ counts, compact = false }) {
 }
 
 function RiskScore({ value }) {
+  const { t } = useI18n()
   const score = Number(value || 0)
   const tone = score >= 40 ? 'bad' : score >= 15 ? 'warn' : score > 0 ? 'ok' : ''
-  return <span className={`sbom-risk ${tone}`} title="severity weight × KEV × EPSS">
+  return <span className={`sbom-risk ${tone}`} title={t('sbom.risk.formula')}>
     {score ? score.toFixed(1) : '0'}
   </span>
 }
 
 /* ── the index: every build with a BOM ─────────────────────────────────────── */
 
-export default function Sbom({ focus = {}, onOpen, onBack, embedded = false }) {
+export default function Sbom({ focus = {}, onOpen, onBack, embedded = false, onOpenComponents,
+  onOpenFinding, onOpenComponent }) {
+  const { t, tCount } = useI18n()
   const [index, setIndex] = useState(null)
   const [error, setError] = useState('')
+  const [projects, setProjects] = useState([])
+  const [platform, setPlatform] = useState('')
+  const [ingestOpen, setIngestOpen] = useState(false)
+  const [reload, setReload] = useState(0)
 
   const projectSlug = focus.projectSlug || ''
   const component = focus.component || ''
@@ -102,12 +126,21 @@ export default function Sbom({ focus = {}, onOpen, onBack, embedded = false }) {
     api.get('/api/v1/sbom/index')
       .then((r) => setIndex(r))
       .catch((e) => setError(String(e.message || e)))
+  }, [reload])
+
+  // The upload drawer needs the projects to correct a guess against, and the
+  // address a terminal should use for the CLI tab. Both are one read, and a
+  // failure here must not take the index down with it.
+  useEffect(() => {
+    api.get('/api/v1/projects').then((r) => setProjects(r.data || [])).catch(() => setProjects([]))
+    api.get('/api/v1/sbom/ingest').then((r) => setPlatform(r.data?.api_url || '')).catch(() => setPlatform(''))
   }, [])
 
   if (error) return <ErrorBanner error={error} />
   if (projectSlug && version) {
     return <BomView project={projectSlug} component={component} version={version}
-      versionId={focus.versionId} onBack={onBack} embedded={embedded} />
+      versionId={focus.versionId} onBack={onBack} embedded={embedded}
+      onOpenFinding={onOpenFinding} onOpenComponent={onOpenComponent} />
   }
   if (index === null) return <Card><Loading rows={4} /></Card>
 
@@ -117,13 +150,34 @@ export default function Sbom({ focus = {}, onOpen, onBack, embedded = false }) {
   return (
     <div className="stack">
       <PageHeader
-        title="Builds"
-        subtitle="Every build with a bill of materials, whichever project it belongs to. A BOM is a document about a version — this is the way in that does not start at Projects." />
+        title={t('sbom.title')}
+        subtitle={t('sbom.subtitle')}
+        actions={!embedded && (
+          <>
+            {/* A build can arrive by pipeline or by hand; both land on this
+                screen, so both doors sit here. */}
+            <button className="btn-primary" onClick={() => setIngestOpen(true)}>
+              {t('sbom.ingest.open')}
+            </button>
+            {onOpenComponents && (
+              // The same builds, grouped by application and filtered to what a
+              // deployment actually runs. One object, one door; this is its view.
+              <button className="btn-ghost" onClick={onOpenComponents}>
+                {t('nav.components')} →
+              </button>
+            )}
+          </>
+        )} />
 
       {!rows.length && (
         <Card>
-          <EmptyState title="No BOMs yet"
-            hint="Import one from the CLI or CI (`barad sbom`), or from a version inside a project. It attaches to that version, and appears here." />
+          <EmptyState title={t('sbom.empty.title')}
+            hint={t('sbom.empty.hint')}
+            action={!embedded && (
+              <button className="btn-primary" onClick={() => setIngestOpen(true)}>
+                {t('sbom.ingest.open')}
+              </button>
+            )} />
         </Card>
       )}
 
@@ -131,10 +185,10 @@ export default function Sbom({ focus = {}, onOpen, onBack, embedded = false }) {
         <>
           <Card tight>
             <div className="sbom-totals">
-              <div><strong>{totals.boms}</strong> builds</div>
-              <div><strong>{totals.components}</strong> components</div>
-              <div><strong>{totals.findings}</strong> findings</div>
-              <div><strong>{totals.kev}</strong> in KEV</div>
+              <div><strong>{totals.boms}</strong> {t('sbom.totals.builds')}</div>
+              <div><strong>{totals.components}</strong> {t('sbom.totals.components')}</div>
+              <div><strong>{totals.findings}</strong> {t('sbom.totals.findings')}</div>
+              <div><strong>{totals.kev}</strong> {t('sbom.totals.kev')}</div>
               <SeverityVector counts={totals.by_severity} />
             </div>
           </Card>
@@ -143,8 +197,9 @@ export default function Sbom({ focus = {}, onOpen, onBack, embedded = false }) {
             <table className="sbom-index">
               <thead>
                 <tr>
-                  <th>project</th><th>version</th><th>components</th>
-                  <th>findings</th><th>kev</th><th>severity</th><th>last import</th><th></th>
+                  <th>{t('sbom.col.project')}</th><th>{t('sbom.col.version')}</th><th>{t('sbom.col.components')}</th>
+                  <th>{t('sbom.col.findings')}</th><th>{t('sbom.col.kev')}</th><th>{t('sbom.col.severity')}</th>
+                  <th>{t('sbom.col.lastImport')}</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -154,11 +209,11 @@ export default function Sbom({ focus = {}, onOpen, onBack, embedded = false }) {
                     <td className="mono">
                       {row.version}
                       {row.component ? <span className="muted sbom-sub">{row.component}</span> : null}
-                      {row.is_latest ? <span className="pill sbom-latest">latest</span> : null}
+                      {row.is_latest ? <span className="pill sbom-latest">{t('sbom.latest')}</span> : null}
                     </td>
                     <td>
                       {row.components}
-                      <span className="muted sbom-sub">{row.direct} direct</span>
+                      <span className="muted sbom-sub">{tCount('sbom.direct', row.direct)}</span>
                     </td>
                     <td>{row.findings.total}</td>
                     <td>{row.findings.kev ? <span className="pill sev-critical">{row.findings.kev}</span>
@@ -166,12 +221,12 @@ export default function Sbom({ focus = {}, onOpen, onBack, embedded = false }) {
                     <td>
                       <SeverityVector counts={row.findings.by_severity} />
                     </td>
-                    <td className="muted">{relative(row.last_import_at)}</td>
+                    <td className="muted">{relative(row.last_import_at, t)}</td>
                     <td className="sbom-open">
                       <button className="mini"
                         onClick={() => onOpen && onOpen(row.project.slug,
                           row.component_slug || row.component, row.version, row.version_id)}>
-                        open ›
+                        {t('sbom.open')}
                       </button>
                     </td>
                   </tr>
@@ -181,6 +236,15 @@ export default function Sbom({ focus = {}, onOpen, onBack, embedded = false }) {
           </Card>
         </>
       )}
+
+      <SbomIngest open={ingestOpen} onClose={() => setIngestOpen(false)}
+        projects={projects}
+        platform={platform || window.location.origin}
+        onUploaded={async () => { setReload((n) => n + 1) }}
+        onOpenBuild={(build) => {
+          setIngestOpen(false)
+          onOpen?.(build.project, build.component, build.version, build.version_id)
+        }} />
     </div>
   )
 }
@@ -205,15 +269,16 @@ function shortRule(rule) {
    makes you read. */
 /* What a sibling build carries, in the same words on every screen that points at
    it: open first, secrets named apart, settled ones named apart. */
-function elsewhereText(row) {
+function elsewhereText(row, t, tCount) {
   const open = (row.code || 0) + (row.secrets || 0)
-  const parts = [`${open} open`]
-  if (row.secrets) parts.push(`${row.secrets} secret${row.secrets === 1 ? '' : 's'}`)
-  if (row.dismissed) parts.push(`${row.dismissed} settled`)
+  const parts = [tCount('sbom.elsewhere.open', open)]
+  if (row.secrets) parts.push(tCount('sbom.elsewhere.secrets', row.secrets))
+  if (row.dismissed) parts.push(tCount('sbom.elsewhere.settled', row.dismissed))
   return parts.join(' · ')
 }
 
 function CodeFindingsTab({ data, sort, onSort, onOpenVersion }) {
+  const { t, tCount, tOr } = useI18n()
   const [needle, setNeedle] = useState('')
   const [severity, setSeverity] = useState('')
   const [klass, setKlass] = useState('')
@@ -255,7 +320,7 @@ function CodeFindingsTab({ data, sort, onSort, onOpenVersion }) {
               truncated: r.data.truncated }
           : { status: 'missing', reason: r.data.reason })
       })
-      .catch(() => { if (!cancelled) setSource({ status: 'missing', reason: 'source unavailable' }) })
+      .catch(() => { if (!cancelled) setSource({ status: 'missing', reason: t('sbom.source.unavailable') }) })
     return () => { cancelled = true }
   }, [active?.finding_id, active?.path, data.version_id])
 
@@ -274,19 +339,18 @@ function CodeFindingsTab({ data, sort, onSort, onOpenVersion }) {
     const elsewhere = data.code?.elsewhere || []
     return (
       <Card>
-        <EmptyState title="No source analysis for this build"
-          hint="The action ran no SAST or secret scanner, or its results are not attached to this version yet. An empty list here means nothing was looked at, not that nothing was found." />
+        <EmptyState title={t('sbom.code.empty.title')}
+          hint={t('sbom.code.empty.hint')} />
         {elsewhere.length > 0 && (
           <div className="sbom-elsewhere">
             <p className="muted">
-              Attribution is per build, and this one has none. Other builds of this
-              component do:
+              {t('sbom.code.attribution')}
             </p>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
               {elsewhere.map((row) => (
                 <button key={row.version_id} className="mini"
                   onClick={() => onOpenVersion?.(row.version)}>
-                  {shortVersion(row.version)} · {elsewhereText(row)}
+                  {shortVersion(row.version)} · {elsewhereText(row, t, tCount)}
                 </button>
               ))}
             </div>
@@ -306,35 +370,35 @@ function CodeFindingsTab({ data, sort, onSort, onOpenVersion }) {
     <>
       <div className="sbom-filters">
         <select value={severity} onChange={(event) => setSeverity(event.target.value)}>
-          <option value="">any severity</option>
-          {SEVERITIES.map((value) => <option key={value} value={value}>{value.toLowerCase()}</option>)}
+          <option value="">{t('sbom.filter.anySeverity')}</option>
+          {SEVERITIES.map((value) => <option key={value} value={value}>{sevWord(tOr, value)}</option>)}
         </select>
         <select value={klass} onChange={(event) => setKlass(event.target.value)}>
-          <option value="">weaknesses and secrets</option>
-          <option value="weakness">weaknesses only</option>
-          <option value="secret">secrets only</option>
+          <option value="">{t('sbom.filter.allClasses')}</option>
+          <option value="weakness">{t('sbom.filter.weakness')}</option>
+          <option value="secret">{t('sbom.filter.secret')}</option>
         </select>
         <select value={settled} onChange={(event) => setSettled(event.target.value)}>
-          <option value="all">open and settled</option>
-          <option value="open">open only</option>
-          <option value="settled">settled only</option>
+          <option value="all">{t('sbom.filter.openAndSettled')}</option>
+          <option value="open">{t('sbom.filter.open')}</option>
+          <option value="settled">{t('sbom.filter.settled')}</option>
         </select>
-        <input placeholder="filter by file, rule or message" value={needle}
+        <input placeholder={t('sbom.filter.codePlaceholder')} value={needle}
           onChange={(event) => setNeedle(event.target.value)}
           style={{ minWidth: 280, flex: '1 1 280px' }} />
         <select value={`${sort.key}:${sort.dir}`} onChange={(event) => {
           const [key, dir] = event.target.value.split(':')
           onSort(key, dir)
         }}>
-          <option value="severity:asc">worst first</option>
-          <option value="path:asc">by file</option>
-          <option value="rule:asc">by rule</option>
-          <option value="class:asc">secrets first</option>
+          <option value="severity:asc">{t('sbom.sort.worstFirst')}</option>
+          <option value="path:asc">{t('sbom.sort.byFile')}</option>
+          <option value="rule:asc">{t('sbom.sort.byRule')}</option>
+          <option value="class:asc">{t('sbom.sort.secretsFirst')}</option>
         </select>
         <span className="muted">
-          {rows.length} of {total} findings
-          {data.code?.secrets ? ` · ${data.code.secrets} secret${data.code.secrets === 1 ? '' : 's'}` : ''}
-          {settledCount ? ` · ${settledCount} settled by a decision` : ''}
+          {t('sbom.code.count', { shown: rows.length, total })}
+          {data.code?.secrets ? ` · ${tCount('sbom.code.secrets', data.code.secrets)}` : ''}
+          {settledCount ? ` · ${tCount('sbom.code.settled', settledCount)}` : ''}
         </span>
       </div>
 
@@ -343,11 +407,11 @@ function CodeFindingsTab({ data, sort, onSort, onOpenVersion }) {
           leaving the answer one version away. */}
       {(data.code?.elsewhere || []).length > 0 && (
         <p className="sbom-elsewhere-hint muted">
-          Other builds of this component carry source findings:{' '}
+          {t('sbom.code.siblings')}{' '}
           {(data.code?.elsewhere || []).map((row) => (
             <button key={row.version_id} className="mini"
               onClick={() => onOpenVersion?.(row.version)}>
-              {shortVersion(row.version)} · {elsewhereText(row)}
+              {shortVersion(row.version)} · {elsewhereText(row, t, tCount)}
             </button>
           ))}
         </p>
@@ -369,25 +433,27 @@ function CodeFindingsTab({ data, sort, onSort, onOpenVersion }) {
                 <span className="mono sbom-issue-rule">{shortRule(row.rule)}</span>
                 <span className="mono muted sbom-issue-loc">{row.path || '—'}{row.line ? `:${row.line}` : ''}</span>
               </span>
-              {row.class === 'secret' && <span className="pill sev-critical">secret</span>}
+              {row.class === 'secret' && <span className="pill sev-critical">{t('sbom.class.secret')}</span>}
               {row.dismissed && (
-                <span className="pill" title={`status ${row.status}`}>
-                  {String(row.status || '').replaceAll('_', ' ')}
+                <span className="pill" title={t('sbom.code.status', { status: row.status })}>
+                  {tOr('status.' + String(row.status || '').toLowerCase(),
+                    String(row.status || '').replaceAll('_', ' '))}
                 </span>
               )}
             </button>
           ))}
-          {!rows.length && <p className="muted" style={{ padding: 12, margin: 0 }}>Nothing matches this filter.</p>}
+          {!rows.length && <p className="muted" style={{ padding: 12, margin: 0 }}>{t('sbom.empty.filtered')}</p>}
         </aside>
 
         <section className="sbom-issue-detail">
           {active ? (
             <>
               <div className="sbom-issue-head">
-                <span className={`pill ${severityClass(active.severity)}`}>{active.severity.toLowerCase()}</span>
+                <span className={`pill ${severityClass(active.severity)}`}>{sevWord(tOr, active.severity)}</span>
                 <span className="mono sbom-issue-title-rule">{active.rule}</span>
                 <span className="row-end muted">
-                  {active.class === 'secret' ? 'secret' : active.vector === 'misconfig' ? 'misconfiguration' : 'code weakness'}
+                  {active.class === 'secret' ? t('sbom.class.secret')
+                    : active.vector === 'misconfig' ? t('sbom.class.misconfig') : t('sbom.class.weakness')}
                   {active.cwe ? ` · ${active.cwe}` : ''}
                 </span>
               </div>
@@ -395,8 +461,9 @@ function CodeFindingsTab({ data, sort, onSort, onOpenVersion }) {
               <div className={`sbom-alert sev-${(active.severity || 'unknown').toLowerCase()}`}>
                 <strong>{active.title || active.rule}</strong>
                 <p>
-                  {active.path}{active.line ? `:${active.line}` : ''} · detected by {active.tool || 'the scanner'} ·
-                  {' '}status {active.status}
+                  {active.path}{active.line ? `:${active.line}` : ''} ·{' '}
+                  {t('sbom.code.detectedBy', { tool: active.tool || t('sbom.code.theScanner') })} ·{' '}
+                  {t('sbom.code.status', { status: tOr('status.' + String(active.status || '').toLowerCase(), active.status) })}
                 </p>
               </div>
 
@@ -404,8 +471,8 @@ function CodeFindingsTab({ data, sort, onSort, onOpenVersion }) {
                 <span className="mono">{active.path || '—'}</span>
                 <span className="row-end muted">
                   {source?.status === 'ok'
-                    ? `whole file · ${String(source.ref).slice(0, 8)}`
-                    : 'code at the scanned commit'}
+                    ? t('sbom.code.wholeFile', { ref: String(source.ref).slice(0, 8) })
+                    : t('sbom.code.atCommit')}
                   <button className="mini" style={{ marginLeft: 8 }}
                     onClick={() => move(-1)} disabled={active === rows[0]}>‹</button>
                   <button className="mini" onClick={() => move(1)}
@@ -428,7 +495,7 @@ function CodeFindingsTab({ data, sort, onSort, onOpenVersion }) {
                   })}
                 </ol>
               ) : source?.status === 'loading' ? (
-                <p className="muted" style={{ padding: '10px 12px', margin: 0 }}>loading the file…</p>
+                <p className="muted" style={{ padding: '10px 12px', margin: 0 }}>{t('sbom.code.loadingFile')}</p>
               ) : lines.length ? (
                 <ol className={`sbom-code-lines sev-${(active.severity || 'unknown').toLowerCase()}`}
                   start={firstLine}>
@@ -442,13 +509,13 @@ function CodeFindingsTab({ data, sort, onSort, onOpenVersion }) {
                 </ol>
               ) : (
                 <p className="muted" style={{ padding: '10px 12px', margin: 0 }}>
-                  {(source && source.reason) || 'The scanner reported no source region for this finding.'}
+                  {(source && source.reason) || t('sbom.code.noRegion')}
                 </p>
               )}
 
               {active.url && (
                 <p style={{ margin: 0, padding: '8px 12px' }}>
-                  <a href={active.url} target="_blank" rel="noreferrer">rule documentation</a>
+                  <a href={active.url} target="_blank" rel="noreferrer">{t('sbom.code.ruleDocs')}</a>
                 </p>
               )}
             </>
@@ -468,6 +535,7 @@ function mergeCounts(into, counts) {
 }
 
 function GraphNode({ row, depth, childrenOf, selected, onPick }) {
+  const { t } = useI18n()
   const children = childrenOf.get(row.purl) || []
   const [open, setOpen] = useState(depth === 0)
   return (
@@ -487,7 +555,7 @@ function GraphNode({ row, depth, childrenOf, selected, onPick }) {
         <span className="mono">{row.name}</span>
         <span className="mono muted">{row.version || '—'}</span>
         <span />
-        {row.direct ? <span className="pill sbom-graph-flag">direct</span> : <span />}
+        {row.direct ? <span className="pill sbom-graph-flag">{t('sbom.badge.direct')}</span> : <span />}
         <SeverityBar counts={row.by_severity} compact />
         <span className="mono muted sbom-graph-risk">{row.risk ? row.risk.toFixed(1) : '—'}</span>
       </div>
@@ -508,6 +576,7 @@ function GraphNode({ row, depth, childrenOf, selected, onPick }) {
    with neither, saying so beats drawing 122 nodes that all say the same thing.
    A star of leaves is a table with worse aim. */
 function DependencyGraphTab({ rows, data, selected, onPick, sort, onSort, comparable }) {
+  const { t, tCount } = useI18n()
   const graph = useMemo(() => {
     const byPurl = new Map(rows.filter((row) => row.purl).map((row) => [row.purl, row]))
     const childrenOf = new Map()
@@ -524,7 +593,7 @@ function DependencyGraphTab({ rows, data, selected, onPick, sort, onSort, compar
     }
     const groups = new Map()
     for (const row of roots) {
-      const label = row.manifest || 'declared by the application'
+      const label = row.manifest || DECLARED_BY_APP
       const group = groups.get(label) || { label: label, rows: [], counts: {} }
       group.rows.push(row)
       group.counts = mergeCounts(group.counts, row.by_severity)
@@ -557,7 +626,7 @@ function DependencyGraphTab({ rows, data, selected, onPick, sort, onSort, compar
     try { localStorage.setItem('barad.depView', next) } catch { /* private mode */ }
   }
   const [collapsed, setCollapsed] = useState({})
-  const manifests = graph.groups.filter((group) => group.label !== 'declared by the application')
+  const manifests = graph.groups.filter((group) => group.label !== DECLARED_BY_APP)
   // One manifest and no edges means there is no grouping to show: the header
   // row would be a caption over a list that is already flat. The manifest is
   // still the answer to "where does this come from", so it goes in the sentence.
@@ -566,8 +635,8 @@ function DependencyGraphTab({ rows, data, selected, onPick, sort, onSort, compar
   if (!rows.length) {
     return (
       <Card>
-        <EmptyState title="Nothing to draw"
-          hint="This build has no components yet: import a BOM and the graph starts here." />
+        <EmptyState title={t('sbom.graph.empty.title')}
+          hint={t('sbom.graph.empty.hint')} />
       </Card>
     )
   }
@@ -576,22 +645,24 @@ function DependencyGraphTab({ rows, data, selected, onPick, sort, onSort, compar
     <>
       <div className="sbom-view-toggle">
         <button className={`mini${mode === 'graph' ? ' is-active' : ''}`}
-          onClick={() => pickMode('graph')}>graph</button>
+          onClick={() => pickMode('graph')}>{t('sbom.view.graph')}</button>
         <button className={`mini${mode === 'table' ? ' is-active' : ''}`}
-          onClick={() => pickMode('table')}>table</button>
+          onClick={() => pickMode('table')}>{t('sbom.view.table')}</button>
         <button className={`mini${mode === 'tree' ? ' is-active' : ''}`}
-          onClick={() => pickMode('tree')} title="grouped by the manifest that declares each package">
-          tree
+          onClick={() => pickMode('tree')} title={t('sbom.view.treeHint')}>
+          {t('sbom.view.tree')}
         </button>
       </div>
 
       <p className="muted sbom-graph-head">
         {graph.resolved
-          ? `${graph.roots} root package${graph.roots === 1 ? '' : 's'} · `
-            + `${graph.resolved} transitive, resolved from the BOM's dependency list`
-          : `${rows.length} packages, all direct · declared by `
-            + `${manifests.length === 1 ? manifests[0].label : 'the manifests'} · `
-            + 'this BOM resolves no package-to-package edges (no lockfile)'}
+          ? `${tCount('sbom.graph.roots', graph.roots)} · `
+            + t('sbom.graph.transitive', { n: graph.resolved })
+          : `${t('sbom.graph.packagesAllDirect', { n: rows.length })} · `
+            + `${t('sbom.graph.declaredBy', { source: manifests.length === 1
+              ? (manifests[0].label === DECLARED_BY_APP ? t('sbom.graph.declaredByApp') : manifests[0].label)
+              : t('sbom.graph.theManifests') })} · `
+            + t('sbom.graph.noEdges')}
       </p>
 
       {mode === 'graph' && (
@@ -603,7 +674,7 @@ function DependencyGraphTab({ rows, data, selected, onPick, sort, onSort, compar
                 <h2 className="card-title" style={{ margin: 0 }}>
                   {selected.name}{selected.version ? ` ${selected.version}` : ''}
                 </h2>
-                <button className="mini" onClick={() => onPick(null)}>close</button>
+                <button className="mini" onClick={() => onPick(null)}>{t('common.close')}</button>
               </div>
               <PackageDetail data={data} row={selected} onPick={onPick} compact />
             </section>
@@ -634,8 +705,9 @@ function DependencyGraphTab({ rows, data, selected, onPick, sort, onSort, compar
           <div className="sbom-graph-group"
             onClick={() => setCollapsed({ ...collapsed, [group.label]: !collapsed[group.label] })}>
             <span className="sbom-graph-twisty">{collapsed[group.label] ? '▸' : '▾'}</span>
-            <span className="mono sbom-graph-label">{group.label}</span>
-            <span className="muted">{group.rows.length} package{group.rows.length === 1 ? '' : 's'}</span>
+            <span className="mono sbom-graph-label">{group.label === DECLARED_BY_APP
+              ? t('sbom.graph.declaredByApp') : group.label}</span>
+            <span className="muted">{tCount('sbom.graph.packages', group.rows.length)}</span>
             <span />
             <span />
             <SeverityBar counts={group.counts} compact />
@@ -655,13 +727,24 @@ function DependencyGraphTab({ rows, data, selected, onPick, sort, onSort, compar
   )
 }
 
-function BomView({ project, component, version, versionId, onBack, embedded }) {
+function BomView({ project, component, version, versionId, onBack, embedded, onOpenFinding,
+                   onOpenComponent }) {
+  const { t, tCount } = useI18n()
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [tab, setTab] = useState('overview')
-  // One drawer for the whole screen: a package opened from "where to start" and
-  // one opened from the table are the same question.
+  // The graph keeps its inline panel — the node and its path stay on screen while
+  // you read them. Everything else leaves for the package's own page, because the
+  // drawer was a narrower copy of it: same advisories, same builds, no address.
   const [selected, setSelected] = useState(null)
+
+  /* A package row is a door. The sheet it opens can be linked, shared, kept in
+     another tab and compared; the drawer could do none of that. */
+  function openComponent(row) {
+    if (!row) return
+    const id = row.component_id || row.id
+    if (id && onOpenComponent) onOpenComponent(id)
+  }
   // Ordering belongs to the platform: the table is paginated, and a page that
   // sorts itself only orders the rows that happen to be on it.
   const [componentSort, setComponentSort] = useState({ key: 'risk', dir: 'desc' })
@@ -696,49 +779,63 @@ function BomView({ project, component, version, versionId, onBack, embedded }) {
       <div className="sbom-head">
         <div>
           <p className="project-crumb" style={{ marginBottom: 6 }}>
-            <button onClick={onBack}>‹ {embedded ? 'Components' : 'SBOMs'}</button>
+            <button onClick={onBack}>‹ {embedded ? t('components.title') : t('sbom.crumb.builds')}</button>
           </p>
           <h1 className="page-title">{data.project.name} <span className="mono sbom-version">{data.version}</span></h1>
           <p className="page-sub">
-            {data.components} components
-            {data.direct ? ` · ${data.direct} direct` : ''} ·{' '}
-            {total} open finding{total === 1 ? '' : 's'}
+            {t('sbom.head.components', { n: data.components })}
+            {data.direct ? ` · ${tCount('sbom.head.direct', data.direct)}` : ''} ·{' '}
+            {/* The count is the door: the queue opens already narrowed to this
+                build, so "what is open here" costs no filter work. */}
+            <button className="linkish"
+              title={t('findings.door')}
+              onClick={() => {
+                window.location.hash = queueHash({
+                  project: data.project.slug,
+                  build: data.version_id || versionId,
+                  build_label: data.version,
+                  // The header counts open dependency findings, so the queue has
+                  // to open on exactly that: the same kind and the same closure
+                  // set, or the door lies about the number it was clicked from.
+                  kind: 'vulnerability',
+                  open: '1',
+                })
+              }}>
+              {tCount('sbom.head.openFindings', total)}
+            </button>
             {data.previous_version && trendContext(data).comparable
-              ? ` · compared with ${shortVersion(data.previous_version)}` : ''}
+              ? ` · ${t('sbom.head.comparedWith', { version: shortVersion(data.previous_version) })}` : ''}
           </p>
         </div>
       </div>
 
       <Tabs
         tabs={[
-          { id: 'overview', label: 'Overview' },
-          { id: 'components', label: `Components (${data.components})` },
-          { id: 'vulnerabilities', label: `Audit vulnerabilities (${total})` },
-          { id: 'graph', label: 'Dependency graph' },
-          { id: 'policy', label: 'Policy violations' },
+          { id: 'overview', label: t('sbom.tab.overview') },
+          { id: 'components', label: t('sbom.tab.components', { n: data.components }) },
+          { id: 'vulnerabilities', label: t('sbom.tab.vulnerabilities', { n: total }) },
+          { id: 'graph', label: t('sbom.tab.graph') },
+          { id: 'policy', label: t('sbom.tab.policy') },
           // The label counts every row the tab holds: open plus the ones a
           // person settled. Hiding the settled ones made a dismissed secret
           // scan read as a build nobody scanned.
-          { id: 'code', label: `Code findings (${(data.code?.total || 0) + (data.code?.dismissed || 0)})` },
+          { id: 'code', label: t('sbom.tab.code', { n: (data.code?.total || 0) + (data.code?.dismissed || 0) }) },
         ]}
         active={tab}
         onChange={setTab} />
 
       {tab === 'overview' && (
-        <Overview data={data} rows={rows} onPick={setSelected} onTab={setTab} />
+        <Overview data={data} rows={rows} onPick={openComponent} onTab={setTab} />
       )}
       {tab === 'components' && (
-        <ComponentsTab data={data} rows={rows} selected={selected} onPick={setSelected}
+        <ComponentsTab data={data} rows={rows} onPick={openComponent}
           comparable={trendContext(data).comparable}
           sort={componentSort} onSort={(key) => setComponentSort((current) => nextSort(current, key))} />
       )}
       {tab === 'vulnerabilities' && (
         <VulnerabilitiesTab data={data} rows={rows}
-          sort={advisorySort} onSort={(key) => setAdvisorySort((current) => nextSort(current, key))} />
-      )}
-
-      {tab !== 'graph' && (
-        <ComponentDrawer data={data} row={selected} onClose={() => setSelected(null)} onPick={setSelected} />
+          sort={advisorySort} onSort={(key) => setAdvisorySort((current) => nextSort(current, key))}
+          onOpenFinding={onOpenFinding} />
       )}
 
       {tab === 'graph' && (
@@ -750,8 +847,8 @@ function BomView({ project, component, version, versionId, onBack, embedded }) {
 
       {tab === 'policy' && (
         <Card>
-          <EmptyState title="Policy violations — no policy engine yet"
-            hint="Nothing to evaluate against: the rules that would say “no GPL in production” or “no CRITICAL in a public build” do not exist in this platform. This tab is where they will land." />
+          <EmptyState title={t('sbom.policy.title')}
+            hint={t('sbom.policy.hint')} />
         </Card>
       )}
 
@@ -789,6 +886,7 @@ function trendContext(data) {
 }
 
 function Overview({ data, rows, onPick, onTab }) {
+  const { t, tCount, tOr } = useI18n()
   const { trend, current, previous, comparable } = trendContext(data)
   const counts = data.findings?.by_severity || {}
   const total = data.findings?.total || 0
@@ -815,14 +913,14 @@ function Overview({ data, rows, onPick, onTab }) {
   const licenceNames = Object.keys(data.licenses || {})
   const unknownLicence = (data.licenses || {}).unknown || 0
   const facts = [
-    ['licenses', unknownLicence === data.components
-      ? 'all unknown'
-      : `${licenceNames.filter((name) => name !== 'unknown').length} distinct`,
-      unknownLicence && unknownLicence !== data.components ? `${unknownLicence} unknown` : ''],
-    ['code findings', `${code.total}`,
-      [code.secrets ? `${code.secrets} secret${code.secrets === 1 ? '' : 's'}` : '',
-        code.dismissed ? `${code.dismissed} settled` : ''].filter(Boolean).join(' · ')],
-    ['imports', `${(data.imports || []).length}`, data.imports?.[0]?.source ? `· ${data.imports[0].source}` : ''],
+    [t('sbom.fact.licenses'), unknownLicence === data.components
+      ? t('sbom.fact.allUnknown')
+      : tCount('sbom.fact.distinct', licenceNames.filter((name) => name !== 'unknown').length),
+      unknownLicence && unknownLicence !== data.components ? tCount('sbom.fact.unknownCount', unknownLicence) : ''],
+    [t('sbom.fact.code'), `${code.total}`,
+      [code.secrets ? tCount('sbom.code.secrets', code.secrets) : '',
+        code.dismissed ? tCount('sbom.code.settled', code.dismissed) : ''].filter(Boolean).join(' · ')],
+    [t('sbom.fact.imports'), `${(data.imports || []).length}`, data.imports?.[0]?.source ? `· ${data.imports[0].source}` : ''],
   ]
   const analysed = trend.filter((row) => row.findings > 0).length
 
@@ -833,43 +931,45 @@ function Overview({ data, rows, onPick, onTab }) {
       <section className="ov-hero">
         <p className="ov-eyebrow">
           {data.project.name} · {data.version}
-          {data.component ? ` · ${data.component}` : ''} · {relative(data.last_import_at)}
+          {data.component ? ` · ${data.component}` : ''} · {relative(data.last_import_at, t)}
         </p>
         <h2 className="ov-verdict">
           {leadCve
-            ? <>Start with <span className="ov-name-lead mono">{lead.name}</span> — {leadCve} is exploited in the wild</>
+            ? <>{t('sbom.verdict.start')} <span className="ov-name-lead mono">{lead.name}</span>{' '}
+              {t('sbom.verdict.exploited', { cve: leadCve })}</>
             : lead
-              ? <>Start with <span className="ov-name-lead mono">{lead.name}</span> — the highest risk here</>
-              : <>Nothing to fix in this build</>}
+              ? <>{t('sbom.verdict.start')} <span className="ov-name-lead mono">{lead.name}</span>{' '}
+                {t('sbom.verdict.highestRisk')}</>
+              : <>{t('sbom.verdict.nothing')}</>}
         </h2>
         <p className="ov-lede">
           {total
-            ? <><span className="ov-figure">{total}</span> dependency finding{total === 1 ? '' : 's'} across
-              {' '}{data.components} packages{worst ? <> · worst is <b className={`ov-sev sev-${worst.toLowerCase()}`}>{worst.toLowerCase()}</b></> : null}
-              {code.total ? <> · plus {code.total} code findings</> : null}</>
-            : <>in {data.components} packages: the analysis found nothing to fix here.</>}
+            ? <><span className="ov-figure">{total}</span> {tCount('sbom.lede.unit', total)}
+              {' '}{t('sbom.lede.across', { n: data.components })}
+              {worst ? <> · {t('sbom.lede.worst')} <b className={`ov-sev sev-${worst.toLowerCase()}`}>{sevWord(tOr, worst)}</b></> : null}
+              {code.total ? <> · {tCount('sbom.lede.plusCode', code.total)}</> : null}</>
+            : <>{t('sbom.lede.clean', { n: data.components })}</>}
         </p>
 
         <div className="ov-sev-row">
           {SEVERITIES.slice(0, 4).map((severity) => (
             <span key={severity} className={`ov-sev-chip${counts[severity] ? '' : ' is-empty'} sev-${severity.toLowerCase()}`}>
               <b>{counts[severity] || 0}</b>
-              <span>{severity.toLowerCase()}</span>
+              <span>{sevWord(tOr, severity)}</span>
             </span>
           ))}
           {total > 0 && (
             <button className="mini ov-more" onClick={() => onTab && onTab('vulnerabilities')}>
-              all {total} findings ›
+              {t('sbom.ov.allFindings', { n: total })}
             </button>
           )}
         </div>
 
         {kev.length > 0 && !leadCve && (
           <div className="ov-kev">
-            <span className="pill sev-critical">known exploited</span>
+            <span className="pill sev-critical">{t('sbom.ov.knownExploited')}</span>
             <span>
-              {kev.length === 1 ? 'One advisory here is' : `${kev.length} advisories here are`} on CISA's
-              exploited list:
+              {tCount('sbom.ov.kevLead', kev.length)}
               {' '}
               {kev.slice(0, 3).map((row, index) => (
                 <React.Fragment key={row.finding_id}>
@@ -878,7 +978,7 @@ function Overview({ data, rows, onPick, onTab }) {
                     const hit = rows.find((candidate) => candidate.purl && candidate.purl === row.purl)
                       || rows.find((candidate) => candidate.name === row.component)
                     if (hit) onPick(hit)
-                  }}>{row.vulnerability}{row.component ? ` in ${row.component}` : ''}</button>
+                  }}>{row.vulnerability}{row.component ? ` ${t('sbom.ov.inComponent', { component: row.component })}` : ''}</button>
                 </React.Fragment>
               ))}
             </span>
@@ -887,11 +987,11 @@ function Overview({ data, rows, onPick, onTab }) {
 
         {leadCve && kev.length > 1 && (
           <div className="ov-kev">
-            <span className="pill sev-critical">known exploited</span>
+            <span className="pill sev-critical">{t('sbom.ov.knownExploited')}</span>
             <span>
-              {kev.length - 1} more {kev.length - 1 === 1 ? 'advisory is' : 'advisories are'} on CISA's
-              exploited list — <button className="ov-inline-link" onClick={() => onTab && onTab('vulnerabilities')}>
-                see them in the audit
+              {tCount('sbom.ov.kevMore', kev.length - 1)}{' '}
+              <button className="ov-inline-link" onClick={() => onTab && onTab('vulnerabilities')}>
+                {t('sbom.ov.seeInAudit')}
               </button>
             </span>
           </div>
@@ -901,18 +1001,18 @@ function Overview({ data, rows, onPick, onTab }) {
       <div className="ov-body">
         <section className="ov-queue">
           <h3 className="ov-title">
-            Do these first
-            <span className="muted">exploited first, then risk · click a row for its advisories</span>
+            {t('sbom.ov.queueTitle')}
+            <span className="muted">{t('sbom.ov.queueHint')}</span>
           </h3>
           {first.length ? (
             <>
             <div className="ov-head muted">
               <span />
               <span />
-              <span>package</span>
-              <span>why</span>
-              <span>severity mix</span>
-              <span>risk</span>
+              <span>{t('sbom.col.package')}</span>
+              <span>{t('sbom.col.why')}</span>
+              <span>{t('sbom.col.severityMix')}</span>
+              <span>{t('sbom.col.risk')}</span>
             </div>
             <ul className="ov-list">
               {first.map((row, index) => (
@@ -927,9 +1027,9 @@ function Overview({ data, rows, onPick, onTab }) {
                         && <span className="pill sev-critical">KEV</span>}
                     </span>
                     <span className="ov-why muted">
-                      {row.worst ? `${String(row.worst).toLowerCase()} worst` : 'no severity'}
-                      {row.findings ? ` · ${row.findings} finding${row.findings === 1 ? '' : 's'}` : ''}
-                      {row.direct ? '' : ' · transitive'}
+                      {row.worst ? t('sbom.ov.worst', { severity: sevWord(tOr, row.worst) }) : t('sbom.ov.noSeverity')}
+                      {row.findings ? ` · ${tCount('sbom.ov.findings', row.findings)}` : ''}
+                      {row.direct ? '' : ` · ${t('sbom.ov.transitive')}`}
                     </span>
                     <span className="ov-bar"><SeverityBar counts={row.by_severity} compact /></span>
                     <RiskScore value={row.risk} />
@@ -940,19 +1040,18 @@ function Overview({ data, rows, onPick, onTab }) {
             </>
           ) : (
             <p className="muted" style={{ margin: 0 }}>
-              No package in this build carries a finding. An SBOM is an inventory, not a
-              verdict: analysing it is what turns packages into findings.
+              {t('sbom.ov.emptyQueue')}
             </p>
           )}
           {ranked.length > first.length && (
             <button className="mini ov-more" onClick={() => onTab && onTab('components')}>
-              {ranked.length - first.length} more packages with findings ›
+              {t('sbom.ov.morePackages', { n: ranked.length - first.length })}
             </button>
           )}
         </section>
 
         <aside className="ov-side">
-          <h3 className="ov-title">This build</h3>
+          <h3 className="ov-title">{t('sbom.ov.thisBuild')}</h3>
           <dl className="ov-facts">
             {facts.map(([label, value, extra]) => (
               <React.Fragment key={label}>
@@ -962,7 +1061,7 @@ function Overview({ data, rows, onPick, onTab }) {
             ))}
           </dl>
 
-          <h3 className="ov-title" style={{ marginTop: 20 }}>History</h3>
+          <h3 className="ov-title" style={{ marginTop: 20 }}>{t('sbom.ov.history')}</h3>
           {trend.length > 1 ? (
             <>
               <div className="ov-strip">
@@ -974,25 +1073,27 @@ function Overview({ data, rows, onPick, onTab }) {
                       className={`ov-tick${row.findings ? ` sev-${worst.toLowerCase()}` : ' is-empty'}`
                         + (row.version_id === data.version_id ? ' is-current' : '')}
                       style={{ height: row.findings ? Math.min(34, 8 + Math.sqrt(row.findings) * 4) : 6 }}
-                      title={`${shortVersion(row.version)} · ${row.findings} finding${row.findings === 1 ? '' : 's'} · ${row.components} packages`} />
+                      title={t('sbom.ov.tickTitle', { version: shortVersion(row.version),
+                        n: row.findings, packages: row.components })} />
                   )
                 })}
               </div>
               <p className="muted ov-note">
-                {trend.length} builds, {analysed} analysed · the outlined tick is the one you are reading.
+                {t('sbom.ov.trendNote', { builds: trend.length, analysed })}
               </p>
             </>
           ) : (
-            <p className="muted ov-note">Only one build of this project has a BOM.</p>
+            <p className="muted ov-note">{t('sbom.ov.singleBuild')}</p>
           )}
 
-          <h3 className="ov-title" style={{ marginTop: 20 }}>Since {previous ? shortVersion(previous.version) : 'always'}</h3>
+          <h3 className="ov-title" style={{ marginTop: 20 }}>
+            {t('sbom.ov.since', { version: previous ? shortVersion(previous.version) : t('sbom.ov.always') })}
+          </h3>
           {!previous ? (
-            <p className="muted ov-note">This is the first build of {data.project.name} with a BOM — nothing to compare yet.</p>
+            <p className="muted ov-note">{t('sbom.ov.firstBuild', { project: data.project.name })}</p>
           ) : !comparable ? (
             <p className="muted ov-note">
-              {shortVersion(previous.version)} was imported but never analysed, so nothing here has
-              a delta yet.
+              {t('sbom.ov.notAnalysed', { version: shortVersion(previous.version) })}
             </p>
           ) : (
             <ul className="ov-delta">
@@ -1013,7 +1114,7 @@ function Overview({ data, rows, onPick, onTab }) {
           )}
 
           <p className="muted ov-note" style={{ marginTop: 18 }}>
-            risk = severity weight × KEV × EPSS, capped at 100 · click any package for its advisories.
+            {t('sbom.ov.riskNote')}
           </p>
         </aside>
       </div>
@@ -1023,13 +1124,15 @@ function Overview({ data, rows, onPick, onTab }) {
 
 
 function TrendBars({ trend, currentId }) {
+  const { t } = useI18n()
   const max = Math.max(...trend.map((row) => row.findings), 1)
   return (
     <div className="sbom-trend">
       {trend.map((row) => (
         <div key={row.version_id}
           className={`sbom-trend-col${row.version_id === currentId ? ' is-current' : ''}`}
-          title={`${row.version} · ${row.findings} finding(s) · ${row.components} components`}>
+          title={t('sbom.ov.trendTitle', { version: row.version, n: row.findings,
+            components: row.components })}>
           <div className="sbom-trend-area">
             <div className="sbom-trend-stack"
               style={{ height: row.findings ? `${Math.max(6, Math.round((row.findings / max) * 96))}px` : 2 }}>
@@ -1094,7 +1197,8 @@ function SortHeader({ field, label, sort, onSort, className, title }) {
 
 /* ── components: one table, one search, pages ──────────────────────────────── */
 
-function ComponentsTab({ data, rows, selected, onPick, comparable = false, sort, onSort }) {
+function ComponentsTab({ data, rows, onPick, comparable = false, sort, onSort }) {
+  const { t } = useI18n()
   const [needle, setNeedle] = useState('')
   const [onlyAffected, setOnlyAffected] = useState(false)
   const parents = useMemo(() => parentNames(rows), [rows])
@@ -1119,16 +1223,16 @@ function ComponentsTab({ data, rows, selected, onPick, comparable = false, sort,
   return (
     <>
       <div className="sbom-filters">
-        <input placeholder="filter by component, group, license or purl"
+        <input placeholder={t('sbom.filter.componentsPlaceholder')}
           value={needle} onChange={(event) => setNeedle(event.target.value)}
           style={{ minWidth: 340, flex: '1 1 340px' }} />
         <label className="check">
           <input type="checkbox" checked={onlyAffected}
             onChange={(event) => setOnlyAffected(event.target.checked)} />
-          only with findings
+          {t('sbom.filter.onlyWithFindings')}
         </label>
         <span className="muted">
-          {filtered.length} of {rows.length} components
+          {t('sbom.components.count', { shown: filtered.length, total: rows.length })}
         </span>
 <Pager page={currentPage} pages={pages} onChange={setPage} total={filtered.length} perPage={PER_PAGE} unit="components" className="row-end" />
       </div>
@@ -1137,30 +1241,30 @@ function ComponentsTab({ data, rows, selected, onPick, comparable = false, sort,
         <table className="sbom-components sbom-table">
           <thead>
             <tr>
-              <SortHeader field="name" label="component" sort={sort} onSort={onSort} />
-              <SortHeader field="version" label="version" sort={sort} onSort={onSort} />
-              <SortHeader field="group" label="group" sort={sort} onSort={onSort} />
-              <SortHeader field="internal" label="internal" sort={sort} onSort={onSort} />
-              <SortHeader field="license" label="license" sort={sort} onSort={onSort} />
-              <SortHeader field="risk" label="risk" sort={sort} onSort={onSort}
-                title="severity weight × KEV × EPSS" />
-              <SortHeader field="findings" label="vulnerabilities" sort={sort} onSort={onSort} />
+              <SortHeader field="name" label={t('sbom.col.component')} sort={sort} onSort={onSort} />
+              <SortHeader field="version" label={t('sbom.col.version')} sort={sort} onSort={onSort} />
+              <SortHeader field="group" label={t('sbom.col.group')} sort={sort} onSort={onSort} />
+              <SortHeader field="internal" label={t('sbom.col.internal')} sort={sort} onSort={onSort} />
+              <SortHeader field="license" label={t('sbom.col.license')} sort={sort} onSort={onSort} />
+              <SortHeader field="risk" label={t('sbom.col.risk')} sort={sort} onSort={onSort}
+                title={t('sbom.risk.formula')} />
+              <SortHeader field="findings" label={t('sbom.col.vulnerabilities')} sort={sort} onSort={onSort} />
             </tr>
           </thead>
           <tbody>
             {visible.map((row) => (
               <tr key={row.component_id}
-                className={`clickable${selected?.component_id === row.component_id ? ' selected' : ''}`}
+                className="clickable"
                 onClick={() => onPick(row)}>
                 <td className="title mono">
                   {row.name || '—'}
                   {parents.get(row.purl) && (
-                    <span className="sbom-via">via {parents.get(row.purl)}</span>
+                    <span className="sbom-via">{t('sbom.via', { name: parents.get(row.purl) })}</span>
                   )}
                 </td>
                 <td className="mono muted">{row.version || '—'}</td>
                 <td className="muted mono">{row.group || '—'}</td>
-                <td className="muted">{row.internal ? 'yes' : 'no'}</td>
+                <td className="muted">{row.internal ? t('common.yes') : t('common.no')}</td>
                 <td className="muted">{row.license || '—'}</td>
                 <td><RiskScore value={row.risk} /></td>
                 <td className="sbom-cell-bar">
@@ -1178,7 +1282,7 @@ function ComponentsTab({ data, rows, selected, onPick, comparable = false, sort,
           </tbody>
         </table>
         {!filtered.length && (
-          <p className="empty" style={{ margin: 0 }}>Nothing matches this filter.</p>
+          <p className="empty" style={{ margin: 0 }}>{t('sbom.empty.filtered')}</p>
         )}
       </Card>
 
@@ -1194,6 +1298,7 @@ function ComponentsTab({ data, rows, selected, onPick, comparable = false, sort,
    identity, how it got here, what it brings in, what is wrong with it. One body,
    two places — a second copy would drift the moment one of them changed. */
 function PackageDetail({ data, row, onPick, compact = false }) {
+  const { t, tCount } = useI18n()
   const [detail, setDetail] = useState(null)
   const [error, setError] = useState('')
 
@@ -1221,32 +1326,32 @@ function PackageDetail({ data, row, onPick, compact = false }) {
   // package that pulls it in (the app itself for npm), else the application.
   const parentRow = (data.component_rows || []).find(
     (candidate) => candidate.purl && candidate.purl === row?.parent_purl)
-  const declaredBy = row ? (row.manifest || parentRow?.name || 'the application') : 'the application'
+  const declaredBy = row ? (row.manifest || parentRow?.name || t('sbom.path.application')) : t('sbom.path.application')
 
   if (!row) return null
 
   return (
     <div className="stack">
-          <Card title={compact ? undefined : 'Package'}>
+          <Card title={compact ? undefined : t('sbom.package.title')}>
             <div className="stack" style={{ gap: 8 }}>
-              <Field label="group">{row.group || '—'}</Field>
-              <Field label="version">{row.version || '—'}</Field>
-              <Field label="license">{row.license || '—'}</Field>
-              <Field label="purl">{row.purl || '—'}</Field>
-              <Field label="internal">{row.internal ? 'first-party' : 'third-party'}</Field>
-              <Field label="relationship">
-                {row.direct ? 'direct' : row.parent_purl ? 'transitive' : '—'}
-                {row.manifest ? <span className="muted"> · from {row.manifest}</span> : null}
+              <Field label={t('sbom.field.group')}>{row.group || '—'}</Field>
+              <Field label={t('sbom.field.version')}>{row.version || '—'}</Field>
+              <Field label={t('sbom.field.license')}>{row.license || '—'}</Field>
+              <Field label={t('sbom.field.purl')}>{row.purl || '—'}</Field>
+              <Field label={t('sbom.field.internal')}>{row.internal ? t('sbom.field.firstParty') : t('sbom.field.thirdParty')}</Field>
+              <Field label={t('sbom.field.relationship')}>
+                {row.direct ? t('sbom.rel.direct') : row.parent_purl ? t('sbom.rel.transitive') : '—'}
+                {row.manifest ? <span className="muted"> {t('sbom.field.from', { manifest: row.manifest })}</span> : null}
               </Field>
-              <Field label="risk"><RiskScore value={row.risk} /></Field>
-              <Field label="findings">
-                {row.findings ? <SeverityBar counts={row.by_severity} /> : 'none in this build'}
+              <Field label={t('sbom.field.risk')}><RiskScore value={row.risk} /></Field>
+              <Field label={t('sbom.field.findings')}>
+                {row.findings ? <SeverityBar counts={row.by_severity} /> : t('sbom.package.noFindings')}
               </Field>
             </div>
           </Card>
 
           {(detail?.path || []).length > 0 && (
-            <Card title="How it got here">
+            <Card title={t('sbom.path.title')}>
               <div className="sbom-path">
                 <span className="mono">{row.name}{row.version ? ` ${row.version}` : ''}</span>
                 {detail.path.map((hop) => (
@@ -1257,18 +1362,18 @@ function PackageDetail({ data, row, onPick, compact = false }) {
                   </React.Fragment>
                 ))}
                 <span className="muted">←</span>
-                <span className="muted">application</span>
+                <span className="muted">{t('sbom.path.application')}</span>
               </div>
               <p className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>
                 {row.direct
-                  ? `Declared by ${declaredBy} — this one is yours to upgrade.`
-                  : 'You never declared this package: it arrives through the chain above.'}
+                  ? t('sbom.path.declaredBy', { name: declaredBy })
+                  : t('sbom.path.transitiveMsg')}
               </p>
             </Card>
           )}
 
           {(detail?.requires || []).length > 0 && (
-            <Card title={`Brings in ${detail.requires.length} package${detail.requires.length === 1 ? '' : 's'}`}>
+            <Card title={tCount('sbom.requires.title', detail.requires.length)}>
               <ul className="sbom-deps">
                 {detail.requires.map((child) => (
                   <li key={child.id}>
@@ -1278,10 +1383,11 @@ function PackageDetail({ data, row, onPick, compact = false }) {
                     <span className="row-end">
                       {child.findings
                         ? <span className={`pill ${severityClass(child.worst)}`}
-                          title={`${child.findings} finding${child.findings === 1 ? '' : 's'}, worst ${String(child.worst).toLowerCase()}`}>
+                          title={t('sbom.requires.childTitle', { n: child.findings,
+                            severity: sevWord(tOr, child.worst) })}>
                           {child.findings}
                         </span>
-                        : <span className="muted">clean</span>}
+                        : <span className="muted">{t('sbom.requires.clean')}</span>}
                     </span>
                   </li>
                 ))}
@@ -1290,13 +1396,14 @@ function PackageDetail({ data, row, onPick, compact = false }) {
           )}
 
           {error && <ErrorBanner error={error} />}
-          {!detail && !error && <Loading rows={3} label="loading advisories" />}
+          {!detail && !error && <Loading rows={3} label={t('sbom.loadingAdvisories')} />}
 
           {detail && (
             versions.length ? versions.map((version) => (
               <Card key={version.version_id}
-                title={`${version.version} · ${version.findings.length} advisor${version.findings.length === 1 ? 'y' : 'ies'}`
-                  + (version.is_current ? ' · this build' : '')}>
+                title={tCount('sbom.advisories.title', version.findings.length,
+                  { version: version.version })
+                  + (version.is_current ? t('sbom.advisories.thisBuild') : '')}>
                 <ul className="sbom-cves">
                   {version.findings.map((finding) => (
                     <li key={finding.id}>
@@ -1317,20 +1424,11 @@ function PackageDetail({ data, row, onPick, compact = false }) {
               </Card>
             )) : (
               <p className="muted" style={{ margin: 0 }}>
-                This package carries no advisory in this build or any later one.
+                {t('sbom.package.noAdvisory')}
               </p>
             )
           )}
     </div>
-  )
-}
-
-function ComponentDrawer({ data, row, onClose, onPick }) {
-  return (
-    <Drawer open={!!row} onClose={onClose}
-      title={row ? `${row.name}${row.version ? ` ${row.version}` : ''}` : 'Component'}>
-      <PackageDetail data={data} row={row} onPick={onPick} />
-    </Drawer>
   )
 }
 
@@ -1345,7 +1443,8 @@ function Field({ label, children }) {
 
 /* ── audit vulnerabilities: the flat list ──────────────────────────────────── */
 
-function VulnerabilitiesTab({ data, rows: componentRows = [], sort, onSort }) {
+function VulnerabilitiesTab({ data, rows: componentRows = [], sort, onSort, onOpenFinding }) {
+  const { t, tOr } = useI18n()
   const [severity, setSeverity] = useState('')
   const [needle, setNeedle] = useState('')
   const [onlyKev, setOnlyKev] = useState(false)
@@ -1375,19 +1474,19 @@ function VulnerabilitiesTab({ data, rows: componentRows = [], sort, onSort }) {
     <>
       <div className="sbom-filters">
         <select value={severity} onChange={(event) => setSeverity(event.target.value)}>
-          <option value="">any severity</option>
-          {SEVERITIES.map((value) => <option key={value} value={value}>{value.toLowerCase()}</option>)}
+          <option value="">{t('sbom.filter.anySeverity')}</option>
+          {SEVERITIES.map((value) => <option key={value} value={value}>{sevWord(tOr, value)}</option>)}
         </select>
-        <input placeholder="filter by component, CVE or title" value={needle}
+        <input placeholder={t('sbom.filter.vulnsPlaceholder')} value={needle}
           onChange={(event) => setNeedle(event.target.value)}
           style={{ minWidth: 320, flex: '1 1 320px' }} />
         <label className="check">
           <input type="checkbox" checked={onlyKev}
             onChange={(event) => setOnlyKev(event.target.checked)} />
-          only KEV
+          {t('sbom.filter.onlyKev')}
         </label>
         <span className="muted">
-          {rows.length} of {(data.vulnerabilities || []).length} advisories
+          {t('sbom.vulns.count', { shown: rows.length, total: (data.vulnerabilities || []).length })}
         </span>
 <Pager page={currentPage} pages={pages} onChange={setPage} total={rows.length} perPage={PER_PAGE} unit="advisories" className="row-end" />
       </div>
@@ -1396,37 +1495,49 @@ function VulnerabilitiesTab({ data, rows: componentRows = [], sort, onSort }) {
           <table className="sbom-vulns">
             <thead>
               <tr>
-                <SortHeader field="component" label="component" sort={sort} onSort={onSort} />
-                <SortHeader field="version" label="version" sort={sort} onSort={onSort} />
-                <SortHeader field="vulnerability" label="vulnerability" sort={sort} onSort={onSort} />
-                <SortHeader field="severity" label="severity" sort={sort} onSort={onSort} />
-                <SortHeader field="epss" label="epss" sort={sort} onSort={onSort} className="num"
-                  title="FIRST EPSS: probability this CVE is exploited in the wild" />
-                <SortHeader field="kev" label="kev" sort={sort} onSort={onSort} />
-                <SortHeader field="analyzer" label="analyzer" sort={sort} onSort={onSort} />
-                <th>attributed on</th>
-                <SortHeader field="status" label="analysis" sort={sort} onSort={onSort} />
+                <SortHeader field="component" label={t('sbom.col.component')} sort={sort} onSort={onSort} />
+                <SortHeader field="version" label={t('sbom.col.version')} sort={sort} onSort={onSort} />
+                <SortHeader field="vulnerability" label={t('sbom.col.vulnerability')} sort={sort} onSort={onSort} />
+                <SortHeader field="severity" label={t('sbom.col.severity')} sort={sort} onSort={onSort} />
+                <SortHeader field="epss" label={t('sbom.col.epss')} sort={sort} onSort={onSort} className="num"
+                  title={t('sbom.epss.hint')} />
+                <SortHeader field="kev" label={t('sbom.col.kev')} sort={sort} onSort={onSort} />
+                <SortHeader field="analyzer" label={t('sbom.col.analyzer')} sort={sort} onSort={onSort} />
+                <th>{t('sbom.col.attributedOn')}</th>
+                <SortHeader field="status" label={t('sbom.col.analysis')} sort={sort} onSort={onSort} />
               </tr>
             </thead>
             <tbody>
-              {visible.map((row) => (
-                <tr key={row.finding_id}>
+              {visible.map((row) => {
+                const actionable = Boolean(row.finding_id && onOpenFinding)
+                const openFinding = () => { if (actionable) onOpenFinding(row.finding_id) }
+                return <tr key={row.finding_id}
+                  className={actionable ? 'is-actionable' : undefined}
+                  onClick={openFinding}
+                  onKeyDown={(event) => {
+                    if (actionable && (event.key === 'Enter' || event.key === ' ')) {
+                      event.preventDefault()
+                      openFinding()
+                    }
+                  }}
+                  role={actionable ? 'button' : undefined}
+                  tabIndex={actionable ? 0 : undefined}>
                   <td className="title mono">
                     {row.component || '—'}
                     {parents.get(row.purl) && (
-                      <span className="sbom-via">via {parents.get(row.purl)}</span>
+                      <span className="sbom-via">{t('sbom.via', { name: parents.get(row.purl) })}</span>
                     )}
                   </td>
                   <td className="mono muted">{row.component_version || '—'}</td>
                   <td className="mono">
-                    {row.url ? <a href={row.url} target="_blank" rel="noreferrer">{row.vulnerability}</a>
+                    {row.url && !actionable ? <a href={row.url} target="_blank" rel="noreferrer">{row.vulnerability}</a>
                       : row.vulnerability || row.title || '—'}
                   </td>
-                  <td><span className={`pill ${severityClass(row.severity)}`}>{row.severity.toLowerCase()}</span></td>
+                  <td><span className={`pill ${severityClass(row.severity)}`}>{sevWord(tOr, row.severity)}</span></td>
                   <td className="num mono"
                     title={row.epss == null
-                      ? 'not scored by FIRST EPSS'
-                      : `EPSS: ${(row.epss * 100).toFixed(1)}% probability of exploitation`}>
+                      ? t('sbom.epss.none')
+                      : t('sbom.epss.title', { percent: (row.epss * 100).toFixed(1) })}>
                     {row.epss == null
                       ? <span className="muted">—</span>
                       : <span className={row.epss >= 0.1 ? 'sbom-epss hot' : 'sbom-epss'}>
@@ -1435,20 +1546,20 @@ function VulnerabilitiesTab({ data, rows: componentRows = [], sort, onSort }) {
                   </td>
                   <td>{row.kev ? <span className="pill sev-critical">KEV</span> : <span className="muted">—</span>}</td>
                   <td className="muted">{row.analyzer}</td>
-                  <td className="muted">{relative(row.attributed_on)}</td>
+                  <td className="muted">{relative(row.attributed_on, t)}</td>
                   <td className="muted">
                     {row.analysis}
-                    {row.suppressed ? <span className="pill">suppressed</span> : null}
+                    {row.suppressed ? <span className="pill">{t('sbom.suppressed')}</span> : null}
                   </td>
                 </tr>
-              ))}
+              })}
             </tbody>
           </table>
         ) : (
           <p className="muted" style={{ margin: 0 }}>
             {(data.vulnerabilities || []).length
-              ? 'Nothing matches this filter.'
-              : 'No findings attached to this version yet. Import a BOM and analyse it — an inventory alone has no vulnerabilities.'}
+              ? t('sbom.empty.filtered')
+              : t('sbom.vulns.empty')}
           </p>
         )}
       </Card>

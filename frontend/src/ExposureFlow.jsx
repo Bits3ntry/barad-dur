@@ -1,4 +1,5 @@
 import React from 'react'
+import { useI18n } from './i18n'
 
 /* Exposure flow, drawn rather than tabulated: sources on the left feed a
    priority donut, which branches into current outcomes on the right.
@@ -12,12 +13,15 @@ import React from 'react'
    room to breathe — the first draft clipped the donut caption and collided the
    legend. */
 
+/* Priority is a rank, so it uses one hue at four intensities. Severity owns
+   four distinct hues; sharing them here made the donut look like a severity
+   chart and the P0 slice look like a critical finding. */
 const PRIORITY = [
-  { key: 'P0', label: 'P0', color: 'var(--critical)' },
-  { key: 'P1', label: 'P1', color: 'var(--high)' },
-  { key: 'P2', label: 'P2', color: 'var(--medium)' },
-  { key: 'P3', label: 'P3', color: 'var(--low)' },
-  { key: 'unranked', label: 'no priority', color: 'var(--line-strong)' },
+  { key: 'P0', label: 'P0', color: 'var(--rank-p0)' },
+  { key: 'P1', label: 'P1', color: 'var(--rank-p1)' },
+  { key: 'P2', label: 'P2', color: 'var(--rank-p2)' },
+  { key: 'P3', label: 'P3', color: 'var(--rank-p3)' },
+  { key: 'unranked', labelKey: 'flow.noPriority', color: 'var(--border-strong)' },
 ]
 
 const WIDTH = 1040
@@ -52,6 +56,7 @@ function curve(fromX, fromY, toX, toY, dashed, tone) {
 }
 
 export default function ExposureFlow({ flow, onNavigate }) {
+  const { t } = useI18n()
   if (!flow) return null
 
   const sources = (flow.sources || []).slice(0, 5)
@@ -84,13 +89,13 @@ export default function ExposureFlow({ flow, onNavigate }) {
   })
 
   const outcomeRows = [
-    { label: 'Open', value: outcomes.open || 0, tone: 'ink', thick: true, link: true },
-    { label: 'Past SLA', value: outcomes.past_sla || 0, tone: 'bad', link: true },
-    { label: 'In progress', value: outcomes.in_progress || 0, tone: 'muted', link: true },
-    { label: 'Suppressed', value: outcomes.suppressed || 0, tone: 'muted', link: true },
-    { label: 'Resolved', value: outcomes.resolved || 0, tone: 'muted', link: true,
+    { label: t('flow.open'), value: outcomes.open || 0, tone: 'ink', thick: true, link: true },
+    { label: t('flow.pastSla'), value: outcomes.past_sla || 0, tone: 'bad', link: true },
+    { label: t('flow.inProgress'), value: outcomes.in_progress || 0, tone: 'muted', link: true },
+    { label: t('flow.suppressed'), value: outcomes.suppressed || 0, tone: 'muted', link: true },
+    { label: t('flow.resolved'), value: outcomes.resolved || 0, tone: 'muted', link: true,
       hint: outcomes.closed_in_window
-        ? `${outcomes.closed_in_window} in the last ${flow.window_days}d` : null },
+        ? t('flow.closedInWindow', { n: outcomes.closed_in_window, days: flow.window_days }) : null },
   ]
 
   const outcomeGap = 54
@@ -105,11 +110,12 @@ export default function ExposureFlow({ flow, onNavigate }) {
   return (
     <svg className="flow-chart" viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       role="img"
-      aria-label={`Exposure flow: ${received} received, ${actionable} actionable, `
-        + `${outcomes.past_sla || 0} past SLA`}>
+      aria-label={t('flow.aria', {
+        received, actionable, sla: outcomes.past_sla || 0,
+      })}>
       {/* sources panel */}
       <text className="flow-caption" x={SOURCE_X} y={30}>
-        Sources received in {flow.window_days} days
+        {t('flow.sourcesCaption', { days: flow.window_days })}
       </text>
       <rect className="flow-source-box" x={SOURCE_X} y={sources.length ? boxTop : SOURCE_TOP}
         width={SOURCE_W} height={sources.length ? boxHeight : 120} rx={12} />
@@ -131,19 +137,19 @@ export default function ExposureFlow({ flow, onNavigate }) {
       })}
       {!sources.length && (
         <text className="flow-source-detail" x={SOURCE_X + 16} y={SOURCE_TOP + 48}>
-          nothing received in this window
+          {t('flow.nothingReceived')}
         </text>
       )}
 
       {/* received -> new, above the merge */}
       <text className="flow-caption" x={DONUT.cx - DONUT.r - 22} y={46} textAnchor="middle">
-        received
+        {t('flow.received')}
       </text>
       <text className="flow-count" x={DONUT.cx - DONUT.r - 22} y={68} textAnchor="middle">
         {received}
       </text>
       <text className="flow-caption" x={DONUT.cx + 10} y={46} textAnchor="middle">
-        new or reopened
+        {t('flow.newOrReopened')}
       </text>
       <text className="flow-count" x={DONUT.cx + 10} y={68} textAnchor="middle">
         {received}
@@ -160,13 +166,13 @@ export default function ExposureFlow({ flow, onNavigate }) {
           stroke="var(--line-strong)" strokeWidth={DONUT.width} />
       )}
       <text className="flow-center-label" x={DONUT.cx} y={DONUT.cy - 20} textAnchor="middle">
-        actionable
+        {t('flow.actionable')}
       </text>
       <text className="flow-center" x={DONUT.cx} y={DONUT.cy + 10} textAnchor="middle">
         {actionable}
       </text>
       <text className="flow-center-label" x={DONUT.cx} y={DONUT.cy + 30} textAnchor="middle">
-        by priority
+        {t('flow.byPriority')}
       </text>
 
       {/* priority key under the ring */}
@@ -177,14 +183,14 @@ export default function ExposureFlow({ flow, onNavigate }) {
           <g key={`key-${segment.key}`}>
             <circle cx={x + 4} cy={DONUT.cy + DONUT.r + 34} r={4} fill={segment.color} />
             <text className="flow-legend" x={x + 14} y={DONUT.cy + DONUT.r + 38}>
-              {segment.label} {segment.value}
+              {segment.labelKey ? t(segment.labelKey) : segment.label} {segment.value}
             </text>
           </g>
         )
       })}
 
       {/* outcomes column */}
-      <text className="flow-caption" x={OUTCOME_X} y={30}>outcomes</text>
+      <text className="flow-caption" x={OUTCOME_X} y={30}>{t('flow.outcomes')}</text>
       {outcomeRows.map((row, index) => {
         const y = outcomeY(index)
         return (

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { useI18n } from './i18n'
 import { Card, Dialog } from './ui'
 
 /* ─────────────────────────── verify the inventory ───────────────────────
@@ -27,11 +28,11 @@ function isoDate(value) {
   return value ? new Date(value).toLocaleString() : null
 }
 
-function age(days) {
+function age(days, t) {
   if (days === null || days === undefined) return null
-  if (days === 0) return 'today'
-  if (days === 1) return 'yesterday'
-  return `${days}d ago`
+  if (days === 0) return t('verification.age.today')
+  if (days === 1) return t('verification.age.yesterday')
+  return t('verification.age.days', { n: days })
 }
 
 /* A TLS failure is a finding, not a stack trace. The collector reports the
@@ -40,60 +41,69 @@ function age(days) {
 /* What the table exists to answer: is this verified?
    Grey is not a failure — "never observed" is unknown, and calling it red would
    turn a missing fact into a finding the product never made. */
-export function verificationState(row) {
+export function verificationState(row, t, tCount) {
   const passive = row.permissions?.passive_discovery || {}
   if (passive.excluded) {
-    return { tone: 'unknown', label: 'excluded', detail: 'inventoried, never touched' }
+    return { tone: 'unknown', label: t('verification.state.excluded'),
+      detail: t('verification.state.excludedDetail') }
   }
   const observation = row.observation
   if (!observation) {
-    return { tone: 'unknown', label: 'not verified', detail: 'no observation yet' }
+    return { tone: 'unknown', label: t('verification.state.notVerified'),
+      detail: t('verification.state.noObservation') }
   }
   const addresses = (observation.ipv4 || 0) + (observation.ipv6 || 0)
   if (!addresses) {
-    return { tone: 'bad', label: 'no answer', detail: 'DNS returned no address' }
+    return { tone: 'bad', label: t('verification.state.noAnswer'),
+      detail: t('verification.state.noAnswerDetail') }
   }
   if (observation.tls && observation.tls.error) {
-    return { tone: 'warn', label: 'TLS failed', detail: observation.tls.error }
+    return { tone: 'warn', label: t('verification.state.tlsFailed'), detail: observation.tls.error }
   }
   if ((observation.age_days || 0) > 30) {
-    return { tone: 'warn', label: 'stale',
-      detail: `last confirmed ${observation.age_days} days ago` }
+    return { tone: 'warn', label: t('verification.state.stale'),
+      detail: t('verification.state.staleDetail', { n: observation.age_days }) }
   }
-  return { tone: 'good', label: 'verified',
-    detail: `${addresses} address${addresses === 1 ? '' : 'es'} on ${isoDate(observation.observed_at)}` }
+  return { tone: 'good', label: t('verification.state.verified'),
+    detail: tCount('verification.state.addresses', addresses,
+      { when: isoDate(observation.observed_at) }) }
 }
 
-export function describeTls(tls) {
+export function describeTls(tls, t) {
   if (!tls) return null
   if (tls.error) {
     const raw = String(tls.error)
     if (/UNRECOGNIZED_NAME/i.test(raw)) {
-      return 'no certificate served for this name (SNI rejected)'
+      return t('verification.tls.noCert')
     }
     if (/CERTIFICATE_VERIFY_FAILED|certificate verification failed/i.test(raw)) {
-      return 'certificate not trusted'
+      return t('verification.tls.untrusted')
     }
-    if (/timed out|timeout/i.test(raw)) return 'no TLS answer on 443 (timeout)'
-    if (/refused|unreachable/i.test(raw)) return 'no TLS on 443 (connection refused)'
-    return 'TLS handshake failed'
+    if (/timed out|timeout/i.test(raw)) return t('verification.tls.timeout')
+    if (/refused|unreachable/i.test(raw)) return t('verification.tls.refused')
+    return t('verification.tls.failed')
   }
-  return [tls.version, tls.not_after ? `certificate to ${tls.not_after}` : null]
-    .filter(Boolean).join(' · ') || 'TLS answered'
+  return [tls.version, tls.not_after
+    ? t('verification.tls.certificateTo', { date: tls.not_after }) : null]
+    .filter(Boolean).join(' · ') || t('verification.tls.answered')
 }
 
 function PermissionCell({ permission, capability }) {
+  const { t } = useI18n()
   const label = CAPABILITY_LABEL[capability] || capability
   if (permission.allowed) {
     return (
       <>
-        <span className="pill good" title={permission.reason}>{label} allowed</span>
+        <span className="pill good" title={permission.reason}>
+          {t('verification.perm.allowed', { capability: label })}
+        </span>
         {permission.grant && (
           <div className="muted" style={{ fontSize: 11 }}>
-            grant {permission.grant.id.slice(0, 8)}
+            {t('verification.perm.grant', { id: permission.grant.id.slice(0, 8) })}
             {permission.grant.environment ? ` · ${permission.grant.environment}` : ''}
             {permission.grant.valid_until
-              ? ` · to ${new Date(permission.grant.valid_until).toLocaleDateString()}`
+              ? ` · ${t('verification.perm.validUntil', {
+                date: new Date(permission.grant.valid_until).toLocaleDateString() })}`
               : ''}
           </div>
         )}
@@ -103,15 +113,20 @@ function PermissionCell({ permission, capability }) {
   if (permission.excluded) {
     return (
       <span className="pill denied"
-        title={`${permission.reason} — an exclusion wins over any grant`}>
-        {label} excluded
+        title={t('verification.perm.exclusionWins', { reason: permission.reason })}>
+        {t('verification.perm.excluded', { capability: label })}
       </span>
     )
   }
-  return <span className="pill denied" title={permission.reason}>{label} denied</span>
+  return (
+    <span className="pill denied" title={permission.reason}>
+      {t('verification.perm.denied', { capability: label })}
+    </span>
+  )
 }
 
 export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
+  const { t, tCount } = useI18n()
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -144,15 +159,18 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
       const observation = result?.data?.observation || {}
       const dns = observation.dns || {}
       const parts = [`${(dns.ipv4 || []).length} A`, `${(dns.ipv6 || []).length} AAAA`]
-      if (observation.tls) parts.push(describeTls(observation.tls))
-      setNotice(`${row.value}: ${parts.filter(Boolean).join(' · ')} — observed `
-        + `${isoDate(result?.data?.observed_at)}.`)
+      if (observation.tls) parts.push(describeTls(observation.tls, t))
+      setNotice(t('verification.notice.observed', {
+        value: row.value,
+        parts: parts.filter(Boolean).join(' · '),
+        when: isoDate(result?.data?.observed_at),
+      }))
       await load()
     } catch (e) {
       const message = String(e.message || e)
       setNotice(/grant|authoriz|forbidden|403/i.test(message)
-        ? `Nothing was sent: ${message}. Authorize the capability first.`
-        : `Collection failed: ${message}`)
+        ? t('verification.notice.nothingSent', { message })
+        : t('verification.notice.collectionFailed', { message }))
     } finally { setBusy('') }
   }
 
@@ -165,7 +183,7 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
   function submitEdit() {
     const value = editForm.value.trim()
     if (!value) {
-      setEditError('The value cannot be empty — that is the record itself.')
+      setEditError(t('verification.error.emptyValue'))
       return false
     }
     applyEdit(value)
@@ -179,8 +197,7 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
       await api.patch(`/api/v1/assets/${editRow.id}`, {
         value, type: editForm.type, notes: editForm.notes, actor: 'console',
       })
-      setNotice(`${editRow.value} → ${value}. Scope targets and grants keep the old `
-        + 'value: they are separate records, not a rename.')
+      setNotice(t('verification.notice.renamed', { from: editRow.value, to: value }))
       setEditRow(null)
       await load()
     } catch (e) {
@@ -196,8 +213,7 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
     try {
       await api.patch(`/api/v1/scope/exclusions/${exclusion.id}`,
         { status: 'disabled', actor: 'console' })
-      setNotice(`Exclusion lifted for ${exclusion.value}. The decision stays in Scope `
-        + 'as disabled — nothing is erased.')
+      setNotice(t('verification.notice.exclusionLifted', { value: exclusion.value }))
       setRestoreRow(null)
       await load()
     } catch (e) {
@@ -207,7 +223,7 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
 
   function submitExclusion() {
     if (reason.trim().length < 4) {
-      setExcludeError('A reason is required: an exclusion with no reason is unauditable.')
+      setExcludeError(t('verification.error.reasonRequired'))
       return false
     }
     setExcludeError('')
@@ -224,8 +240,7 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
         target_type: 'domain', value: excludeRow.value,
         reason: reason.trim(), actor: 'console',
       })
-      setNotice(`${excludeRow.value} stays in the inventory and is excluded from every `
-        + 'collection: an exclusion wins over any grant.')
+      setNotice(t('verification.notice.excluded', { value: excludeRow.value }))
       setExcludeRow(null)
       setReason('')
       await load()
@@ -237,34 +252,33 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
   const summary = data?.summary
   const rows = data?.assets || []
   const counts = rows.reduce((acc, row) => {
-    const tone = verificationState(row).tone
+    const tone = verificationState(row, t, tCount).tone
     acc[tone] = (acc[tone] || 0) + 1
     return acc
   }, { good: 0, warn: 0, bad: 0, unknown: 0 })
 
   return (
     <>
-      <Card title="Declared assets"
+      <Card title={t('verification.title')}
         actions={(
           <div className="row">
-            <button className="mini" onClick={onOpenGrants}>grants ›</button>
-            {onAdd && <button className="mini" onClick={onAdd}>add asset</button>}
+            <button className="mini" onClick={onOpenGrants}>{t('verification.openGrants')}</button>
+            {onAdd && <button className="mini" onClick={onAdd}>{t('verification.addAsset')}</button>}
           </div>
         )}>
 
         {error && <p className="muted" style={{ color: 'var(--err-fg)' }}>{error}</p>}
         {notice && <p className="muted" role="status">{notice}</p>}
 
-        {!data && !error && <p className="muted">Reading what is declared, allowed and observed…</p>}
+        {!data && !error && <p className="muted">{t('verification.reading')}</p>}
 
         {data && !rows.length && (
           <div className="onb-empty-state" style={{ padding: '20px 16px 24px' }}>
-            <h2>Nothing recorded yet</h2>
-            <p>
-              Record what you already know: a domain, a URL, an IP. Nothing here has been
-              observed yet — declaring a host authorizes nothing.
-            </p>
-            {onAdd && <button className="btn-primary" onClick={onAdd}>add the first domain</button>}
+            <h2>{t('verification.empty.title')}</h2>
+            <p>{t('verification.empty.body')}</p>
+            {onAdd && (
+              <button className="btn-primary" onClick={onAdd}>{t('verification.empty.action')}</button>
+            )}
           </div>
         )}
 
@@ -272,32 +286,37 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
           <>
             <p className="verify-summary">
               <span className="state-pill good">
-                <i className="state-dot" />{counts.good} verified
+                <i className="state-dot" />{t('verification.summary.verified', { n: counts.good })}
               </span>
               {counts.warn > 0 && (
                 <span className="state-pill warn">
-                  <i className="state-dot" />{counts.warn} need attention
+                  <i className="state-dot" />{t('verification.summary.attention', { n: counts.warn })}
                 </span>
               )}
               {counts.bad > 0 && (
                 <span className="state-pill bad">
-                  <i className="state-dot" />{counts.bad} no answer
+                  <i className="state-dot" />{t('verification.summary.noAnswer', { n: counts.bad })}
                 </span>
               )}
               <span className="state-pill unknown">
-                <i className="state-dot" />{counts.unknown} not verified
+                <i className="state-dot" />{t('verification.summary.notVerified', { n: counts.unknown })}
               </span>
               <span className="muted">
-                {summary.assets} declared · {summary.authorized} allowed to collect
-                {summary.excluded ? ` · ${summary.excluded} excluded` : ''}
+                {t('verification.summary.declared', {
+                  assets: summary.assets, authorized: summary.authorized })}
+                {summary.excluded
+                  ? ` · ${t('verification.summary.excluded', { n: summary.excluded })}` : ''}
               </span>
             </p>
             <table className="verification-table">
               <thead>
                 <tr>
-                  <th className="state-col">state</th>
-                  <th>value</th><th>environment</th>
-                  <th>collection</th><th>last observed</th><th>action</th>
+                  <th className="state-col">{t('verification.col.state')}</th>
+                  <th>{t('verification.col.value')}</th>
+                  <th>{t('verification.col.environment')}</th>
+                  <th>{t('verification.col.collection')}</th>
+                  <th>{t('verification.col.lastObserved')}</th>
+                  <th>{t('verification.col.action')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -305,7 +324,7 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
                   const passive = row.permissions.passive_discovery
                   const active = row.permissions.active_verification
                   const observation = row.observation
-                  const state = verificationState(row)
+                  const state = verificationState(row, t, tCount)
                   return (
                     <tr key={row.id} className={`state-${state.tone}`}>
                       <td className="state-cell">
@@ -332,52 +351,53 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
                           <>
                             {isoDate(observation.observed_at)}
                             <div style={{ fontSize: 11.5 }}>
-                              {age(observation.age_days)} ·{' '}
-                              <span title="A records resolved at observation time">
+                              {age(observation.age_days, t)} ·{' '}
+                              <span title={t('verification.obs.aRecordsHint')}>
                                 {observation.ipv4} A
                               </span>
                               {observation.ipv6 ? ` · ${observation.ipv6} AAAA` : ''}
                               {observation.tls ? (
                                 <span className={observation.tls.error ? 'obs-warn' : ''}
                                   title={observation.tls.error || ''}>
-                                  {' · '}{describeTls(observation.tls)}
+                                  {' · '}{describeTls(observation.tls, t)}
                                 </span>
                               ) : null}
                             </div>
                           </>
-                        ) : <span className="muted">never — no observation</span>}
+                        ) : <span className="muted">{t('verification.obs.never')}</span>}
                       </td>
                       <td>
                         <div className="row">
                           <button className="mini" disabled={busy !== '' || !passive.allowed}
                             title={passive.allowed
                               ? (active.allowed
-                                ? 'Runs a DNS lookup and a TLS handshake'
-                                : `Runs a DNS lookup only — TLS not authorized: ${active.reason}`)
+                                ? t('verification.action.verifyTlsHint')
+                                : t('verification.action.verifyDnsHint', { reason: active.reason }))
                               : passive.reason}
                             onClick={() => verify(row)}>
-                            {busy === row.id ? 'verifying…' : 'verify'}
+                            {busy === row.id
+                              ? t('verification.action.verifying') : t('verification.action.verify')}
                           </button>
                           {/* The plan lives in the tooltip: a second label beside
                               the button reads as a second action. */}
 
-                          <button className="mini" title="Correct the value, its type or its notes"
+                          <button className="mini" title={t('verification.action.editHint')}
                             onClick={() => openEdit(row)}>
-                            edit
+                            {t('verification.action.edit')}
                           </button>
                           {passive.excluded ? (
                             <button className="mini"
-                              title="Lift the exclusion — the decision stays in Scope as disabled"
+                              title={t('verification.action.restoreHint')}
                               onClick={() => setRestoreRow(row)}>
-                              restore
+                              {t('verification.action.restore')}
                             </button>
                           ) : (
                             <button className="mini"
-                              title="Keep it in the inventory but forbid collection"
+                              title={t('verification.action.excludeHint')}
                               onClick={() => {
                                 setExcludeRow(row); setReason(''); setExcludeError('')
                               }}>
-                              exclude…
+                              {t('verification.action.exclude')}
                             </button>
                           )}
                         </div>
@@ -392,26 +412,29 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
       </Card>
 
       <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-        Collection is read-only: a DNS lookup, and optionally a TLS handshake to read the
-        certificate. Nothing is written to the target. A host with no observation is
-        <strong> never observed</strong>, not clean and not unreachable.
-        {' '}Collection runs only where a grant allows it — grants are issued in
-        {' '}<a href="#grants">Authorization grants</a>, not here: this screen declares,
-        {' '}excludes and verifies. <strong>Scope</strong> is a third ledger, the universe
-        {' '}automated cycles sweep, declared in <a href="#scope">Scope</a>.
+        {t('verification.footnote.a')}
+        <strong> {t('verification.footnote.neverObserved')}</strong>
+        {t('verification.footnote.b')}
+        {' '}<a href="#grants">{t('verification.footnote.grantsLink')}</a>
+        {t('verification.footnote.c')}
+        {' '}<strong>{t('verification.footnote.scopeWord')}</strong>
+        {' '}{t('verification.footnote.d')}
+        {' '}<a href="#scope">{t('verification.footnote.scopeLink')}</a>.
       </p>
 
-      <Dialog open={Boolean(editRow)} title={`Edit ${editRow?.value || ''}`}
+      <Dialog open={Boolean(editRow)}
+        title={t('verification.dialog.edit', { value: editRow?.value || '' })}
         onClose={() => setEditRow(null)} onConfirm={submitEdit}
-        confirmLabel={busy === `edit:${editRow?.id}` ? 'saving…' : 'save'}>
+        confirmLabel={busy === `edit:${editRow?.id}`
+          ? t('verification.action.saving') : t('verification.action.save')}>
         <div className="stack" style={{ gap: 10 }}>
           <label className="field">
-            <span>value</span>
+            <span>{t('verification.field.value')}</span>
             <input value={editForm.value}
               onChange={(event) => { setEditForm((f) => ({ ...f, value: event.target.value })); setEditError('') }} />
           </label>
           <label className="field">
-            <span>type</span>
+            <span>{t('verification.field.type')}</span>
             <select value={editForm.type}
               onChange={(event) => setEditForm((f) => ({ ...f, type: event.target.value }))}>
               {['domain', 'subdomain', 'url', 'ip', 'api', 'mobile_app'].map((kind) => (
@@ -420,13 +443,12 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
             </select>
           </label>
           <label className="field">
-            <span>notes</span>
+            <span>{t('verification.field.notes')}</span>
             <textarea rows="2" value={editForm.notes}
               onChange={(event) => setEditForm((f) => ({ ...f, notes: event.target.value }))} />
           </label>
           <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-            Renaming keeps the asset&apos;s links, snapshots and history. Scope targets and
-            grants record the value they were written with, so a rename does not move them.
+            {t('verification.dialog.editHint')}
           </p>
           {editError && (
             <p role="alert" style={{ margin: 0, fontSize: 12.5, color: 'var(--err-fg)' }}>
@@ -436,31 +458,31 @@ export default function ProjectVerification({ slug, onAdd, onOpenGrants }) {
         </div>
       </Dialog>
 
-      <Dialog open={Boolean(restoreRow)} title="Lift this exclusion"
+      <Dialog open={Boolean(restoreRow)} title={t('verification.dialog.restore')}
         onClose={() => setRestoreRow(null)} onConfirm={restoreExclusion}
-        confirmLabel={busy.startsWith('restore:') ? 'lifting…' : 'lift exclusion'}>
+        confirmLabel={busy.startsWith('restore:')
+          ? t('verification.action.lifting') : t('verification.action.liftExclusion')}>
         <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
-          {restoreRow?.permissions.passive_discovery.exclusion?.value} will be collectable
-          again, and it stays in the inventory. The exclusion row is not deleted: it stays in
-          Scope as <strong>disabled</strong>, with its reason and who lifted it.
-          {' '}If the exclusion came from a wildcard rule, lifting it affects every host that
-          rule covers.
+          {t('verification.dialog.restoreA', {
+            value: restoreRow?.permissions.passive_discovery.exclusion?.value })}{' '}
+          <strong>{t('verification.dialog.restoreDisabled')}</strong>
+          {t('verification.dialog.restoreB')}
         </p>
       </Dialog>
 
-      <Dialog open={Boolean(excludeRow)} title={`Exclude ${excludeRow?.value || ''}`}
+      <Dialog open={Boolean(excludeRow)}
+        title={t('verification.dialog.exclude', { value: excludeRow?.value || '' })}
         onClose={() => setExcludeRow(null)}
         onConfirm={submitExclusion}
-        confirmLabel={busy.startsWith('exclude:') ? 'excluding…' : 'exclude from collection'}>
+        confirmLabel={busy.startsWith('exclude:')
+          ? t('verification.action.excluding') : t('verification.action.excludeFromCollection')}>
         <div className="stack" style={{ gap: 10 }}>
           <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
-            The host stays in the inventory and in the graph — it is not deleted. What
-            stops is every request against it: an exclusion wins over any grant, current
-            or future, for this exact host.
+            {t('verification.dialog.excludeIntro')}
           </p>
           <label className="field">
-            <span>reason (audited)</span>
-            <input value={reason} placeholder="e.g. production payment endpoint — read-only contract"
+            <span>{t('verification.field.reason')}</span>
+            <input value={reason} placeholder={t('verification.field.reasonPlaceholder')}
               onChange={(event) => { setReason(event.target.value); setExcludeError('') }} />
           </label>
           {excludeError && (

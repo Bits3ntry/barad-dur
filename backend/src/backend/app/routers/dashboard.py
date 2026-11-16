@@ -10,7 +10,7 @@ from backend.app.db import get_session
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
-NON_OPEN = {"resolved", "false_positive", "accepted_risk"}
+from backend.app.status import NON_OPEN
 SEVERITIES = list(severity_mod.SEVERITIES)
 
 
@@ -399,7 +399,7 @@ def v0_overview(org: models.Organization = Depends(auth.require_org),
               .filter_by(org_id=org.id)
               .filter(models.Asset.archived_at.is_(None)).count())
     projects = (session.query(models.Project).filter_by(org_id=org.id).count())
-    problems = _groups(session, org, include_suppressed=False)
+    problems = _groups(session, org, include_suppressed=False, by="signature")
     cves = [row for row in problems if row["cve_id"]]
     cycles_active = (session.query(models.Cycle)
                      .filter_by(org_id=org.id, state="active").count())
@@ -465,5 +465,6 @@ def v0_overview(org: models.Organization = Depends(auth.require_org),
             "change_coverage_notes": len(recent["coverage_notes"]),
             "note": ("counters count what exists; a coverage gap means nothing was "
                      "observed or evaluated there, not that it is clean"),
+            "note_key": "dashboard.note.coverage",
         },
     }}

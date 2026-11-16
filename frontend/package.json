@@ -8,7 +8,8 @@
     "prebuild": "node scripts/check-ui-imports.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "check:ui": "node scripts/check-ui-imports.mjs"
+    "check:ui": "node scripts/check-ui-imports.mjs",
+    "i18n": "node scripts/i18n-check.mjs"
   },
   "dependencies": {
     "qrcode.react": "^4.2.0",

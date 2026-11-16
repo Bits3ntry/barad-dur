@@ -1,4 +1,5 @@
 """Runtime CVEs from NVD CPE data: ranges, confidence, and no invented versions."""
+import json
 import sys
 from pathlib import Path
 
@@ -174,6 +175,15 @@ def test_a_rerun_refreshes_instead_of_duplicating(env):
     assert counters["findings_created"] == 0
     assert counters["findings_refreshed"] == 1
     assert session.query(models.Finding).count() == 1
+    # The refresh must not eat the evidence: a note-shaped detail loses the score,
+    # the vector and the declared version, and the advisory page then reads
+    # "no CVSS score" on a CVE NVD had already scored.
+    finding = session.query(models.Finding).one()
+    detail = json.loads(finding.detail)
+    assert detail["advisory"] == "CVE-2025-59465"
+    assert detail["cvss"] is not None
+    assert detail["vector"].startswith("CVSS:3")
+    assert detail["confidence"] and detail["declared"]
 
 
 def test_a_cve_outside_the_range_is_not_reported(env):

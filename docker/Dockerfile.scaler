@@ -1,0 +1,34 @@
+# The scaler: the only process that holds the Docker socket.
+#
+# It does one thing — read the queue from Barad-dûr, compare it to the policy, and
+# resize the worker pool. Keeping it separate from the API is the point: the web
+# app never gets the socket, so a bug in a request handler can never become a
+# container on the host.
+FROM python:3.12-slim
+
+USER root
+# `docker-cli` is the client only (this container talks to the host's socket), and
+# it ships without the Compose plugin — so the plugin is fetched explicitly. A
+# scaler that cannot run `docker compose` is a scaler that scales nothing, and it
+# would only find out at the first scale-up.
+ARG COMPOSE_VERSION=v2.40.3
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends docker-cli ca-certificates curl \
+ && case "$(dpkg --print-architecture)" in \
+      amd64) compose_arch=x86_64 ;; \
+      arm64) compose_arch=aarch64 ;; \
+      *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac \
+ && mkdir -p /usr/local/lib/docker/cli-plugins \
+ && curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+      "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${compose_arch}" \
+ && chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose \
+ && rm -rf /var/lib/apt/lists/* \
+ && docker compose version
+
+COPY scripts/shauron_scaler.py /usr/local/bin/shauron_scaler.py
+RUN chmod 0755 /usr/local/bin/shauron_scaler.py
+
+ENV PYTHONUNBUFFERED=1
+ENTRYPOINT ["python3", "/usr/local/bin/shauron_scaler.py"]
+CMD ["--apply", "--interval", "30"]

@@ -26,14 +26,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app import auth, models, projects as projects_ref, severity as severity_vocab
+from backend.app import auth, cvss, models, projects as projects_ref, severity as severity_vocab
+from backend.app.ancestry import ancestry, links_of
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
 router = APIRouter(prefix="/api/v1", tags=["vulnerabilities"])
 
 OPEN_STATUSES = {"open", "acknowledged"}
-CLOSED_STATUSES = {"resolved", "false_positive", "accepted_risk", "suppressed"}
+from backend.app.status import CLOSED_STATUSES
 PRIORITY_ORDER = ["P0", "P1", "P2", "P3", "P4", None]
 
 VECTOR_LABELS = {
@@ -154,7 +155,16 @@ def _risk_of(severity: str, enrichment: dict, reachable: bool) -> dict:
 
 
 def _groups(session: Session, org: models.Organization,
-            include_suppressed: bool) -> list[dict]:
+            include_suppressed: bool, by: str = "component") -> list[dict]:
+    """One row per problem at the granularity the caller asks for.
+
+    `by="component"` (the default) is the acting view: a CVE against two packages
+    is two rows there, because it is two upgrades and two status decisions.
+    `by="signature"` is the reading view: a vulnerability is one thing however
+    many subjects carry it, which is what the estate list prints and what its
+    columns promise. Both are the same findings, bucketed differently — nothing
+    downstream re-derives the counts.
+    """
     query = session.query(models.Finding).filter(models.Finding.org_id == org.id)
     if not include_suppressed:
         query = query.filter(models.Finding.status != "suppressed")
@@ -175,9 +185,11 @@ def _groups(session: Session, org: models.Organization,
                 component = session.get(models.Component, finding.component_id)
                 if component is not None:
                     components_cache[component.id] = component
-        # A CVE against two different packages is two problems, not one.
+        # A CVE against two different packages is two problems when you act, and
+        # one vulnerability when you read: the component belongs in the key only
+        # for the acting view.
         component_key = ""
-        if cve_id and component is not None:
+        if by == "component" and cve_id and component is not None:
             component_key = component.name or component.purl or component.identity_key
         key = f"{vector}|{signature}|{component_key}"
         bucket = buckets.get(key)
@@ -225,8 +237,19 @@ def _groups(session: Session, org: models.Organization,
         assets = [asset for asset in assets if asset is not None]
 
         details = [_detail_of(finding) for finding in findings]
-        cvss_scores = [d.get("cvss_score") for d in details
-                       if isinstance(d.get("cvss_score"), (int, float))]
+        cvss_scores: list[float] = [float(d["cvss_score"]) for d in details
+                                    if isinstance(d.get("cvss_score"), (int, float))]
+        # Not every producer stores a number: the runtime ingest keeps only the
+        # vector. The base score is derivable from it, so a scanner that forgot
+        # the number no longer reads as "unscored" — and the row says which of the
+        # two it is, because a computed score is not a quoted one.
+        advisory_vector = bucket["advisory"].get("cvss_vector")
+        derived = False
+        if cvss_scores:
+            cvss_score = max(cvss_scores)
+        else:
+            cvss_score = cvss.base_score(advisory_vector)
+            derived = cvss_score is not None
         fixed = sorted({d["fixed_version"] for d in details
                         if isinstance(d.get("fixed_version"), str)})
         severity = _worst_severity([finding.severity for finding in findings])
@@ -277,9 +300,12 @@ def _groups(session: Session, org: models.Organization,
                           else bucket["signature"])),
             "severity": severity,
             "priority": _worst_priority([finding.priority for finding in findings]),
-            "cvss": {"known": bool(cvss_scores),
-                     "score": max(cvss_scores) if cvss_scores else None,
-                     "vector": bucket["advisory"].get("cvss_vector")},
+            "cvss": {"known": cvss_score is not None,
+                     "score": cvss_score,
+                     "vector": advisory_vector,
+                     "derived": derived,
+                     "reason": None if cvss_score is not None
+                     else "the scanner stated neither a score nor a v3 vector"},
             "fix": {"available": bool(fixed), "versions": fixed,
                     "reason": None if fixed else "no fixed version stated by the scanner"},
             "remediation": REMEDIATION.get(vector),
@@ -319,6 +345,314 @@ def _match(rows: list[dict], ref: str) -> dict | None:
                  or item["signature"].lower() == lowered), None)
 
 
+# ───────────────────────────── one advisory, whole estate ─────────────────────
+#
+# `_groups` splits by (vector, signature, component) on purpose: one CVE against
+# two packages is two rows in the list, because the fix is two upgrades. The
+# advisory screen asks the opposite question — "what does this problem touch
+# here" — so it merges every bucket that names the same advisory and then splits
+# the answer the way it is triaged: affected components (or the asset itself when
+# no component was ever attached) plus the occurrences behind them.
+
+SETTLED_STATUSES = CLOSED_STATUSES
+
+
+def _settled(finding: models.Finding) -> bool:
+    """Closed has two spellings in this table and they are the same fact."""
+    return (finding.status or "").lower() in SETTLED_STATUSES
+
+
+def _advisory_rows(session: Session, ref: str) -> list[models.Vulnerability]:
+    """Catalog rows that answer to this id, whichever column carries it."""
+    needle = ref.strip().upper()
+    return (session.query(models.Vulnerability)
+            .filter(models.Vulnerability.cve_id.isnot(None))
+            .filter(models.Vulnerability.cve_id == needle).all())
+
+
+def _kev_detail(session: Session, cve_id: str | None) -> dict:
+    """The KEV row is a catalog entry, not just a boolean: action and CWE matter."""
+    if not cve_id:
+        return {"known": False, "listed": False, "reason": "no CVE id"}
+    row = session.get(models.KevEntry, cve_id.upper())
+    if row is None:
+        return {"known": True, "listed": False,
+                "reason": "in no mirrored KEV catalogue"}
+    return {
+        "known": True, "listed": True,
+        "name": row.name or row.title,
+        "vendor": row.vendor, "product": row.product,
+        "description": row.description,
+        "required_action": row.required_action,
+        "ransomware": row.ransomware, "cwes": row.cwes,
+        "date_added": row.date_added, "due_date": row.due_date,
+        "source": row.source,
+        # Which catalogues say so. One publisher is an opinion; three agreeing is
+        # the strongest statement this platform can make about exploitation.
+        "sources": [item for item in (row.sources or "").split(",") if item.strip()],
+        "exploitation_type": row.exploitation_type,
+    }
+
+
+def _advisory_dossier(session: Session, org: models.Organization, ref: str,
+                      include_suppressed: bool = False) -> dict | None:
+    """Everything the advisory screen prints, or None when nothing names it."""
+    needle = ref.strip().lower()
+    rows = [row for row in _groups(session, org, include_suppressed)
+            if (row["cve_id"] or "").lower() == needle
+            or row["signature"].lower() == needle]
+    catalog = _advisory_rows(session, ref)
+    if not rows and not catalog and session.get(models.KevEntry, ref.upper()) is None:
+        return None
+
+    cve_id = next((row["cve_id"] for row in rows if row["cve_id"]), None) \
+        or (catalog[0].cve_id if catalog else ref.upper())
+
+    # The findings behind every bucket, keyed so the affected table can be built
+    # from the finding itself (asset attribution lives there, not in `locations`).
+    finding_ids = [location["finding_id"] for row in rows for location in row["locations"]]
+    findings: list[models.Finding] = []
+    if finding_ids:
+        findings = (session.query(models.Finding)
+                    .filter(models.Finding.org_id == org.id,
+                            models.Finding.id.in_(finding_ids)).all())
+
+    descriptions = [row["title"] for row in rows if row["title"]] + \
+                   [row.title for row in catalog if row.title]
+    description = max(descriptions, key=len) if descriptions else None
+    # The NVD-side ingest writes `CVE-…: <description>` as the title because a
+    # finding row needs a self-describing title; on a page whose h1 is that id the
+    # prefix is noise.
+    if description:
+        prefix = f"{cve_id}: "
+        if description.startswith(prefix):
+            description = description[len(prefix):]
+    vectors = [row["cvss"]["vector"] for row in rows if row["cvss"]["vector"]] + \
+              [row.cvss_vector for row in catalog if row.cvss_vector]
+    observed_scores: list[float] = [
+        float(row["cvss"]["score"]) for row in rows
+        if isinstance(row["cvss"]["score"], (int, float))]
+    url = next((row["url"] for row in rows if row["url"]), None) \
+        or next((row.url for row in catalog if row.url), None)
+    published = next((row.published for row in catalog if row.published), None)
+    modified = next((row.modified for row in catalog if row.modified), None)
+
+    projects: dict[str, models.Project] = {}
+    components_cache: dict[str, models.Component] = {}
+    components: dict[tuple, dict] = {}
+    assets: dict[tuple, dict] = {}
+
+    # How each package got into each build. "Affected: brotli 1.0.9" is only
+    # actionable as "brotli came in through axios", and the walk is one query per
+    # build — computed once per (build, package) pair, not once per finding.
+    link_cache: dict[str, dict] = {}
+    chain_cache: dict[tuple[str, str], list[dict]] = {}
+
+    def links_for(version_id: str) -> dict:
+        if version_id not in link_cache:
+            link_cache[version_id] = links_of(session, version_id)
+        return link_cache[version_id]
+
+    def chain_for(version_id: str, component: models.Component) -> list[dict]:
+        key = (version_id, component.id)
+        if key not in chain_cache:
+            chain_cache[key] = ancestry(session, version_id, component,
+                                        links=links_for(version_id))
+        return chain_cache[key]
+
+    def project_of(project_id):
+        if not project_id:
+            return None
+        if project_id not in projects:
+            projects[project_id] = session.get(models.Project, project_id)
+        return projects[project_id]
+
+    for finding in findings:
+        project = project_of(finding.project_id)
+        component = None
+        if finding.component_id:
+            component = components_cache.get(finding.component_id)
+            if component is None:
+                component = session.get(models.Component, finding.component_id)
+                if component is not None:
+                    components_cache[component.id] = component
+        version = (session.get(models.ProjectVersion, finding.last_seen_version_id)
+                   if finding.last_seen_version_id else None)
+        detail = _detail_of(finding)
+        fixed = detail.get("fixed_version") if isinstance(detail.get("fixed_version"), str) else None
+        severity = severity_vocab.canonical(finding.severity)
+        # Two in-memory shapes carry the score: the SBOM ingest writes
+        # `cvss_score`, the NVD runtime ingest writes `cvss`. Reading only one of
+        # them printed "no CVSS score" on every runtime CVE.
+        measured = detail.get("cvss_score")
+        if not isinstance(measured, (int, float)):
+            measured = detail.get("cvss")
+        if isinstance(measured, (int, float)):
+            observed_scores.append(float(measured))
+
+        if component is not None:
+            # A component is a package@version, so it is already per-version; the
+            # build label is the project version that carries it.
+            key = ("component", finding.project_id, component.id,
+                   version.id if version else "")
+        elif finding.asset_id:
+            key = ("asset", finding.asset_id)
+        else:
+            key = ("project", finding.project_id)
+
+        if key[0] == "asset":
+            bucket = assets.setdefault(key, {
+                "id": finding.asset_id,
+                "asset": None,
+                "project": ({"slug": project.slug, "name": project.name}
+                            if project else None),
+                "findings": 0, "open_findings": 0,
+                "severity": "UNKNOWN", "fixed_versions": set(),
+            })
+            if bucket["asset"] is None:
+                asset_row = session.get(models.Asset, finding.asset_id)
+                if asset_row is not None:
+                    bucket["asset"] = {"id": asset_row.id, "value": asset_row.value,
+                                       "type": asset_row.type}
+        else:
+            bucket = components.setdefault(key, {
+                "project": ({"slug": project.slug, "name": project.name}
+                            if project else None),
+                "component": ({"id": component.id, "name": component.name,
+                               "version": component.version, "purl": component.purl,
+                               "license": component.license}
+                              if component is not None else None),
+                "build": ({"id": version.id, "version": version.version}
+                          if version is not None else None),
+                "findings": 0, "open_findings": 0,
+                "severity": "UNKNOWN", "fixed_versions": set(),
+                # `direct` is the BOM's own claim; `chain` is the path that makes
+                # "upgrade this package" a decision somebody can take.
+                "direct": None, "chain": [],
+            })
+        bucket["findings"] += 1
+        if key[0] != "asset" and component is not None and version is not None:
+            link = links_for(version.id).get(component.id)
+            bucket["direct"] = bool(link.is_direct) if link is not None else None
+            bucket["chain"] = chain_for(version.id, component)
+        if not _settled(finding):
+            bucket["open_findings"] += 1
+        if severity_vocab.rank(severity) < severity_vocab.rank(bucket["severity"]):
+            bucket["severity"] = severity
+        if fixed:
+            bucket["fixed_versions"].add(fixed)
+
+    def rank(row):
+        return (severity_vocab.rank(row["severity"]), -row["open_findings"],
+                (row.get("project") or {}).get("slug") or "",
+                (row.get("component") or {}).get("name") or "",
+                (row.get("build") or {}).get("version") or "")
+
+    component_rows = []
+    for bucket in sorted(components.values(), key=rank):
+        bucket["fixed_versions"] = sorted(bucket["fixed_versions"])
+        bucket["fixable"] = bool(bucket["fixed_versions"])
+        component_rows.append(bucket)
+    asset_rows = []
+    for bucket in sorted(assets.values(), key=rank):
+        bucket["fixed_versions"] = sorted(bucket["fixed_versions"])
+        asset_rows.append(bucket)
+
+    occurrences = []
+    for finding in sorted(findings, key=lambda row: (severity_vocab.rank(
+            severity_vocab.canonical(row.severity)), row.project_id or "")):
+        project = project_of(finding.project_id)
+        component = components_cache.get(finding.component_id) if finding.component_id else None
+        version = (session.get(models.ProjectVersion, finding.last_seen_version_id)
+                   if finding.last_seen_version_id else None)
+        asset_row = session.get(models.Asset, finding.asset_id) if finding.asset_id else None
+        detail = _detail_of(finding)
+        occurrences.append({
+            "id": finding.id,
+            "title": finding.title,
+            "severity": severity_vocab.canonical(finding.severity),
+            "status": finding.status,
+            "settled": _settled(finding),
+            "project": project.slug if project else None,
+            "component": component.name if component is not None else None,
+            "component_version": component.version if component is not None else None,
+            "component_id": component.id if component is not None else None,
+            "build": version.version if version is not None else None,
+            "asset": ({"id": asset_row.id, "value": asset_row.value}
+                      if asset_row is not None else None),
+            "tool": finding.tool,
+            "path": finding.path,
+            "fixed_version": (detail.get("fixed_version")
+                              if isinstance(detail.get("fixed_version"), str) else None),
+            "first_seen_at": finding.first_seen_at.isoformat() if finding.first_seen_at else None,
+            "last_seen_at": finding.last_seen_at.isoformat() if finding.last_seen_at else None,
+        })
+
+    severity = _worst_severity([finding.severity for finding in findings])
+    enrichment = _enrichment(session, cve_id)
+    enrichment["kev"].update(_kev_detail(session, cve_id))
+    reachable = bool(asset_rows) or any(
+        row["project"] for row in component_rows)
+    project_ids = {finding.project_id for finding in findings if finding.project_id}
+    score = max(observed_scores) if observed_scores else None
+    # A score read off the vector is not a score the scanner quoted; the page says
+    # which one it has.
+    quoted = any(isinstance(_detail_of(finding).get("cvss_score"), (int, float))
+                 for finding in findings) or any(
+        row["cvss"]["known"] and not row["cvss"].get("derived") for row in rows)
+    return {
+        "cve_id": cve_id,
+        "ref": ref,
+        "signature": (rows[0]["signature"] if rows else cve_id),
+        "title": description,
+        "description": description,
+        "severity": severity,
+        "cvss": {"known": score is not None or bool(vectors),
+                 "score": score,
+                 "derived": score is not None and not quoted,
+                 "vector": vectors[0] if vectors else None,
+                 "reason": None if (score is not None or vectors)
+                 else "the scanner that reported it stated no CVSS score"},
+        "url": url,
+        "published": published.isoformat() if published else None,
+        "modified": modified.isoformat() if modified else None,
+        "sources": sorted({row.source for row in catalog if row.source}),
+        "advisory_rows": len(catalog),
+        "enrichment": enrichment,
+        "risk": _risk_of(severity, enrichment, reachable),
+        "affected": {
+            "components": component_rows,
+            "assets": asset_rows,
+            "totals": {"rows": len(component_rows),
+                       "components": len({row["component"]["id"] for row in component_rows
+                                          if row["component"]}),
+                       "project_level": sum(1 for row in component_rows if not row["component"]),
+                       "projects": len(project_ids),
+                       "builds": len({row["build"]["id"] for row in component_rows
+                                      if row["build"]}),
+                       "assets": len(asset_rows)},
+        },
+        "findings": occurrences,
+        "counters": {
+            "findings": len(findings),
+            "open": sum(1 for finding in findings if not _settled(finding)),
+            "fixable": bool(component_rows and all(row["fixable"] for row in component_rows)),
+            "kev": int(enrichment["kev"]["listed"]),
+        },
+        # Absence is stated with its reason: "no finding" is not "not affected".
+        "coverage": {
+            "estate": ("has findings" if findings else
+                       "no finding in this organization names this advisory"),
+            "note": (None if findings else
+                     "The estate list is built from findings, so an empty answer means "
+                     "no scan here reported it — not that the software is unaffected."),
+            "grouping": "one row per (project, component, build); assets answer for "
+                        "findings with no component",
+        },
+    }
+
+
+
 @router.get("/vulnerabilities")
 def list_vulnerabilities(project: str | None = Query(default=None),
                          vector: str | None = Query(default=None),
@@ -331,8 +665,13 @@ def list_vulnerabilities(project: str | None = Query(default=None),
                          offset: int = Query(default=0, ge=0),
                          org: models.Organization = Depends(auth.require_org),
                          session: Session = Depends(get_session)):
-    """Every problem once, with the occurrences behind it."""
-    rows = _groups(session, org, include_suppressed)
+    """Every vulnerability once, with the subjects that carry it.
+
+    The row is the vulnerability, not the package: `components`, `projects`,
+    `versions` and `locations` are the findings that connect it to our estate,
+    and the advisory page is where each of those is a line.
+    """
+    rows = _groups(session, org, include_suppressed, by="signature")
     if project:
         project_row = projects_ref.by_ref(session, org.id, project)
         if project_row is None:
@@ -406,6 +745,25 @@ def summary(org: models.Organization = Depends(auth.require_org),
         "by_risk": {label: sum(1 for row in rows if row["exposure"]["label"] == label)
                     for label in ("critical", "high", "medium", "low")},
     }}
+
+
+@router.get("/vulnerabilities/advisory/{ref}")
+def get_advisory(ref: str,
+                 include_suppressed: bool = Query(default=False),
+                 org: models.Organization = Depends(auth.require_org),
+                 session: Session = Depends(get_session)):
+    """One advisory as a page: what it says, and everything here it touches.
+
+    Unlike `GET /vulnerabilities/{ref}` — which answers the list's row — this
+    merges every bucket naming the same advisory, so a CVE present in three
+    packages answers once with three affected components.
+    """
+    dossier = _advisory_dossier(session, org, ref, include_suppressed)
+    if dossier is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "no advisory row, KEV entry or finding in this organization matches that id")
+    return {"data": dossier}
 
 
 @router.get("/vulnerabilities/{ref}")

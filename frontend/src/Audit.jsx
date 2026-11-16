@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { Pager, PageHeader, usePage } from './ui'
+import { useI18n } from './i18n'
 
 const ACTIONS = ['', 'authorization.', 'member.', 'remediation.', 'asset.',
   'easm.', 'vex.', 'intel.', 'suppression.', 'finding.']
 const PER_PAGE = 25
 
 export default function Audit() {
+  const { t, tCount } = useI18n()
   const [state, setState] = useState({ rows: [], total: 0, chain_ok: null,
     actor: '', action: '', since: '', until: '', q: '' })
   const [error, setError] = useState('')
@@ -37,30 +39,42 @@ export default function Audit() {
 
   return (
     <div className="stack">
-      <PageHeader title="Audit trail" />
+      <PageHeader title={t('audit.title')} />
       <div className="toolbar">
-        <input placeholder="actor…" value={state.actor}
+        <input placeholder={t('audit.filter.actor')} value={state.actor}
           onChange={(e) => setState((s) => ({ ...s, actor: e.target.value }))} />
         <select value={state.action} onChange={(e) => setState((s) => ({ ...s, action: e.target.value }))}>
-          {ACTIONS.map((a) => <option key={a} value={a}>{a || 'any action'}</option>)}
+          {ACTIONS.map((a) => (
+            <option key={a} value={a}>{a || t('audit.filter.anyAction')}</option>
+          ))}
         </select>
         <input type="date" value={state.since}
           onChange={(e) => setState((s) => ({ ...s, since: e.target.value }))} />
         <input type="date" value={state.until}
           onChange={(e) => setState((s) => ({ ...s, until: e.target.value }))} />
-        <input placeholder="search detail…" value={state.q}
+        <input placeholder={t('audit.filter.search')} value={state.q}
           onChange={(e) => setState((s) => ({ ...s, q: e.target.value }))} />
         <span className={`audit-chip ${state.chain_ok ? 'ok' : 'sev sev-critical'}`}>
-          {state.chain_ok === null ? 'checking…' : state.chain_ok ? 'chain verified' : 'CHAIN BROKEN'}
+          {state.chain_ok === null
+            ? t('audit.chain.checking')
+            : state.chain_ok ? t('audit.chain.verified') : t('audit.chain.broken')}
         </span>
-        <span className="count">{state.total} entries</span>
+        <span className="count">{tCount('audit.count', state.total)}</span>
         <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
-          total={paged.total} perPage={paged.perPage} unit="entries" className="row-end" />
+          total={paged.total} perPage={paged.perPage}
+          unit={t('audit.unit.entries')} className="row-end" />
       </div>
       {error && <div className="banner banner-error">{error}</div>}
       <table>
         <thead>
-          <tr><th>#</th><th>at</th><th>actor</th><th>action</th><th>detail (reason / policy)</th><th>hash</th></tr>
+          <tr>
+            <th>#</th>
+            <th>{t('audit.col.at')}</th>
+            <th>{t('audit.col.actor')}</th>
+            <th>{t('audit.col.action')}</th>
+            <th>{t('audit.col.detail')}</th>
+            <th>{t('audit.col.hash')}</th>
+          </tr>
         </thead>
         <tbody>
           {paged.rows.map((r) => (
@@ -72,7 +86,7 @@ export default function Audit() {
               <td>
                 {r.detail || '—'}
                 {r.detail && /\[policy v\d+\]/.test(r.detail) &&
-                  <span className="pill">{(r.detail.match(/\[policy v(\d+)\]/) || [])[1] && 'policy'}</span>}
+                  <span className="pill">{(r.detail.match(/\[policy v(\d+)\]/) || [])[1] && t('audit.col.policy')}</span>}
               </td>
               <td className="muted">{r.hash.slice(0, 10)}…</td>
             </tr>
@@ -80,8 +94,9 @@ export default function Audit() {
         </tbody>
       </table>
       <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
-        total={paged.total} perPage={paged.perPage} unit="entries" className="row-end" />
-      {!state.rows.length && !error && <p className="empty">No audit entries for these filters.</p>}
+        total={paged.total} perPage={paged.perPage}
+        unit={t('audit.unit.entries')} className="row-end" />
+      {!state.rows.length && !error && <p className="empty">{t('audit.empty')}</p>}
     </div>
   )
 }

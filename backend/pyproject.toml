@@ -19,10 +19,15 @@ dependencies = [
     # SMTP password with Fernet at import time, so an image without it cannot
     # boot the API at all.
     "cryptography>=42",
+    # Same rule: `app/ai/engine.py` imports httpx at module level, and the router
+    # imports the engine, so a production image without it dies on boot with
+    # `ModuleNotFoundError: No module named 'httpx'`. It lived only in the test
+    # extra, which is why a clean rebuild produced an image that could not start.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "httpx>=0.27"]
+test = ["pytest>=8"]
 
 [project.scripts]
 barad-platform = "backend.app.cli:main"
@@ -31,3 +36,9 @@ barad-platform = "backend.app.cli:main"
 where = ["src"]
 include = ["backend*"]
 namespaces = false
+
+# Data files the API reads at run time. A router that ships without its catalog
+# fails on the first request, not at boot — `surface_catalog.json` is the
+# published copy of Shauron's arsenal and belongs to the package, not the image.
+[tool.setuptools.package-data]
+"backend.app" = ["surface_catalog.json"]

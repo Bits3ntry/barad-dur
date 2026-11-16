@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
+import { useI18n } from './i18n'
 import { Card, Drawer, EmptyState, ErrorBanner, Loading, PageHeader, Stat } from './ui'
 
 /* Three levels, because a repository is not what anyone reports on:
@@ -11,8 +12,9 @@ import { Card, Drawer, EmptyState, ErrorBanner, Loading, PageHeader, Stat } from
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN']
 
 function SeverityStrip({ counts }) {
+  const { t } = useI18n()
   const shown = SEVERITIES.filter((severity) => counts[severity] > 0)
-  if (!shown.length) return <span className="pill">clean</span>
+  if (!shown.length) return <span className="pill">{t('portfolio.severity.clean')}</span>
   return (
     <div className="row" style={{ gap: 4 }}>
       {shown.map((severity) => (
@@ -40,6 +42,7 @@ function addRow(totals, row) {
 }
 
 function VersionDetail({ row, onClose, onNavigate }) {
+  const { t } = useI18n()
   const [findings, setFindings] = useState(null)
   const [error, setError] = useState('')
 
@@ -60,19 +63,19 @@ function VersionDetail({ row, onClose, onNavigate }) {
     <Drawer open title={`${row.project_name} · ${row.version}`} onClose={onClose}>
       <div className="stack">
         <div className="metrics">
-          <Stat label="components" value={row.components.total} />
-          <Stat label="vulnerable" value={row.findings.vulnerable_components}
+          <Stat label={t('portfolio.stat.components')} value={row.components.total} />
+          <Stat label={t('portfolio.stat.vulnerable')} value={row.findings.vulnerable_components}
             tone={row.findings.vulnerable_components ? 'warn' : ''} />
-          <Stat label="findings" value={row.findings.total} />
-          <Stat label="known exploited" value={row.findings.kev}
+          <Stat label={t('portfolio.stat.findings')} value={row.findings.total} />
+          <Stat label={t('portfolio.stat.kev')} value={row.findings.kev}
             tone={row.findings.kev ? 'bad' : ''} />
         </div>
 
-        <Card title="Severity of this version">
+        <Card title={t('portfolio.severity.title')}>
           <SeverityStrip counts={row.findings.by_severity} />
         </Card>
 
-        <Card title="Licenses">
+        <Card title={t('portfolio.licenses.title')}>
           <div className="row">
             {row.licenses.top.map((entry) => (
               <span className="pill" key={entry.license}>
@@ -81,15 +84,17 @@ function VersionDetail({ row, onClose, onNavigate }) {
             ))}
           </div>
           <p className="muted" style={{ marginTop: 8 }}>
-            {row.licenses.distinct} distinct licenses across {row.components.total} components
+            {t('portfolio.licenses.summary', {
+              distinct: row.licenses.distinct, total: row.components.total })}
           </p>
         </Card>
 
-        <Card title="Components with most findings">
+        <Card title={t('portfolio.components.title')}>
           {row.top_components.length ? (
             <table>
               <thead>
-                <tr><th>component</th><th>version</th><th>license</th><th>findings</th></tr>
+                <tr><th>{t('portfolio.col.component')}</th><th>{t('portfolio.col.version')}</th>
+                  <th>{t('portfolio.col.license')}</th><th>{t('portfolio.col.findings')}</th></tr>
               </thead>
               <tbody>
                 {row.top_components.map((component) => (
@@ -106,16 +111,18 @@ function VersionDetail({ row, onClose, onNavigate }) {
                 ))}
               </tbody>
             </table>
-          ) : <p className="muted">No component in this version carries a finding.</p>}
+          ) : <p className="muted">{t('portfolio.components.none')}</p>}
         </Card>
 
-        <Card title="Findings (worst first)"
+        <Card title={t('portfolio.findings.title')}
           actions={<button className="mini" onClick={() => onNavigate && onNavigate('findings')}>
-            open findings
+            {t('portfolio.findings.open')}
           </button>}>
           {error && <ErrorBanner error={error} />}
           {!findings && !error && <Loading rows={3} />}
-          {findings && !findings.length && <p className="muted">No open findings for this version.</p>}
+          {findings && !findings.length && (
+            <p className="muted">{t('portfolio.findings.none')}</p>
+          )}
           {worst.map((finding) => (
             <div className="occ-row" key={finding.id}>
               <span className={`sev sev-${(finding.severity || 'unknown').toLowerCase()}`}>
@@ -129,15 +136,15 @@ function VersionDetail({ row, onClose, onNavigate }) {
             </div>
           ))}
           {findings && findings.length > worst.length && (
-            <p className="muted">+{findings.length - worst.length} more — see Findings.</p>
+            <p className="muted">{t('portfolio.findings.more', { n: findings.length - worst.length })}</p>
           )}
         </Card>
 
         <p className="muted">
-          Last SBOM: {row.last_import
+          {t('portfolio.sbom.last', { when: row.last_import
             ? `${new Date(row.last_import.imported_at).toLocaleString()} (${row.last_import.source})`
-            : 'never imported'}
-          {row.is_latest ? ' · latest version' : ''}
+            : t('portfolio.sbom.never') })}
+          {row.is_latest ? ` · ${t('portfolio.sbom.latest')}` : ''}
         </p>
       </div>
     </Drawer>
@@ -146,6 +153,7 @@ function VersionDetail({ row, onClose, onNavigate }) {
 
 function GroupCard({ group, rows, selection, onSelect, onOpen, collapsed, onToggle,
                      onScan, scanning }) {
+  const { t, tCount } = useI18n()
   const [expanded, setExpanded] = useState(null)
 
   // One row per project: the version picked for it, else the latest.
@@ -169,35 +177,39 @@ function GroupCard({ group, rows, selection, onSelect, onOpen, collapsed, onTogg
     [chosen])
 
   return (
-    <Card title={`${group} · ${chosen.length} project${chosen.length === 1 ? '' : 's'}`}
+    <Card title={tCount('portfolio.group.title', chosen.length, { group })}
       actions={(
         <div className="row">
           <span className="count">
-            {collapsed ? `${totals.components} components · ${totals.findings} findings` : 'counted at latest or selected version'}
+            {collapsed
+              ? t('portfolio.group.totals', {
+                components: totals.components, findings: totals.findings })
+              : t('portfolio.group.countedAt')}
           </span>
           <button className="mini" onClick={onToggle}
             aria-expanded={!collapsed}
-            title={collapsed ? 'expand this group' : 'collapse this group'}>
-            {collapsed ? '▸ show' : '▾ hide'}
+            title={collapsed ? t('portfolio.group.expand') : t('portfolio.group.collapse')}>
+            {collapsed ? t('portfolio.group.show') : t('portfolio.group.hide')}
           </button>
         </div>
       )}>
       <div style={{ display: collapsed ? 'none' : 'block' }}>
       <div className="metrics" style={{ marginBottom: 12 }}>
-        <Stat label="components" value={totals.components} />
-        <Stat label="findings" value={totals.findings} />
-        <Stat label="critical" value={totals.by_severity.CRITICAL}
+        <Stat label={t('portfolio.stat.components')} value={totals.components} />
+        <Stat label={t('portfolio.stat.findings')} value={totals.findings} />
+        <Stat label={t('portfolio.stat.critical')} value={totals.by_severity.CRITICAL}
           tone={totals.by_severity.CRITICAL ? 'bad' : ''} />
-        <Stat label="high" value={totals.by_severity.HIGH}
+        <Stat label={t('portfolio.stat.high')} value={totals.by_severity.HIGH}
           tone={totals.by_severity.HIGH ? 'warn' : ''} />
-        <Stat label="known exploited" value={totals.kev} tone={totals.kev ? 'bad' : ''} />
+        <Stat label={t('portfolio.stat.kev')} value={totals.kev} tone={totals.kev ? 'bad' : ''} />
       </div>
 
       <table>
         <thead>
           <tr>
-            <th>project</th><th>version</th><th>components</th><th>severity</th>
-            <th>findings</th><th>kev</th><th></th>
+            <th>{t('portfolio.col.project')}</th><th>{t('portfolio.col.version')}</th>
+            <th>{t('portfolio.col.components')}</th><th>{t('portfolio.col.severity')}</th>
+            <th>{t('portfolio.col.findings')}</th><th>{t('portfolio.col.kev')}</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -207,11 +219,12 @@ function GroupCard({ group, rows, selection, onSelect, onOpen, collapsed, onTogg
                 <td className="title">{project}</td>
                 <td onClick={(event) => event.stopPropagation()}>
                   {versions.length > 1 ? (
-                    <select value={row.version} aria-label={`version for ${project}`}
+                    <select value={row.version} aria-label={t('portfolio.versionFor', { project })}
                       onChange={(event) => onSelect(project, event.target.value)}>
                       {versions.map((entry) => (
                         <option key={entry.version} value={entry.version}>
-                          {entry.version}{entry.is_latest ? ' · latest' : ''}
+                          {entry.version}{entry.is_latest
+                            ? ` · ${t('portfolio.version.latest')}` : ''}
                         </option>
                       ))}
                     </select>
@@ -220,8 +233,8 @@ function GroupCard({ group, rows, selection, onSelect, onOpen, collapsed, onTogg
                 <td className="num">{row.components.total}</td>
                 <td>
                   {row.findings.total === 0 && row.components.total > 0
-                    ? <span className="sev sev-medium" title="inventory imported, advisories not matched yet">
-                      not scanned
+                    ? <span className="sev sev-medium" title={t('portfolio.notScannedHint')}>
+                      {t('portfolio.notScanned')}
                     </span>
                     : <SeverityStrip counts={row.findings.by_severity} />}
                 </td>
@@ -238,12 +251,14 @@ function GroupCard({ group, rows, selection, onSelect, onOpen, collapsed, onTogg
                         event.stopPropagation()
                         setExpanded(expanded === project ? null : project)
                       }}>
-                        {expanded === project ? 'hide versions' : `${versions.length} versions`}
+                        {expanded === project
+                          ? t('portfolio.versions.hide')
+                          : tCount('portfolio.versions.count', versions.length)}
                       </button>
                     )}
                     <button className="mini" onClick={(event) => {
                       event.stopPropagation(); onOpen(row)
-                    }}>open</button>
+                    }}>{t('common.open')}</button>
                   </div>
                 </td>
               </tr>
@@ -252,15 +267,20 @@ function GroupCard({ group, rows, selection, onSelect, onOpen, collapsed, onTogg
                   <div className="detail">
                     <table>
                       <thead>
-                        <tr><th>version</th><th>components</th><th>findings</th>
-                          <th>kev</th><th>last sbom</th><th></th></tr>
+                        <tr><th>{t('portfolio.col.version')}</th>
+                          <th>{t('portfolio.col.components')}</th>
+                          <th>{t('portfolio.col.findings')}</th>
+                          <th>{t('portfolio.col.kev')}</th>
+                          <th>{t('portfolio.col.lastSbom')}</th><th></th></tr>
                       </thead>
                       <tbody>
                         {versions.map((entry) => (
                           <tr key={entry.version}
                             className={entry.version === row.version ? 'selected' : ''}>
                             <td className="mono">{entry.version}
-                              {entry.is_latest && <span className="muted"> · latest</span>}</td>
+                              {entry.is_latest && (
+                                <span className="muted"> · {t('portfolio.version.latest')}</span>
+                              )}</td>
                             <td className="num">{entry.components.total}</td>
                             <td className="num">{entry.findings.total}</td>
                             <td className="num">{entry.findings.kev || '—'}</td>
@@ -273,11 +293,14 @@ function GroupCard({ group, rows, selection, onSelect, onOpen, collapsed, onTogg
                               <div className="row">
                                 <button className="mini"
                                   onClick={() => onSelect(project, entry.version)}>
-                                  {entry.version === row.version ? 'counting this' : 'count this'}
+                                  {entry.version === row.version
+                                    ? t('portfolio.versions.countingThis')
+                                    : t('portfolio.versions.countThis')}
                                 </button>
                                 <button className="mini" disabled={!onScan}
                                   onClick={() => onScan(project, entry.version)}>
-                                  {scanning === `${project}@${entry.version}` ? 'scanning…' : 'scan OSV'}
+                                  {scanning === `${project}@${entry.version}`
+                                    ? t('portfolio.versions.scanning') : t('portfolio.versions.scan')}
                                 </button>
                               </div>
                             </td>
@@ -298,6 +321,7 @@ function GroupCard({ group, rows, selection, onSelect, onOpen, collapsed, onTogg
 }
 
 export default function ProjectsPortfolio({ onNavigate }) {
+  const { t } = useI18n()
   const [rows, setRows] = useState(null)
   const [latestTotals, setLatestTotals] = useState(null)
   const [error, setError] = useState('')
@@ -368,7 +392,7 @@ export default function ProjectsPortfolio({ onNavigate }) {
   if (!rows) {
     return (
       <div className="stack">
-        <PageHeader title="Projects" subtitle="Loading the portfolio…" />
+        <PageHeader title={t('portfolio.title')} subtitle={t('portfolio.loading')} />
         <Card>{error ? <ErrorBanner error={error} onRetry={load} /> : <Loading rows={5} />}</Card>
       </div>
     )
@@ -377,22 +401,27 @@ export default function ProjectsPortfolio({ onNavigate }) {
   return (
     <div className="stack">
       <PageHeader
-        title="Projects"
+        title={t('portfolio.title')}
         subtitle={latestTotals
-          ? `${groups.length} groups · ${latestTotals.projects} projects · `
-            + `${latestTotals.components} components · ${latestTotals.findings} findings`
-          : 'Portfolio'}
+          ? t('portfolio.subtitle', {
+            groups: groups.length,
+            projects: latestTotals.projects,
+            components: latestTotals.components,
+            findings: latestTotals.findings,
+          })
+          : t('portfolio.subtitleFallback')}
         actions={(
           <>
-            <input placeholder="filter group or project" value={filter}
+            <input placeholder={t('portfolio.filter')} value={filter}
               onChange={(event) => setFilter(event.target.value)} style={{ minWidth: 200 }} />
             <button onClick={() => rememberCollapsed(
               collapsed.size === groups.length
                 ? new Set()
                 : new Set(groups.map(([group]) => group)))}>
-              {collapsed.size === groups.length ? 'expand all' : 'collapse all'}
+              {collapsed.size === groups.length
+                ? t('portfolio.expandAll') : t('portfolio.collapseAll')}
             </button>
-            <button onClick={load}>refresh</button>
+            <button onClick={load}>{t('common.refresh')}</button>
           </>
         )}
       />
@@ -400,8 +429,7 @@ export default function ProjectsPortfolio({ onNavigate }) {
       {error && <ErrorBanner error={error} onRetry={load} />}
 
       {!groups.length && (
-        <EmptyState title="No project versions yet"
-          hint="Ingest an SBOM: the project and version are created from it." />
+        <EmptyState title={t('portfolio.empty.title')} hint={t('portfolio.empty.hint')} />
       )}
 
       {groups.map(([group, groupRows]) => (

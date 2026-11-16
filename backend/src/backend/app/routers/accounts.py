@@ -304,6 +304,14 @@ def login(request: Request, payload: LoginIn = None,
     if len(candidates) != 1:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
     user = candidates[0]
+    # A seat is what the org menu reads. Users created before seats existed — or
+    # by a path that has not been taught to open one — get it here, once, at the
+    # moment they prove they are who they say they are.
+    if (session.query(models.OrganizationMember)
+            .filter_by(org_id=user.org_id, user_id=user.id).one_or_none()) is None:
+        session.add(models.OrganizationMember(org_id=user.org_id, user_id=user.id,
+                                              role=user.role))
+        session.flush()
     if user.status != "active" or not user.password_hash or \
             not auth_local.verify_password(user.password_hash, payload.password):
         _audit_log(session, user.org_id, user.email, "auth.login_failed",

@@ -1,0 +1,23 @@
+# One runtime, many sessions. The base image already carries the whole toolset and
+# runs it as child processes (SHAURON_TOOL_RUNTIME=local), so this container never
+# needs the Docker socket and never loads a database driver.
+ARG BASE=shauron-worker:harness
+FROM ${BASE}
+
+USER root
+COPY deploy/field-runtime/fieldd.py /opt/fieldd/fieldd.py
+COPY deploy/field-runtime/entrypoint.sh /usr/local/bin/fieldd-entrypoint
+RUN chmod 0755 /opt/fieldd/fieldd.py /usr/local/bin/fieldd-entrypoint \
+ && mkdir -p /work \
+ && chown -R 65534:65534 /work /opt/fieldd /usr/local/bin/fieldd-entrypoint
+
+USER 65534
+ENV FIELD_LANES=4 \
+    FIELD_WORK_ROOT=/work \
+    SHAURON_TOOL_RUNTIME=local \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+VOLUME ["/work"]
+HEALTHCHECK --interval=20s --timeout=5s --start-period=10s \
+  CMD test -f /tmp/fieldd.healthy
+ENTRYPOINT ["/usr/local/bin/fieldd-entrypoint"]

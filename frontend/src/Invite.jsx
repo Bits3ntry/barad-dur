@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
 import { BrandMark } from './Login'
+import { useI18n } from './i18n'
 
 /* The public end of an invitation. Nothing here knows the workspace's data:
    the token resolves to one seat (organization name, role, email) and that is
@@ -13,6 +14,7 @@ function readToken() {
 }
 
 export default function Invite() {
+  const { t } = useI18n()
   const [token] = useState(readToken)
   const [invite, setInvite] = useState(null)
   const [error, setError] = useState('')
@@ -20,21 +22,21 @@ export default function Invite() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (!token) { setError('This link is missing its invitation token.'); return }
+    if (!token) { setError(t('invite.error.missingToken')); return }
     api.get(`/api/v1/auth/invitations/${encodeURIComponent(token)}`)
       .then((r) => setInvite(r.data))
-      .catch(() => setError('This invitation is unknown or has been removed.'))
+      .catch(() => setError(t('invite.error.unknown')))
   }, [token])
 
   async function accept(event) {
     event.preventDefault()
     setError('')
     if (form.password.length < 8) {
-      setError('Choose a password with at least 8 characters.')
+      setError(t('invite.error.password'))
       return
     }
     if (form.password !== form.confirm) {
-      setError('The two passwords do not match.')
+      setError(t('invite.error.mismatch'))
       return
     }
     setBusy(true)
@@ -68,53 +70,51 @@ export default function Invite() {
 
           {error && !invite && (
             <>
-              <h1 className="auth-h1">This link cannot be used</h1>
-              <p className="auth-sub">{error} Ask an administrator for a new invitation.</p>
+              <h1 className="auth-h1">{t('invite.error.title')}</h1>
+              <p className="auth-sub">{error} {t('invite.error.askAdmin')}</p>
             </>
           )}
 
-          {!invite && !error && <p className="auth-sub">Checking your invitation…</p>}
+          {!invite && !error && <p className="auth-sub">{t('invite.checking')}</p>}
 
           {invite && (
             <>
-              <span className="onb-kicker">Invitation</span>
-              <h1 className="auth-h1">Join {invite.org_name}</h1>
+              <span className="onb-kicker">{t('invite.kicker')}</span>
+              <h1 className="auth-h1">{t('invite.title', { org: invite.org_name })}</h1>
               <p className="auth-sub">
-                You were invited as <strong>{invite.role_label}</strong> with{' '}
-                <strong>{invite.email}</strong>.
-                {invite.expires_at && ` The link expires on ${new Date(invite.expires_at).toLocaleString()}.`}
+                {t('invite.sub.rolePrefix')}<strong>{invite.role_label}</strong>{t('invite.sub.emailJoin')}<strong>{invite.email}</strong>.
+                {invite.expires_at && ` ${t('invite.sub.expires', { date: new Date(invite.expires_at).toLocaleString() })}`}
               </p>
 
               {!invite.valid && (
                 <p className="banner banner-error">
-                  This invitation is {invite.status} and can no longer be accepted.
-                  Ask an administrator for a new one.
+                  {t('invite.invalidPre')}{invite.status}{t('invite.invalidPost')}
                 </p>
               )}
 
               {invite.valid && (
                 <form onSubmit={accept} className="onb-form">
                   <label>
-                    Your name
+                    {t('invite.field.name')}
                     <input value={form.display_name}
                       onChange={(e) => setForm({ ...form, display_name: e.target.value })}
-                      placeholder="How teammates will see you" autoComplete="name" />
+                      placeholder={t('invite.placeholder.name')} autoComplete="name" />
                   </label>
                   <label>
-                    Password
+                    {t('invite.field.password')}
                     <input type="password" value={form.password}
                       onChange={(e) => setForm({ ...form, password: e.target.value })}
-                      placeholder="At least 8 characters" autoComplete="new-password" />
+                      placeholder={t('invite.placeholder.password')} autoComplete="new-password" />
                   </label>
                   <label>
-                    Confirm password
+                    {t('invite.field.confirm')}
                     <input type="password" value={form.confirm}
                       onChange={(e) => setForm({ ...form, confirm: e.target.value })}
                       autoComplete="new-password" />
                   </label>
                   {error && <p className="banner banner-error">{error}</p>}
                   <button className="btn-primary" type="submit" disabled={busy}>
-                    {busy ? 'Joining…' : 'Accept and sign in'}
+                    {busy ? t('invite.busy') : t('invite.action')}
                   </button>
                 </form>
               )}

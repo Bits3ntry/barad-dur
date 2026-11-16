@@ -3,6 +3,7 @@ import { api } from './api'
 import {
   Dialog, EmptyState, ErrorBanner, Input, PageHeader, Pager, Table, Tabs, usePage,
 } from './ui'
+import { useI18n } from './i18n'
 
 /* Attack surface shows what was observed and never upgrades it into a claim:
    a 200 is an observed response, an excluded path is not evaluated, a lookalike
@@ -19,14 +20,15 @@ const STATE_TONE = {
   dismissed: 'muted',
 }
 
-export default function AttackSurface() {
+export default function AttackSurface({ onNavigate }) {
+  const { t, tOr } = useI18n()
   const [tab, setTab] = useState('web')
   const [endpoints, setEndpoints] = useState([])
   const [webCounters, setWebCounters] = useState({})
   const [note, setNote] = useState('')
+  const [noteKey, setNoteKey] = useState('')
   const [lookalikes, setLookalikes] = useState([])
   const [lookCounts, setLookCounts] = useState({})
-  const [review, setReview] = useState([])
   const [weekly, setWeekly] = useState(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -40,30 +42,23 @@ export default function AttackSurface() {
   // table keeps its own place while the reader moves between tabs.
   const pagedEndpoints = usePage(endpoints, 25)
   const pagedLookalikes = usePage(lookalikes, 25)
-  const pagedReview = usePage(review, 25)
+
 
   useEffect(() => {
     if (tab === 'web') loadWeb()
     if (tab === 'lookalikes') loadLookalikes()
-    if (tab === 'review') loadReview()
     if (tab === 'weekly') loadWeekly()
   }, [tab])
 
   function loadWeb() {
     api.get('/api/v1/attack-surface/web-endpoints')
-      .then((r) => { setEndpoints(r.data || []); setWebCounters(r.counters || {}); setNote(r.note || '') })
+      .then((r) => { setEndpoints(r.data || []); setWebCounters(r.counters || {}); setNote(r.note || ''); setNoteKey(r.note_key || '') })
       .catch((e) => setError(String(e.message || e)))
   }
 
   function loadLookalikes() {
     api.get('/api/v1/attack-surface/lookalikes')
       .then((r) => { setLookalikes(r.data || []); setLookCounts(r.counts || {}) })
-      .catch((e) => setError(String(e.message || e)))
-  }
-
-  function loadReview() {
-    api.get('/api/v1/attack-surface/review')
-      .then((r) => setReview(r.data || []))
       .catch((e) => setError(String(e.message || e)))
   }
 
@@ -104,37 +99,35 @@ export default function AttackSurface() {
     }
   }
 
-  async function submitReview() {
-    if (!decide?.asset) return
-    try {
-      await api.post(`/api/v1/attack-surface/review/${decide.asset.id}`, {
-        action: decision.action, reason: decision.reason || null, actor: 'console',
-      })
-      setNotice(`${decide.asset.value} → ${decision.action}`)
-      setDecide(null)
-      loadReview()
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-  }
+  const stateLabel = (value) => tOr(`attackSurface.state.${value}`,
+    String(value || '').replaceAll('_', ' '))
 
   return (
     <div className="stack">
       <PageHeader
-        title="Attack surface"
-        subtitle="Observed surface and pending ownership decisions · no screen here runs a collector"
+        title={t('attackSurface.title')}
+        subtitle={t('attackSurface.subtitle')}
+        actions={onNavigate && (
+          // This screen was a sidebar door of its own; the surface of the estate
+          // is read from Assets, and the ownership queue it used to duplicate
+          // lives in Assets → Needs attention.
+          <button className="btn-ghost" onClick={() => onNavigate('assets')}>
+            {t('nav.assets')} ←
+          </button>
+        )}
       />
 
       <Tabs
         tabs={[
-          { id: 'web', label: 'Web surface' },
-          { id: 'lookalikes', label: 'Lookalikes' },
-          { id: 'review', label: `Review${review.length ? ` (${review.length})` : ''}` },
-          { id: 'weekly', label: 'Weekly summary' },
+          { id: 'web', label: t('attackSurface.tab.web') },
+          { id: 'lookalikes', label: t('attackSurface.tab.lookalikes') },
+          { id: 'weekly', label: t('attackSurface.tab.weekly') },
         ]}
         active={tab}
         onChange={setTab}
       />
+
+      <p className="muted">{t('attackSurface.review.moved')}</p>
 
       {error && <ErrorBanner error={error} />}
       {notice && <div className="banner banner-ok">{notice}</div>}
@@ -142,20 +135,22 @@ export default function AttackSurface() {
       {tab === 'web' && (
         <>
           <div className="toolbar">
-            <span className="pill">{webCounters.endpoints || 0} endpoints</span>
-            <span className="pill">{webCounters.origins || 0} origins</span>
-            <span className="pill">{webCounters.new_last_7d || 0} new in 7d</span>
-            <span className="pill">{webCounters.not_evaluated || 0} not evaluated</span>
-            <span className="pill">{webCounters.confirmed || 0} confirmed</span>
+            <span className="pill">{t('attackSurface.counter.endpoints', { n: webCounters.endpoints || 0 })}</span>
+            <span className="pill">{t('attackSurface.counter.origins', { n: webCounters.origins || 0 })}</span>
+            <span className="pill">{t('attackSurface.counter.new7d', { n: webCounters.new_last_7d || 0 })}</span>
+            <span className="pill">{t('attackSurface.counter.notEvaluated', { n: webCounters.not_evaluated || 0 })}</span>
+            <span className="pill">{t('attackSurface.counter.confirmed', { n: webCounters.confirmed || 0 })}</span>
             <span className="spacer" />
-            <button className="mini" onClick={loadWeb}>refresh</button>
+            <button className="mini" onClick={loadWeb}>{t('common.refresh')}</button>
             <Pager page={pagedEndpoints.page} pages={pagedEndpoints.pages}
               onChange={pagedEndpoints.setPage} total={pagedEndpoints.total}
-              perPage={pagedEndpoints.perPage} unit="endpoints" className="row-end" />
+              perPage={pagedEndpoints.perPage} unit={t('attackSurface.unit.endpoints')} className="row-end" />
           </div>
-          {note && <p className="muted">{note}</p>}
+          {note && <p className="muted">{tOr(noteKey, note)}</p>}
           {endpoints.length ? (
-            <Table head={['origin', 'path', 'method', 'status', 'state', 'last observed', '']}>
+            <Table head={[t('attackSurface.col.origin'), t('attackSurface.col.path'),
+              t('attackSurface.col.method'), t('attackSurface.col.status'),
+              t('attackSurface.col.state'), t('attackSurface.col.lastObserved'), '']}>
               {pagedEndpoints.rows.map((row) => (
                 <tr key={row.id}>
                   <td className="mono">{row.origin}</td>
@@ -164,7 +159,7 @@ export default function AttackSurface() {
                   <td className="muted">{row.status_code || '—'}</td>
                   <td>
                     <span className={STATE_TONE[row.state] || 'pill'}>
-                      {row.state.replaceAll('_', ' ')}
+                      {stateLabel(row.state)}
                     </span>
                     {row.evidence && (
                       <div className="muted" style={{ fontSize: 11.5 }}>{row.evidence}</div>
@@ -177,18 +172,18 @@ export default function AttackSurface() {
                     <button className="mini" onClick={() => {
                       setEndpointState(row)
                       setEndpointForm({ state: row.state, reason: '', finding_id: row.finding_id || '' })
-                    }}>state</button>
+                    }}>{t('attackSurface.web.state')}</button>
                   </td>
                 </tr>
               ))}
             </Table>
           ) : (
-            !error && <EmptyState title="No web paths imported"
-              hint="Use POST /api/v1/attack-surface/web-endpoints with a crawler or report output. An empty list means no crawling has been imported." />
+            !error && <EmptyState title={t('attackSurface.web.empty.title')}
+              hint={t('attackSurface.web.empty.hint')} />
           )}
           <Pager page={pagedEndpoints.page} pages={pagedEndpoints.pages}
             onChange={pagedEndpoints.setPage} total={pagedEndpoints.total}
-            perPage={pagedEndpoints.perPage} unit="endpoints" className="row-end" />
+            perPage={pagedEndpoints.perPage} unit={t('attackSurface.unit.endpoints')} className="row-end" />
         </>
       )}
 
@@ -199,15 +194,17 @@ export default function AttackSurface() {
               <span key={key} className="pill">{key} {value}</span>
             ))}
             <span className="spacer" />
-            <span className="muted">
-              passive only: DNS/CT evidence, never an HTTP contact
-            </span>
+            <span className="muted">{t('attackSurface.lookalikes.note')}</span>
             <Pager page={pagedLookalikes.page} pages={pagedLookalikes.pages}
               onChange={pagedLookalikes.setPage} total={pagedLookalikes.total}
-              perPage={pagedLookalikes.perPage} unit="candidates" className="row-end" />
+              perPage={pagedLookalikes.perPage} unit={t('attackSurface.unit.candidates')} className="row-end" />
           </div>
           {lookalikes.length ? (
-            <Table head={['root', 'candidate', 'similarity', 'registration', 'state', '']}>
+            <Table head={[t('attackSurface.lookalikes.col.root'),
+              t('attackSurface.lookalikes.col.candidate'),
+              t('attackSurface.lookalikes.col.similarity'),
+              t('attackSurface.lookalikes.col.registration'),
+              t('attackSurface.lookalikes.col.state'), '']}>
               {pagedLookalikes.rows.map((row) => (
                 <tr key={row.id}>
                   <td className="mono">{row.root_domain}</td>
@@ -217,12 +214,13 @@ export default function AttackSurface() {
                     {row.registration_state}
                     {row.last_checked_at && (
                       <div style={{ fontSize: 11.5 }}>
-                        checked {new Date(row.last_checked_at).toLocaleDateString()}
+                        {t('attackSurface.lookalikes.checked',
+                          { date: new Date(row.last_checked_at).toLocaleDateString() })}
                       </div>
                     )}
                   </td>
                   <td>
-                    <span className={STATE_TONE[row.state] || 'pill'}>{row.state}</span>
+                    <span className={STATE_TONE[row.state] || 'pill'}>{stateLabel(row.state)}</span>
                     {row.review_reason && (
                       <div className="muted" style={{ fontSize: 11.5 }}>{row.review_reason}</div>
                     )}
@@ -231,144 +229,94 @@ export default function AttackSurface() {
                     <button className="mini" onClick={() => {
                       setDecide(row)
                       setDecision({ action: 'external', reason: '' })
-                    }}>review</button>
+                    }}>{t('attackSurface.lookalikes.review')}</button>
                   </td>
                 </tr>
               ))}
             </Table>
           ) : (
-            !error && <EmptyState title="No lookalikes"
-              hint="Import a watched root domain and its candidates; DNS resolving alone is never treated as registration or malice." />
+            !error && <EmptyState title={t('attackSurface.lookalikes.empty.title')}
+              hint={t('attackSurface.lookalikes.empty.hint')} />
           )}
           <Pager page={pagedLookalikes.page} pages={pagedLookalikes.pages}
             onChange={pagedLookalikes.setPage} total={pagedLookalikes.total}
-            perPage={pagedLookalikes.perPage} unit="candidates" className="row-end" />
+            perPage={pagedLookalikes.perPage} unit={t('attackSurface.unit.candidates')} className="row-end" />
         </>
       )}
 
-      {tab === 'review' && (
-        <>
-          <p className="muted">
-            Assets whose ownership is unsettled. Confirming an asset is ours does not
-            authorize testing it, and an IP observed under a domain may belong to a CDN.
-          </p>
-          <div className="toolbar">
-            <Pager page={pagedReview.page} pages={pagedReview.pages}
-              onChange={pagedReview.setPage} total={pagedReview.total}
-              perPage={pagedReview.perPage} unit="assets" className="row-end" />
-          </div>
-          {review.length ? (
-            <Table head={['asset', 'type', 'source', 'classification', 'observations', '']}>
-              {pagedReview.rows.map((row) => (
-                <tr key={row.asset.id}>
-                  <td className="title mono">{row.asset.value}</td>
-                  <td className="muted">{row.asset.type}</td>
-                  <td className="muted">{row.asset.source}</td>
-                  <td>
-                    <span className="sev sev-medium">{row.asset.classification_status}</span>
-                  </td>
-                  <td>{row.observations}</td>
-                  <td>
-                    <button className="mini" onClick={() => {
-                      setDecide(row)
-                      setDecision({ action: 'confirm', reason: '' })
-                    }}>decide</button>
-                  </td>
-                </tr>
-              ))}
-            </Table>
-          ) : (
-            !error && <EmptyState title="Nothing to review"
-              hint="Every asset has a settled ownership decision." />
-          )}
-          <Pager page={pagedReview.page} pages={pagedReview.pages}
-            onChange={pagedReview.setPage} total={pagedReview.total}
-            perPage={pagedReview.perPage} unit="assets" className="row-end" />
-        </>
-      )}
 
       {tab === 'weekly' && weekly && (
         <div className="detail">
           <dl>
-            <dt>window</dt><dd className="muted">last {weekly.window_days} days</dd>
-            <dt>changes</dt>
+            <dt>{t('attackSurface.weekly.window')}</dt>
+            <dd className="muted">{t('attackSurface.weekly.lastDays', { n: weekly.window_days })}</dd>
+            <dt>{t('attackSurface.weekly.changes')}</dt>
             <dd>
               {Object.entries(weekly.changes).length
                 ? Object.entries(weekly.changes).map(([key, value]) => (
-                  <span key={key} className="pill">{key.replaceAll('_', ' ')} {value}</span>
+                  <span key={key} className="pill">{stateLabel(key)} {value}</span>
                 ))
-                : <span className="muted">no comparable changes in the window</span>}
+                : <span className="muted">{t('attackSurface.weekly.noChanges')}</span>}
             </dd>
-            <dt>new paths</dt><dd>{weekly.new_paths}</dd>
-            <dt>lookalike candidates</dt><dd>{weekly.lookalike_candidates}</dd>
-            <dt>open exposures</dt><dd>{weekly.open_exposures}</dd>
-            <dt>coverage gaps</dt><dd>{weekly.coverage_notes}</dd>
-            <dt>delivery</dt>
-            <dd className={weekly.delivery.configured ? '' : 'sev sev-medium'}>
-              {weekly.delivery.configured
-                ? 'configured'
-                : `not configured — ${weekly.delivery.reason}`}
+            <dt>{t('attackSurface.weekly.newPaths')}</dt><dd>{weekly.new_paths}</dd>
+            <dt>{t('attackSurface.weekly.lookalikes')}</dt><dd>{weekly.lookalike_candidates}</dd>
+            <dt>{t('attackSurface.weekly.exposures')}</dt><dd>{weekly.open_exposures}</dd>
+            <dt>{t('attackSurface.weekly.coverageGaps')}</dt><dd>{weekly.coverage_notes}</dd>
+            <dt>{t('attackSurface.weekly.delivery')}</dt>
+            <dd>
+              {/* A sentence never wears a badge: `.sev` is nowrap, and a long
+                  reason pushed the page sideways at 700px. */}
+              <span className={weekly.delivery.configured ? 'pill' : 'sev sev-medium'}>
+                {weekly.delivery.configured
+                  ? t('attackSurface.weekly.configured')
+                  : t('attackSurface.weekly.deliveryOff')}
+              </span>
+              {!weekly.delivery.configured && (
+                <span className="muted"> {tOr(weekly.delivery.reason_key,
+                  t('attackSurface.weekly.notConfigured', { reason: weekly.delivery.reason }))}</span>
+              )}
             </dd>
           </dl>
         </div>
       )}
 
-      <Dialog open={Boolean(endpointState)} title={`State for ${endpointState?.path || ''}`}
+      <Dialog open={Boolean(endpointState)}
+        title={t('attackSurface.stateDialog.title', { path: endpointState?.path || '' })}
         onClose={() => setEndpointState(null)} onConfirm={submitEndpointState}
-        confirmLabel="set state">
+        confirmLabel={t('attackSurface.stateDialog.confirm')}>
         <div className="stack">
           <select value={endpointForm.state}
             onChange={(e) => setEndpointForm((s) => ({ ...s, state: e.target.value }))}>
-            <option value="candidate">candidate</option>
-            <option value="observed">observed</option>
-            <option value="confirmed_finding">confirmed finding</option>
-            <option value="excluded">excluded</option>
-            <option value="not_evaluated">not evaluated</option>
+            <option value="candidate">{stateLabel('candidate')}</option>
+            <option value="observed">{stateLabel('observed')}</option>
+            <option value="confirmed_finding">{stateLabel('confirmed_finding')}</option>
+            <option value="excluded">{stateLabel('excluded')}</option>
+            <option value="not_evaluated">{stateLabel('not_evaluated')}</option>
           </select>
-          <Input label="finding id (required for confirmed finding)"
+          <Input label={t('attackSurface.stateDialog.findingId')}
             value={endpointForm.finding_id}
             onChange={(value) => setEndpointForm((s) => ({ ...s, finding_id: value }))} />
-          <Input label="reason (required for excluded / not evaluated)" textarea rows={2}
+          <Input label={t('attackSurface.stateDialog.reason')} textarea rows={2}
             value={endpointForm.reason}
             onChange={(value) => setEndpointForm((s) => ({ ...s, reason: value }))} />
         </div>
       </Dialog>
 
-      <Dialog open={Boolean(decide) && Boolean(decide?.asset)}
-        title={`Review ${decide?.asset?.value || ''}`}
-        onClose={() => setDecide(null)} onConfirm={submitReview} confirmLabel="apply">
+      <Dialog open={Boolean(decide)}
+        title={t('attackSurface.reviewDialog.title', { name: decide?.candidate || '' })}
+        onClose={() => setDecide(null)} onConfirm={submitLookalike}
+        confirmLabel={t('attackSurface.apply')}>
         <div className="stack">
           <select value={decision.action}
             onChange={(e) => setDecision((d) => ({ ...d, action: e.target.value }))}>
-            <option value="confirm">confirm ownership</option>
-            <option value="external">external / not ours</option>
-            <option value="discard">discard</option>
+            <option value="confirm">{t('attackSurface.lookalikeDialog.confirm')}</option>
+            <option value="external">{t('attackSurface.lookalikeDialog.external')}</option>
+            <option value="dismiss">{t('attackSurface.lookalikeDialog.dismiss')}</option>
           </select>
-          <Input label="reason (required for external / discard)" textarea rows={3}
+          <Input label={t('attackSurface.lookalikeDialog.reason')} textarea rows={3}
             value={decision.reason}
             onChange={(value) => setDecision((d) => ({ ...d, reason: value }))} />
-          <span className="muted">
-            Ownership is inventory truth, not authorization.
-          </span>
-        </div>
-      </Dialog>
-
-      <Dialog open={Boolean(decide) && !decide?.asset}
-        title={`Review ${decide?.candidate || ''}`}
-        onClose={() => setDecide(null)} onConfirm={submitLookalike} confirmLabel="apply">
-        <div className="stack">
-          <select value={decision.action}
-            onChange={(e) => setDecision((d) => ({ ...d, action: e.target.value }))}>
-            <option value="confirm">confirm impersonation</option>
-            <option value="external">external — not ours</option>
-            <option value="dismiss">dismiss</option>
-          </select>
-          <Input label="reason (required for external / dismiss)" textarea rows={3}
-            value={decision.reason}
-            onChange={(value) => setDecision((d) => ({ ...d, reason: value }))} />
-          <span className="muted">
-            Lookalikes are never contacted and never added to scope.
-          </span>
+          <span className="muted">{t('attackSurface.lookalikeDialog.note')}</span>
         </div>
       </Dialog>
     </div>

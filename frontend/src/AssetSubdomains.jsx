@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useI18n } from './i18n'
 
 /* ─────────────────────── the children, listed instead of counted ───────────────────────
 
@@ -30,6 +31,7 @@ function certTone(days) {
 }
 
 function Row({ row, onOpen }) {
+  const { t } = useI18n()
   const seen = stamp(row.observed_at)
   return (
     <li>
@@ -38,7 +40,7 @@ function Row({ row, onOpen }) {
         <span className="sub-meta">
           {row.addresses.length > 0
             ? <span className="mono muted">{row.addresses.join(', ')}</span>
-            : <span className="muted">no address</span>}
+            : <span className="muted">{t('assets.subdomains.noAddress')}</span>}
           {row.ports > 0 && <span className="pill">{row.ports} port(s)</span>}
           {row.products > 0 && <span className="pill">{row.products} product(s)</span>}
           {row.certificate_days != null && (
@@ -82,22 +84,23 @@ export function SubdomainDrawer({ open, onClose, rows = [], total = 0, assetValu
   return (
     <div className="sub-drawer-scrim" onClick={onClose} role="presentation">
       <aside className="sub-drawer" onClick={(event) => event.stopPropagation()}
-             role="dialog" aria-modal="true" aria-label="subdomains">
+             role="dialog" aria-modal="true" aria-label={t('assets.subdomains.title')}>
         <header className="sub-drawer-head">
           <div>
-            <h2 className="sub-drawer-title">subdomains</h2>
+            <h2 className="sub-drawer-title">{t('assets.subdomains.title')}</h2>
             <p className="muted small">
               {filtered.length === total
-                ? `${total} under ${assetValue}`
-                : `${filtered.length} of ${total} under ${assetValue}`}
+                ? t('assets.subdomains.count', { total, asset: assetValue })
+                : t('assets.subdomains.countFiltered',
+                  { shown: filtered.length, total, asset: assetValue })}
             </p>
           </div>
-          <button className="ghost mini" onClick={onClose} aria-label="close">✕</button>
+          <button className="ghost mini" onClick={onClose} aria-label={t('common.close')}>✕</button>
         </header>
-        <input className="sub-drawer-filter" placeholder="filter by name or address"
+        <input className="sub-drawer-filter" placeholder={t('assets.subdomains.filter')}
                value={query} onChange={(event) => setQuery(event.target.value)} />
         {!rows.length ? (
-          <p className="empty">no subdomain is known for this name yet</p>
+          <p className="empty">{t('assets.subdomains.empty')}</p>
         ) : !filtered.length ? (
           <p className="empty">nothing matches “{query}”</p>
         ) : (
@@ -114,11 +117,12 @@ export function SubdomainDrawer({ open, onClose, rows = [], total = 0, assetValu
 }
 
 export default function SubdomainCard({ rows = [], total = 0, onOpenAll, onOpenOne }) {
+  const { t } = useI18n()
   const preview = rows.slice(0, 4)
   return (
     <div className="sub-preview">
       {!rows.length ? (
-        <p className="hint">no subdomain is known for this name yet.</p>
+        <p className="hint">{t('assets.subdomains.emptyLong')}</p>
       ) : (
         <ul className="sub-list">
           {preview.map((row) => (

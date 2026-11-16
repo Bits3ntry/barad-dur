@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { useI18n } from './i18n'
 import { PageHeader } from './ui'
 
 export default function Regression() {
+  const { t, tOr } = useI18n()
   const [tests, setTests] = useState([])
   const [runs, setRuns] = useState({})
   const [error, setError] = useState('')
@@ -44,7 +46,7 @@ export default function Regression() {
       await history(row)
       if (result.reintroduced) {
         setReintroduced(true)
-        setReintroducedMsg('REGRESSION: this check passed before and now fails.')
+        setReintroducedMsg(t('regression.reintroducedMsg'))
       } else {
         setReintroduced(false)
         setReintroducedMsg('')
@@ -61,14 +63,41 @@ export default function Regression() {
 
   return (
     <div className="stack">
-      <PageHeader title="Security regression" />
+      <PageHeader title={t('regression.title')} subtitle={t('regression.lead')} />
       <div className="toolbar">
-        <span className="count">{tests.length} checks</span>
-        <button onClick={load}>refresh</button>
+        <span className="count">{t('regression.checkCount', { n: tests.length })}</span>
+        <button onClick={load}>{t('common.refresh')}</button>
       </div>
       {error && <div className="banner banner-error">{error}</div>}
+      {/* A regression suite answers one question — did the fix survive — so the
+          line below it is that answer, not a tally of checks. The vocabulary is
+          the runner's (`passed` / `failed` / `error`), not the shorter one this
+          screen assumed: comparing against `pass` counted every green check as a
+          failure and printed "fallan: 3" beside three rows reading "passed". */}
+      {tests.length > 0 && (
+        <p className={`run-verdict ${tests.some((row) => row.last_run?.reintroduced) ? 'bad'
+          : tests.some((row) => row.last_run && row.last_run.result !== 'passed') ? 'warn' : 'ok'}`}>
+          {t('regression.verdict', {
+            passing: tests.filter((row) => row.last_run?.result === 'passed').length,
+            failing: tests.filter((row) => row.last_run?.result === 'failed').length,
+            back: tests.filter((row) => row.last_run?.reintroduced).length,
+            never: tests.filter((row) => !row.last_run).length,
+          })}
+          {tests.some((row) => row.last_run?.result === 'error')
+            ? ` · ${t('regression.verdictErrors',
+              { n: tests.filter((row) => row.last_run?.result === 'error').length })}`
+            : ''}
+        </p>
+      )}
       <table>
-        <thead><tr><th>check</th><th>suite</th><th>method</th><th>target</th><th>last run</th><th></th></tr></thead>
+        <thead><tr>
+          <th>{t('regression.column.check')}</th>
+          <th>{t('regression.column.suite')}</th>
+          <th>{t('regression.column.method')}</th>
+          <th>{t('regression.column.target')}</th>
+          <th>{t('regression.column.lastRun')}</th>
+          <th />
+        </tr></thead>
         <tbody>
           {tests.map((row) => (
             <React.Fragment key={row.id}>
@@ -80,27 +109,32 @@ export default function Regression() {
                 <td>
                   {row.last_run
                     ? <span className={`status st-${row.last_run.result}`}>
-                        {row.last_run.result}{row.last_run.reintroduced ? ' (reintroduced)' : ''}
+                        {tOr(`regression.result.${row.last_run.result}`, row.last_run.result)}
+                        {row.last_run.reintroduced ? t('regression.reintroducedTag') : ''}
                       </span>
-                    : <span className="muted">never</span>}
+                    : <span className="muted">{t('common.never')}</span>}
                 </td>
                 <td>
-                  <button className="mini" onClick={() => run(row)}>run</button>{' '}
-                  <button className="mini" onClick={() => history(row)}>history</button>
+                  <button className="mini" onClick={() => run(row)}>{t('regression.run')}</button>{' '}
+                  <button className="mini" onClick={() => history(row)}>{t('regression.history')}</button>
                 </td>
               </tr>
               {runs[row.id] && (
                 <tr className="detail-row"><td colSpan={6}>
                   <div className="detail">
                     <dl>
-                      <dt>runs ({runs[row.id].length})</dt>
+                      <dt>{t('regression.runsCount', { n: runs[row.id].length })}</dt>
                       <dd>
                         {runs[row.id].map((r) => (
                           <div key={r.id} className="occ-row">
                             {new Date(r.ran_at).toLocaleString()} — {' '}
-                            <span className={`status st-${r.result}`}>{r.result}</span>{' '}
+                            <span className={`status st-${r.result}`}>
+                              {tOr(`regression.result.${r.result}`, r.result)}
+                            </span>{' '}
                             HTTP {r.http_status ?? '—'} · {r.latency_ms}ms
-                            {r.reintroduced && <strong className="error"> reintroduced</strong>}
+                            {r.reintroduced && (
+                              <strong className="error"> {t('regression.reintroduced')}</strong>
+                            )}
                             {r.error && <span className="muted"> · {r.error}</span>}
                           </div>
                         ))}
@@ -113,28 +147,26 @@ export default function Regression() {
           ))}
         </tbody>
       </table>
-      {!tests.length && !error && <p className="empty">No regression checks yet.</p>}
-      <h2 className="section">new regression check</h2>
+      {!tests.length && !error && <p className="empty">{t('regression.empty')}</p>}
+      <h2 className="section">{t('regression.section.new')}</h2>
       <p className="muted small">
-        Execution requires an active authorization grant for the target
-        (capability active_verification); mutating methods also need
-        intrusive_testing.
+        {t('regression.authNote')}
       </p>
       <div className="card">
-        <input placeholder="check name" value={form.name}
+        <input placeholder={t('regression.field.name')} value={form.name}
           onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-        <input placeholder="https://target/path" value={form.url} style={{ minWidth: 320 }}
+        <input placeholder={t('regression.field.url')} value={form.url} style={{ minWidth: 320 }}
           onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))} />
         <select value={form.method} onChange={(e) => setForm((f) => ({ ...f, method: e.target.value }))}>
           {['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
-        <input placeholder="suite" value={form.suite}
+        <input placeholder={t('regression.field.suite')} value={form.suite}
           onChange={(e) => setForm((f) => ({ ...f, suite: e.target.value }))} />
-        <input type="number" placeholder="expected status" value={form.expectStatus}
+        <input type="number" placeholder={t('regression.field.expectStatus')} value={form.expectStatus}
           onChange={(e) => setForm((f) => ({ ...f, expectStatus: e.target.value }))} />
-        <input placeholder="body must NOT contain" value={form.bodyMustNotContain}
+        <input placeholder={t('regression.field.bodyMustNotContain')} value={form.bodyMustNotContain}
           onChange={(e) => setForm((f) => ({ ...f, bodyMustNotContain: e.target.value }))} />
-        <button onClick={createTest}>create check</button>
+        <button onClick={createTest}>{t('regression.create')}</button>
       </div>
     </div>
   )

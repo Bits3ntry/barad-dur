@@ -1,0 +1,26 @@
+# The worker pool lives in Swarm (one service, N replicas); this compose file only
+# runs the thing that scales it.
+#
+#   docker compose -f docker/docker-compose.worker.yml up -d
+#
+# `restart: unless-stopped` is what makes the pool self-healing end to end: Swarm
+# keeps the replicas alive, compose keeps the scaler alive, and neither depends on
+# a terminal being open.
+services:
+  scaler:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.scaler
+    image: shauron-scaler:latest
+    container_name: shauron-scaler
+    restart: unless-stopped
+    environment:
+      SHAURON_PLATFORM: ${SHAURON_PLATFORM:-http://host.docker.internal:8090}
+      SHAURON_BARAD_KEY: ${SHAURON_BARAD_KEY:?set SHAURON_BARAD_KEY to an API key with orchestration access}
+      SHAURON_WORKER_SERVICE: ${SHAURON_WORKER_SERVICE:-shauron-worker}
+    volumes:
+      # The one privileged mount in the whole deployment, and it belongs to a
+      # 120-line script whose only job is `docker service scale`.
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

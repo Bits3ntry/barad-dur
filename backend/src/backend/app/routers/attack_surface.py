@@ -180,7 +180,8 @@ def list_endpoints(origin: str | None = Query(default=None),
     return {"data": [_endpoint_data(row) for row in rows], "total": len(rows),
             "origins": origins, "counters": counters,
             "note": ("a 200 is an observed response, not a vulnerability; "
-                     "excluded paths were not evaluated")}
+                     "excluded paths were not evaluated"),
+            "note_key": "attackSurface.note.endpoints"}
 
 
 class EndpointStateIn(BaseModel):
@@ -463,6 +464,7 @@ def weekly_summary(org: models.Organization = Depends(auth.require_org),
                      "open_exposures": open_events,
                      "coverage_notes": len(listing["coverage_notes"]),
                      "delivery": {"configured": False,
+                                  "reason_key": "attackSurface.weekly.notWired",
                                   "reason": ("no notification channel and no scheduler "
                                              "are wired for the digest; this endpoint is "
                                              "a query, not a delivery")}}}

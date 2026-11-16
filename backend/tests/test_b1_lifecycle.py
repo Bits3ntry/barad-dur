@@ -129,6 +129,47 @@ def test_remediation_single_open_task_contract(client):
     assert tasks == {"Rotate leaked credentials": "resolved", "Follow-up": "resolved"}
 
 
+def test_the_task_sheet_edits_one_thing_at_a_time(client):
+    """Owner-only and title-only edits, and the history that proves who did what.
+
+    The first version required `status` on every PATCH, so renaming a task meant
+    restating a status the caller had not chosen — and a stale copy of it in the
+    screen could move the task back a column without anyone touching it.
+    """
+    test_client, key, session = client
+    task = test_client.post("/api/v1/remediation/tasks",
+                            json={"title": "Rotate leaked credentials"},
+                            headers={"X-API-Key": key}).json()["data"]
+    headers = {"X-API-Key": key}
+
+    renamed = test_client.patch(f"/api/v1/remediation/tasks/{task['id']}",
+                                json={"title": "Rotate the leaked deploy key",
+                                      "changed_by": "santiago"}, headers=headers)
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["data"]["status"] == "open"
+
+    owned = test_client.patch(f"/api/v1/remediation/tasks/{task['id']}",
+                              json={"owner": "santiago", "changed_by": "santiago"},
+                              headers=headers)
+    assert owned.json()["data"]["owner"] == "santiago"
+    # An empty owner unassigns: the sheet has to be able to say "nobody".
+    cleared = test_client.patch(f"/api/v1/remediation/tasks/{task['id']}",
+                                json={"owner": "", "changed_by": "santiago"},
+                                headers=headers)
+    assert cleared.json()["data"]["owner"] is None
+
+    assert test_client.patch(f"/api/v1/remediation/tasks/{task['id']}",
+                             json={}, headers=headers).status_code == 422
+
+    detail = test_client.get(f"/api/v1/remediation/tasks/{task['id']}",
+                             headers=headers).json()["data"]
+    actions = [row["action"] for row in detail["history"]]
+    assert "remediation.created" in actions
+    assert "remediation.renamed" in actions
+    assert "remediation.owner" in actions
+    assert detail["created_at"] and detail["updated_at"]
+
+
 def test_unlink_leaves_history(client):
     test_client, key, session = client
     _ingest(test_client, key, [

@@ -228,15 +228,29 @@ def _gate(config: dict, force: bool, counters: dict) -> bool:
 
 def _feeds(session: Session, config: dict, counters: dict,
            kev_fetch, epss_fetch) -> None:
-    """KEV and EPSS are deployment-wide: one fetch serves every organization."""
+    """KEV and EPSS are deployment-wide: one fetch serves every organization.
+
+    KEV is merged from every catalogue in `kev_feeds` (CISA, EU KEV, VulnCheck…),
+    so a single publisher being down is recorded against its own name instead of
+    abandoning the sweep — the point of a second source is to survive the first one
+    failing. `kev_fetch` stays as an override for tests and callers that hold their
+    own rows.
+    """
     now = models.utcnow()
     if config["kev"]:
-        from backend.app.routers.intelligence import fetch_kev
+        from backend.app import kev_feeds
         try:
-            rows = (kev_fetch or fetch_kev)()
-            for row in rows:
-                session.merge(models.KevEntry(**row, fetched_at=now))
-                counters["kev_rows"] += 1
+            if kev_fetch is not None:
+                counters["kev_rows"] += kev_feeds.apply(
+                    session, kev_fetch(), now=now, source=kev_feeds.CISA)
+            else:
+                result = kev_feeds.sync(session, now=now)
+                counters["kev_rows"] += result["rows"]
+                for item in result["sources"]:
+                    if not item["ok"]:
+                        counters["errors"].append({
+                            "source": f"kev:{item['source']}",
+                            "error": item.get("error") or "failed"})
         except Exception as error:  # noqa: BLE001 — a feed outage is a fact, not a crash
             counters["errors"].append({"source": "kev",
                                        "error": f"{type(error).__name__}: {error}"})

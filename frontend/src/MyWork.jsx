@@ -1,26 +1,42 @@
 import React, { useEffect, useState } from 'react'
-import { api } from './api'
+import { api, actorName } from './api'
 import {
   Dialog, EmptyState, ErrorBanner, Input, PageHeader, Pager, SeverityBadge, Table,
   Tabs, usePage,
 } from './ui'
+import { useI18n } from './i18n'
 
 /* My work is six trays over persisted rows: findings assigned to me, work items
    awaiting my review, requests I made, acceptances about to expire and my
    tasks. A tray count is the length of the list beside it, always. */
 
 const TRAYS = [
-  { id: 'assigned_to_me', label: 'Assigned to me' },
-  { id: 'awaiting_my_review', label: 'Awaiting my review' },
-  { id: 'requested_by_me', label: 'Requested by me' },
-  { id: 'acceptances_expiring', label: 'Acceptances expiring' },
-  { id: 'my_tasks', label: 'My tasks' },
-  { id: 'my_team', label: 'Organization queue' },
+  { id: 'assigned_to_me', labelKey: 'myWork.tray.assigned' },
+  { id: 'awaiting_my_review', labelKey: 'myWork.tray.awaitingReview' },
+  { id: 'requested_by_me', labelKey: 'myWork.tray.requested' },
+  { id: 'acceptances_expiring', labelKey: 'myWork.tray.acceptancesExpiring' },
+  { id: 'my_tasks', labelKey: 'myWork.tray.myTasks' },
+  { id: 'my_team', labelKey: 'myWork.tray.team' },
 ]
 
+/* The decision verbs are values in the payload and labels on screen: the table
+   stays, the label is resolved at render. */
+const ACTIONS = [
+  { value: 'approve', labelKey: 'myWork.decide.action.approve' },
+  { value: 'reject', labelKey: 'myWork.decide.action.reject' },
+  { value: 'withdraw', labelKey: 'myWork.decide.action.withdraw' },
+  { value: 'remind', labelKey: 'myWork.decide.action.remind' },
+  { value: 'start', labelKey: 'myWork.decide.action.start' },
+  { value: 'complete', labelKey: 'myWork.decide.action.complete' },
+]
+const ACTION_LABEL_KEY = Object.fromEntries(ACTIONS.map((a) => [a.value, a.labelKey]))
+
 export default function MyWork() {
+  const { t, tOr } = useI18n()
+  // Default to the person signed in. A tray asked as "console" is empty by
+  // construction: the work is assigned to an address, and the address is the session.
   const [actor, setActor] = useState(
-    () => localStorage.getItem('barad.actor') || 'console')
+    () => localStorage.getItem('barad.actor') || actorName())
   const [trays, setTrays] = useState({})
   const [tab, setTab] = useState('assigned_to_me')
   const [window72, setWindow72] = useState(false)
@@ -39,7 +55,17 @@ export default function MyWork() {
     const params = new URLSearchParams({ actor: actor.trim() || 'console' })
     if (window72) params.set('due_within_hours', '72')
     api.get(`/api/v1/my-work?${params}`)
-      .then((r) => setTrays(r.data.trays || {}))
+      .then((r) => {
+        const next = r.data.trays || {}
+        setTrays(next)
+        // Open on a tray that has something in it: landing on an empty "assigned
+        // to me" while 600 tasks wait one tab over reads like a broken screen.
+        setTab((current) => {
+          if ((next[current]?.count || 0) > 0) return current
+          const first = TRAYS.find((tray) => (next[tray.id]?.count || 0) > 0)
+          return first ? first.id : current
+        })
+      })
       .catch((e) => setError(String(e.message || e)))
   }
 
@@ -62,7 +88,7 @@ export default function MyWork() {
       })
       setCreating(false)
       setForm({ kind: 'task', title: '', assignee: '', reviewer: '', due_at: '' })
-      setNotice('work item created')
+      setNotice(t('myWork.notice.created'))
       load()
     } catch (e) {
       setError(String(e.message || e))
@@ -75,7 +101,9 @@ export default function MyWork() {
       await api.post(`/api/v1/my-work/items/${decide.id}/decide`, {
         action: decision.action, reason: decision.reason || null, actor,
       })
-      setNotice(`${decision.action} applied`)
+      setNotice(t('myWork.notice.decisionApplied', {
+        action: ACTION_LABEL_KEY[decision.action] ? t(ACTION_LABEL_KEY[decision.action]) : decision.action,
+      }))
       setDecide(null)
       setDecision({ action: 'approve', reason: '' })
       load()
@@ -91,28 +119,28 @@ export default function MyWork() {
     ? (current.findings || []) : (current.items || []), 25)
   const pagerNode = (
     <Pager page={paged.page} pages={paged.pages} onChange={paged.setPage}
-      total={paged.total} perPage={paged.perPage} unit="rows" />
+      total={paged.total} perPage={paged.perPage} unit={t('unit.rows')} />
   )
 
   return (
     <div className="stack">
       <PageHeader
-        title="My work"
-        subtitle="Queues built from assignments, requests, tasks and acceptances — no static mock"
-        actions={<button className="primary-action" onClick={() => setCreating(true)}>new work item</button>}
+        title={t('myWork.title')}
+        subtitle={t('myWork.subtitle')}
+        actions={<button className="primary-action" onClick={() => setCreating(true)}>{t('myWork.newItem')}</button>}
       />
 
       <div className="toolbar">
-        <label className="field-label" htmlFor="actor">acting as</label>
+        <label className="field-label" htmlFor="actor">{t('myWork.actingAs')}</label>
         <input id="actor" value={actor} style={{ minWidth: 180 }}
           onChange={(e) => remember(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && load()} />
         <label className="check">
           <input type="checkbox" checked={window72}
             onChange={(e) => { setWindow72(e.target.checked) }} />
-          <span>next 72h (including overdue)</span>
+          <span>{t('myWork.window72')}</span>
         </label>
-        <button className="mini" onClick={load}>refresh</button>
+        <button className="mini" onClick={load}>{t('common.refresh')}</button>
         <span className="row-end">{pagerNode}</span>
       </div>
 
@@ -121,7 +149,7 @@ export default function MyWork() {
 
       <Tabs
         tabs={TRAYS.map((tray) => ({
-          id: tray.id, label: `${tray.label} (${(trays[tray.id] || {}).count || 0})`,
+          id: tray.id, label: `${t(tray.labelKey)} (${(trays[tray.id] || {}).count || 0})`,
         }))}
         active={tab}
         onChange={setTab}
@@ -129,22 +157,22 @@ export default function MyWork() {
 
       {tab === 'assigned_to_me' && (
         (current.findings || []).length ? (
-          <Table head={['finding', 'severity', 'status', 'SLA']}>
+          <Table head={[t('myWork.col.finding'), t('common.severity'), t('common.status'), t('myWork.col.sla')]}>
             {paged.rows.map((row) => (
               <tr key={row.id}>
                 <td className="title">{row.title || row.id.slice(0, 8)}</td>
                 <td><SeverityBadge severity={row.severity} /></td>
-                <td className="muted">{row.status}</td>
+                <td className="muted">{tOr('status.' + row.status, row.status)}</td>
                 <td className="muted">
                   {row.sla_deadline
-                    ? new Date(row.sla_deadline).toLocaleDateString() : 'no SLA'}
+                    ? new Date(row.sla_deadline).toLocaleDateString() : t('myWork.noSla')}
                 </td>
               </tr>
             ))}
           </Table>
         ) : (
-          !error && <EmptyState title="Nothing assigned to you"
-            hint="Assign a finding to this identity and it appears here." />
+          !error && <EmptyState title={t('myWork.empty.assigned.title')}
+            hint={t('myWork.empty.assigned.hint')} />
         )
       )}
       {tab === 'assigned_to_me' && paged.pages > 1 && (
@@ -156,28 +184,29 @@ export default function MyWork() {
           {trays[tab]?.note && <p className="muted">{trays[tab].note}</p>}
           {trays[tab]?.window_days && (
             <p className="muted">
-              acceptances are listed when they expire within {trays[tab].window_days} days
+              {t('myWork.acceptancesWindow', { n: trays[tab].window_days })}
             </p>
           )}
           {(current.items || []).length ? (
-            <Table head={['title', 'kind', 'status', 'due', 'assignee', 'reviewer', '']}>
+            <Table head={[t('myWork.col.title'), t('myWork.col.kind'), t('common.status'),
+              t('myWork.col.due'), t('myWork.col.assignee'), t('myWork.col.reviewer'), '']}>
               {paged.rows.map((row) => (
                 <tr key={row.id}>
                   <td className="title">
                     {row.title}
                     {row.finding && (
                       <div className="muted" style={{ fontSize: 11.5 }}>
-                        finding: {row.finding.title}
+                        {t('myWork.item.finding', { title: row.finding.title })}
                       </div>
                     )}
                   </td>
-                  <td><span className="pill">{row.kind}</span></td>
-                  <td className="muted">{row.status}</td>
+                  <td><span className="pill">{tOr('myWork.kind.' + row.kind, row.kind)}</span></td>
+                  <td className="muted">{tOr('status.' + row.status, row.status)}</td>
                   <td className="muted">
                     {row.due_at ? new Date(row.due_at).toLocaleString() : '—'}
                     {row.valid_until && (
                       <div style={{ fontSize: 11.5 }}>
-                        valid until {new Date(row.valid_until).toLocaleDateString()}
+                        {t('myWork.item.validUntil', { date: new Date(row.valid_until).toLocaleDateString() })}
                       </div>
                     )}
                   </td>
@@ -188,14 +217,14 @@ export default function MyWork() {
                       setDecide(row)
                       setDecision({ action: row.reviewer === actor ? 'approve' : 'remind',
                         reason: '' })
-                    }}>act</button>
+                    }}>{t('myWork.action.act')}</button>
                   </td>
                 </tr>
               ))}
             </Table>
           ) : (
-            !error && <EmptyState title="This tray is empty"
-              hint="A tray shows only rows you are entitled to see for this identity." />
+            !error && <EmptyState title={t('myWork.empty.tray.title')}
+              hint={t('myWork.empty.tray.hint')} />
           )}
         </>
       )}
@@ -203,46 +232,44 @@ export default function MyWork() {
         <div className="row row-end">{pagerNode}</div>
       )}
 
-      <Dialog open={creating} title="New work item"
-        onClose={() => setCreating(false)} onConfirm={createItem} confirmLabel="create">
+      <Dialog open={creating} title={t('myWork.dialog.newTitle')}
+        onClose={() => setCreating(false)} onConfirm={createItem} confirmLabel={t('myWork.dialog.create')}>
         <div className="stack">
           <select value={form.kind}
             onChange={(e) => setForm((s) => ({ ...s, kind: e.target.value }))}>
-            <option value="task">task</option>
-            <option value="request">decision request</option>
-            <option value="acceptance">acceptance</option>
-            <option value="review">review</option>
+            <option value="task">{t('myWork.kind.task')}</option>
+            <option value="request">{t('myWork.kind.request')}</option>
+            <option value="acceptance">{t('myWork.kind.acceptance')}</option>
+            <option value="review">{t('myWork.kind.review')}</option>
           </select>
-          <Input label="title" value={form.title}
+          <Input label={t('myWork.field.title')} value={form.title}
             onChange={(v) => setForm((s) => ({ ...s, title: v }))} />
-          <Input label="assignee" value={form.assignee}
+          <Input label={t('myWork.field.assignee')} value={form.assignee}
             onChange={(v) => setForm((s) => ({ ...s, assignee: v }))} />
-          <Input label="reviewer" value={form.reviewer}
-            hint="must be somebody other than the requester"
+          <Input label={t('myWork.field.reviewer')} value={form.reviewer}
+            hint={t('myWork.field.reviewerHint')}
             onChange={(v) => setForm((s) => ({ ...s, reviewer: v }))} />
-          <Input label="due" type="date" value={form.due_at}
+          <Input label={t('myWork.field.due')} type="date" value={form.due_at}
             onChange={(v) => setForm((s) => ({ ...s, due_at: v }))} />
         </div>
       </Dialog>
 
-      <Dialog open={Boolean(decide)} title={`Act on ${decide?.title || ''}`}
+      <Dialog open={Boolean(decide)} title={t('myWork.decide.title', { title: decide?.title || '' })}
         onClose={() => setDecide(null)} onConfirm={submitDecision}
-        confirmLabel={decision.action}>
+        confirmLabel={ACTION_LABEL_KEY[decision.action]
+          ? t(ACTION_LABEL_KEY[decision.action]) : decision.action}>
         <div className="stack">
           <select value={decision.action}
             onChange={(e) => setDecision((d) => ({ ...d, action: e.target.value }))}>
-            <option value="approve">approve</option>
-            <option value="reject">reject</option>
-            <option value="withdraw">withdraw (requester)</option>
-            <option value="remind">remind (requester, once an hour)</option>
-            <option value="start">start</option>
-            <option value="complete">complete</option>
+            {ACTIONS.map((action) => (
+              <option key={action.value} value={action.value}>{t(action.labelKey)}</option>
+            ))}
           </select>
-          <Input label="reason (required for approve / reject)" textarea rows={3}
+          <Input label={t('myWork.decide.reason')} textarea rows={3}
             value={decision.reason}
             onChange={(v) => setDecision((d) => ({ ...d, reason: v }))} />
           <span className="muted">
-            Self-approval is refused by the backend, not by hiding the button.
+            {t('myWork.decide.selfApproval')}
           </span>
         </div>
       </Dialog>

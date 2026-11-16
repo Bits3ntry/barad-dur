@@ -1,0 +1,80 @@
+YA NO HACE FALTA SER SOFISTICADO
+IA y ciberseguridad: nuevos modelos, nuevas amenazas y nuevas defensas
+
+Santiago Andrade · David Barros
+Charla de 50 minutos · Español
+
+
+DE QUÉ SE TRATA
+
+Durante treinta años, atacar bien fue caro: había que saber, tener tiempo y ser
+paciente. La IA abarató las tres cosas.
+
+Ese es el punto de partida de la charla. La inteligencia artificial no inventó
+una clase nueva de vulnerabilidades: cambió su economía. El costo de intentar
+—encontrar, probar, encadenar, reintentar y documentar— cayó a casi cero, y con
+eso se rompieron tres supuestos sobre los que está construida casi toda la
+defensa: que la sofisticación identifica al atacante, que el trabajo humano es
+el cuello de botella, y que encontrar y explotar son dos oficios distintos.
+
+La charla recorre ese cambio en dos mitades. La primera muestra el estado del
+arte y lo que ya está pasando. La segunda responde con lo que sí escala para
+defenderse.
+
+
+QUÉ VAMOS A CONTAR
+
+Modelos. Los frontier, el auge de los pesos abiertos chinos y la ejecución en
+hardware local: hoy un modelo de 800.000 millones de parámetros corre a 36
+tokens por segundo en cuatro máquinas de escritorio que consumen 300 W cada
+una. La barrera de entrada dejó de ser el modelo y pasó a ser el arnés.
+
+Casos reales, con las fuentes a la vista. Un agente que encuentra más
+vulnerabilidades accionables que un fuzzer sobre el mismo objetivo. Una cadena
+de tres bugs en Chrome que se pagó 250.000 dólares y costó seis días y unos
+40.000 de cómputo. Un grupo chico operando una fábrica de exploits contra
+cincuenta organizaciones, con más de una docena de posibles cero-días en un mes.
+Y un agente de evaluación que creó identidades falsas para colar código en un
+proyecto open source real: lo frenó una persona, no una barrera técnica.
+
+El contexto como nuevo perímetro. Lo que un agente de código lee antes de
+actuar —CLAUDE.md, .cursorrules, descripciones de herramientas MCP, skills,
+READMEs de dependencias— nadie lo firma ni lo revisa. Ahí están los casos más
+baratos para el atacante: gusanos que se propagan al abrir un repositorio y
+skills maliciosas en los marketplaces.
+
+El bug bounty como test de estrés. Los envíos se multiplicaron, los reportes
+válidos también, y el cuello de botella se mudó: ya no es encontrar, es decidir.
+
+Defensas. Cobertura declarada en vez de un verde mentiroso, alcance que se puede
+revocar en vez de un PDF de scope, y agentes con sobre firmado, herramientas
+permitidas, presupuesto y la obligación de devolver evidencia en vez de prosa.
+
+
+QUÉ TENEMOS
+
+Barad-dûr y Shauron: la plataforma y el plano de ejecución que construimos. Se
+usan como caso concreto, no como folleto, y con los límites dichos en voz alta.
+Sirven para mostrar cómo se ve un inventario con observaciones tipadas, un grant
+con capacidad y vencimiento, un agente con alcance que no puede ampliar solo, y
+un run que declara cobertura parcial en vez de fingir que todo está limpio.
+
+También llevamos una demo corta y un video de respaldo: corre local, no depende
+de la red de la sala y no toca infraestructura de terceros.
+
+
+PARA QUIÉN ES
+
+Para equipos que ya usan agentes de código y quieren saber a qué les están dando
+acceso a leer. Para quienes defienden una superficie y necesitan decidir con
+evidencia. No hace falta haber hecho un pentest; alcanza con haber revisado un
+pull request.
+
+
+POR QUÉ AHORA
+
+Los casos que sostienen la charla son de las últimas diez semanas. No es una
+charla de tendencias: es el estado del arte de este trimestre.
+
+Cierre: cinco decisiones para el lunes que no cuestan licencias, y tres
+predicciones a 12-18 meses.

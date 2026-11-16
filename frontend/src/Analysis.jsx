@@ -5,6 +5,7 @@ import {
   EmptyState, ErrorBanner, PageHeader, Pager, Select, SeverityBadge, Table, Tabs,
   serverPager,
 } from './ui'
+import { useI18n } from './i18n'
 
 /* The analysis viewer shows what an imported report plus the supplied code
    snapshot can actually prove: the file tree of what was analysed, the code we
@@ -21,14 +22,16 @@ const CLASS_STYLES = {
 }
 
 function Classification({ value }) {
+  const { t, tOr } = useI18n()
   return (
     <span className={CLASS_STYLES[value] || 'muted'}>
-      {value === 'no_reference' ? 'no reference' : value}
+      {value === 'no_reference' ? t('analysis.class.noReference') : tOr('analysis.class.' + value, value)}
     </span>
   )
 }
 
 export default function Analysis({ projects, onOpenFinding, focusRun }) {
+  const { t, tCount, tOr } = useI18n()
   const [project, setProject] = useState('')
   const [runs, setRuns] = useState([])
   const [run, setRun] = useState(null)
@@ -156,76 +159,78 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
   return (
     <div className="stack">
       <PageHeader
-        title="Code analysis"
-        subtitle="Imported SARIF and OpenGrep reports, with the code snapshot and diff the importer supplied"
+        title={t('analysis.title')}
+        subtitle={t('analysis.subtitle')}
       />
 
       <div className="toolbar">
         <select value={project} onChange={(e) => setProject(e.target.value)}>
-          <option value="">pick a project</option>
+          <option value="">{t('analysis.pickProject')}</option>
           {projects.map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
         </select>
-        <button className="mini" onClick={loadRuns}>refresh</button>
+        <button className="mini" onClick={loadRuns}>{t('common.refresh')}</button>
         <span className="muted">
-          Runs are recorded by the import endpoint; nothing here executes code.
+          {t('analysis.runsNote')}
         </span>
         <span className="row-end">
           <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
-            total={pager.total} perPage={PER_PAGE} unit="runs" />
+            total={pager.total} perPage={PER_PAGE} unit={t('unit.runs')} />
         </span>
       </div>
 
       {error && <ErrorBanner error={error} />}
 
       {runs.length ? (
-        <Table head={['when', 'tool', 'coverage', 'revision · branch', 'origin', 'findings', 'baseline', '']}>
+        <Table head={[t('analysis.col.when'), t('analysis.col.tool'), t('analysis.col.coverage'),
+          t('analysis.col.revision'), t('analysis.col.origin'), t('analysis.col.findings'),
+          t('analysis.col.baseline'), '']}>
           {runs.map((row) => (
             <tr key={row.id} className={run?.id === row.id ? 'selected' : ''}>
               <td className="muted">{new Date(row.created_at).toLocaleString()}</td>
               <td className="title">
                 {row.tool}
                 <div className="muted" style={{ fontSize: 11.5 }}>
-                  {row.tool_version || 'version unknown'}
+                  {row.tool_version || t('analysis.versionUnknown')}
                   {row.report_format ? ` · ${row.report_format}` : ''}
                 </div>
               </td>
               <td>
                 <span className={row.coverage === 'full' ? 'pill' : 'sev sev-medium'}>
-                  {row.coverage}
+                  {tOr('coverage.' + row.coverage, row.coverage)}
                 </span>
               </td>
               <td className="mono muted">
                 {row.revision ? row.revision.slice(0, 10) : '—'}
                 <div style={{ fontSize: 11.5 }}>
-                  {row.branch || 'branch unknown'}
+                  {row.branch || t('analysis.branchUnknown')}
                   {row.pull_request ? ` · PR ${row.pull_request}` : ''}
                 </div>
               </td>
               <td className="muted" style={{ fontSize: 12 }}>
                 {row.repository
                   ? <span title={row.repository.remote_url || ''}>{row.repository.name}</span>
-                  : 'no repository'}
+                  : t('analysis.noRepository')}
               </td>
               <td>{row.findings_seen}</td>
               <td className="muted">
-                {row.base_run_id ? 'comparable base' : 'no reference'}
+                {row.base_run_id ? t('analysis.comparableBase') : t('analysis.noReference')}
               </td>
               <td>
                 <button className="mini" onClick={() => openRun(row)}>
-                  {run?.id === row.id ? 'hide' : 'open'}
+                  {run?.id === row.id ? t('analysis.action.hide') : t('analysis.action.open')}
                 </button>
               </td>
             </tr>
           ))}
         </Table>
       ) : (
-        !error && <EmptyState title="No analysis imported yet"
-          hint="POST a SARIF or OpenGrep JSON report to /api/v1/analysis/import with optional code snapshots and a diff. Without a baseline nothing is labelled new or resolved." />
+        !error && <EmptyState title={t('analysis.empty.runs.title')}
+          hint={t('analysis.empty.runs.hint')} />
       )}
       {pager.pages > 1 && (
         <div className="row row-end" style={{ marginTop: 10 }}>
           <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
-            total={pager.total} perPage={PER_PAGE} unit="runs" />
+            total={pager.total} perPage={PER_PAGE} unit={t('unit.runs')} />
         </div>
       )}
 
@@ -233,9 +238,9 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
         <>
           <Tabs
             tabs={[
-              { id: 'code', label: `files (${files.length})` },
-              { id: 'diff', label: 'diff' },
-              { id: 'findings', label: 'results' },
+              { id: 'code', label: t('analysis.tab.files', { n: files.length }) },
+              { id: 'diff', label: t('analysis.tab.diff') },
+              { id: 'findings', label: t('analysis.tab.results') },
             ]}
             active={tab}
             onChange={loadTab}
@@ -244,7 +249,7 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
           {tab === 'code' && (
             <div className="detail">
               <dl>
-                <dt>files</dt>
+                <dt>{t('analysis.field.files')}</dt>
                 <dd>
                   {files.length ? files.map((item) => (
                     <div key={item.path} className="occ-row">
@@ -254,19 +259,19 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
                       {' '}
                       <span className="muted">
                         {item.kind === 'reported-only'
-                          ? 'referenced, no snapshot'
-                          : `${item.line_count} lines`}
-                        {' · '}{item.findings} result(s)
+                          ? t('analysis.file.referenced')
+                          : tCount('analysis.file.lines', item.line_count)}
+                        {' · '}{tCount('analysis.file.results', item.findings)}
                       </span>
-                      {path === item.path && <span className="pill">open</span>}
+                      {path === item.path && <span className="pill">{t('common.open')}</span>}
                     </div>
-                  )) : <span className="muted">the report carried no file references</span>}
+                  )) : <span className="muted">{t('analysis.file.noReferences')}</span>}
                 </dd>
-                <dt>source</dt>
+                <dt>{t('common.source')}</dt>
                 <dd>
                   {!contentAvailable && (
                     <span className="muted">
-                      no code snapshot was supplied for this run: only locations can be shown
+                      {t('analysis.source.noSnapshot')}
                     </span>
                   )}
                   {file && file.available ? (
@@ -283,7 +288,7 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
                             </span>
                             {hit && (
                               <span className="muted" style={{ fontSize: 11.5 }}>
-                                {hit.rule_id} · {hit.cwe || 'no CWE'} · {hit.message}
+                                {hit.rule_id} · {hit.cwe || t('analysis.noCwe')} · {hit.message}
                               </span>
                             )}
                           </div>
@@ -292,7 +297,7 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
                     </div>
                   ) : (
                     <span className="muted">
-                      {file ? file.reason : 'pick a file with an available snapshot'}
+                      {file ? file.reason : t('analysis.file.pick')}
                     </span>
                   )}
                 </dd>
@@ -304,9 +309,12 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
             diff && diff.available ? (
               <div className="detail">
                 <dl>
-                  <dt>touched lines</dt>
+                  <dt>{t('analysis.diff.touched')}</dt>
                   <dd className="muted">
-                    {diff.touched_lines.added} added · {diff.touched_lines.removed} removed
+                    {t('analysis.diff.counts', {
+                      added: diff.touched_lines.added,
+                      removed: diff.touched_lines.removed,
+                    })}
                     {' · '}{diff.note}
                   </dd>
                   {diff.files.map((entry) => (
@@ -333,12 +341,12 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
                         ))}
                         {entry.findings.length > 0 && (
                           <div className="occ-row">
-                            <span className="muted">findings in this file: </span>
+                            <span className="muted">{t('analysis.diff.findingsInFile')}</span>
                             {entry.findings.map((finding) => (
                               <button key={finding.id} className="pill"
                                 onClick={() => finding.finding_id && onOpenFinding?.(finding.finding_id)}>
                                 {finding.line}: {finding.rule_id}
-                                {finding.on_modified_line ? ' (on a changed line)' : ''}
+                                {finding.on_modified_line ? t('analysis.diff.onChangedLine') : ''}
                               </button>
                             ))}
                           </div>
@@ -349,30 +357,32 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
                 </dl>
               </div>
             ) : (
-              <EmptyState title="No diff for this run"
-                hint={diff?.reason || 'the importer did not attach a unified diff'} />
+              <EmptyState title={t('analysis.empty.diff.title')}
+                hint={diff?.reason || t('analysis.empty.diff.hint')} />
             )
           )}
 
           {tab === 'findings' && (
             findings.length ? (
-              <Table head={['file', 'line', 'rule', 'severity', 'cwe', 'class', 'modified line', '']}>
+              <Table head={[t('analysis.col.file'), t('analysis.col.line'),
+                t('analysis.col.rule'), t('common.severity'), t('analysis.col.cwe'),
+                t('analysis.col.class'), t('analysis.col.modifiedLine'), '']}>
                 {findings.map((item) => (
                   <tr key={item.id}>
                     <td className="mono">{item.path}</td>
                     <td>{item.line || '—'}</td>
                     <td className="mono">{item.rule_id}</td>
                     <td><SeverityBadge severity={item.severity} /></td>
-                    <td>{item.cwe || <span className="muted">unknown</span>}</td>
+                    <td>{item.cwe || <span className="muted">{t('common.unknown')}</span>}</td>
                     <td><Classification value={item.classification} /></td>
                     <td className="muted">
-                      {item.on_modified_line ? 'yes' : 'no'}
-                      {item.introduced_by_pr && ' · introduced by this change'}
+                      {item.on_modified_line ? t('common.yes') : t('common.no')}
+                      {item.introduced_by_pr && t('analysis.introduced')}
                     </td>
                     <td>
                       {item.finding_id && onOpenFinding && (
                         <button className="mini" onClick={() => onOpenFinding(item.finding_id)}>
-                          open finding
+                          {t('analysis.openFinding')}
                         </button>
                       )}
                     </td>
@@ -380,7 +390,7 @@ export default function Analysis({ projects, onOpenFinding, focusRun }) {
                 ))}
               </Table>
             ) : (
-              <EmptyState title="No results in this run" />
+              <EmptyState title={t('analysis.empty.results')} />
             )
           )}
         </>

@@ -6,9 +6,15 @@ from sqlalchemy.orm import Session
 from backend.app.auth import create_key, require_admin, require_org
 from backend.app.db import get_session, run_migrations
 from backend.app import models
-from backend.app.routers import authorization as authorization_router
+# Imported for its side effect: the hook that turns every finding into work.
+from backend.app import finding_tasks  # noqa: F401
+from backend.app.routers import authorization as authorization_router, graph as graph_router
 
-from backend.app.routers import accounts, advisories, analysis, artifacts, attack_surface, ci, code_baselines, code_review, ctem, cycles, dashboard, deployment, easm, easm_trivy, exposures, findings, gates as gates_router, identity, impact, intelligence, inventory, inventory_groups, jira, lifecycle, licenses as licenses_router, mfa as mfa_router, notifications, onboarding, orchestration, organization, pentest, pipeline, projects as projects_router, regression, relationships, sarif, scans as scans_router, schedules, scope, sbom, spdx, vulnerabilities, work
+
+from backend.app.routers import workflows as workflows_router
+from backend.app.routers import integrations as integrations_router
+from backend.app.routers import orgs as orgs_router
+from backend.app.routers import accounts, advisories, agents as agents_router, auth_profiles, agent as agent_router, ai as ai_router, analysis, artifacts, attack_surface, business_context, chat as chat_router, ci, code_baselines, code_review, ctem, cycles, dashboard, deployment, deployment_chain, device_auth, easm, easm_trivy, exposures, exposure_verdict, findings, gates as gates_router, identity, impact, intelligence, inventory, inventory_groups, jira, lifecycle, licenses as licenses_router, mfa as mfa_router, notifications, onboarding, orchestration, organization, pentest, pipeline, projects as projects_router, regression, relationships, sarif, scans as scans_router, schedules, scope, search, sbom, spdx, surface as surface_router, threat_model, vulnerabilities, work
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -25,10 +31,14 @@ def create_app() -> FastAPI:
     app.include_router(exposures.router)
     app.include_router(attack_surface.router)
     app.include_router(cycles.router)
+    app.include_router(auth_profiles.router)
+    app.include_router(business_context.router)
+    app.include_router(threat_model.router)
     app.include_router(artifacts.router)
     app.include_router(mfa_router.router)
     app.include_router(impact.router)
     app.include_router(work.router)
+    app.include_router(graph_router.router)
     app.include_router(findings.router)
     app.include_router(ci.router)
     app.include_router(pipeline.router)
@@ -61,6 +71,19 @@ def create_app() -> FastAPI:
     app.include_router(deployment.router)
     app.include_router(projects_router.router)
     app.include_router(scans_router.router)
+    app.include_router(surface_router.router)
+    app.include_router(workflows_router.router)
+    app.include_router(integrations_router.router)
+    app.include_router(orgs_router.router)
+    app.include_router(deployment_chain.router)
+    app.include_router(exposure_verdict.router)
+    app.include_router(ai_router.router)
+    app.include_router(chat_router.router)
+    app.include_router(agents_router.router)
+    app.include_router(agent_router.router)
+    app.include_router(search.router)
+    app.include_router(device_auth.public_router)
+    app.include_router(device_auth.router)
 
     @app.get("/healthz")
     def healthz(session: Session = Depends(get_session)):

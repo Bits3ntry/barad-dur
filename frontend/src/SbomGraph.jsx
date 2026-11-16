@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { Card, EmptyState } from './ui'
 import { degrees, hash, radiusFor } from './graphForce'
 import useForceGraph from './useForceGraph'
+import { useI18n } from './i18n'
 
 /* ─────────────────────────── the dependency graph ───────────────────────────
 
@@ -50,6 +51,7 @@ function buildGraph(rows) {
 }
 
 export default function SbomGraph({ rows, onPick, selected, compact = false }) {
+  const { t, tCount } = useI18n()
   const graph = useMemo(() => buildGraph(rows), [rows])
   const degree = useMemo(() => degrees(graph.nodes, graph.edges), [graph])
   const [query, setQuery] = useState('')
@@ -149,8 +151,8 @@ export default function SbomGraph({ rows, onPick, selected, compact = false }) {
   if (!rows.length) {
     return (
       <Card>
-        <EmptyState title="Nothing to draw"
-          hint="This build has no components yet: import a BOM and the graph starts here." />
+        <EmptyState title={t('sbomGraph.empty.title')}
+          hint={t('sbomGraph.empty.hint')} />
       </Card>
     )
   }
@@ -158,43 +160,44 @@ export default function SbomGraph({ rows, onPick, selected, compact = false }) {
   return (
     <Card tight>
       <div className="sbom-graph-toolbar">
-        <input value={query} placeholder="highlight a package" onChange={(event) => setQuery(event.target.value)} />
+        <input value={query} placeholder={t('sbomGraph.filterPlaceholder')}
+          onChange={(event) => setQuery(event.target.value)} />
         <span className="sbom-legend">
-          <span className="sbom-legend-dot" style={{ background: 'var(--critical)' }} />critical
-          <span className="sbom-legend-dot" style={{ background: 'var(--high)' }} />high
-          <span className="sbom-legend-dot" style={{ background: 'var(--medium)' }} />medium
-          <span className="sbom-legend-dot" style={{ background: 'var(--low)' }} />low
-          <span className="sbom-legend-dot is-clean" />clean
+          <span className="sbom-legend-dot" style={{ background: 'var(--critical)' }} />{t('sbomGraph.legend.critical')}
+          <span className="sbom-legend-dot" style={{ background: 'var(--high)' }} />{t('sbomGraph.legend.high')}
+          <span className="sbom-legend-dot" style={{ background: 'var(--medium)' }} />{t('sbomGraph.legend.medium')}
+          <span className="sbom-legend-dot" style={{ background: 'var(--low)' }} />{t('sbomGraph.legend.low')}
+          <span className="sbom-legend-dot is-clean" />{t('sbomGraph.legend.clean')}
         </span>
         <span className="muted sbom-legend-note">
-          size = dependencies + findings · dashed = nothing depends on it
+          {t('sbomGraph.legendNote')}
         </span>
         <span className="muted">
-          {visibleNodes.length} of {nodes.length}
+          {t('sbomGraph.visibleCount', { visible: visibleNodes.length, total: nodes.length })}
         </span>
         {localId ? (
-          <button className="mini" onClick={() => setLocalId(null)}>focus · clear ✕</button>
+          <button className="mini" onClick={() => setLocalId(null)}>{t('sbomGraph.clearFocus')}</button>
         ) : (
           <button className="mini" onClick={() => setShowAll((value) => !value)}>
-            {showAll ? 'only with findings' : 'show all'}
+            {showAll ? t('sbomGraph.onlyFindings') : t('sbomGraph.showAll')}
           </button>
         )}
         <span className="row-end graph-zoom">
           <button type="button" className="mini" onClick={() => engine.zoomBy(1 / 1.25)}
-            aria-label="zoom out">−</button>
+            aria-label={t('sbomGraph.zoomOut')}>−</button>
           <button type="button" className="mini graph-zoom"
             onClick={() => engine.zoomBy(1 / view.zoom)}
-            aria-label="reset zoom">{Math.round(view.zoom * 100)}%</button>
+            aria-label={t('sbomGraph.resetZoom')}>{Math.round(view.zoom * 100)}%</button>
           <button type="button" className="mini" onClick={() => engine.zoomBy(1.25)}
-            aria-label="zoom in">+</button>
-          <button type="button" className="mini" onClick={engine.fit}>fit</button>
-          <button type="button" className="mini" onClick={engine.reset}>reset</button>
+            aria-label={t('sbomGraph.zoomIn')}>+</button>
+          <button type="button" className="mini" onClick={engine.fit}>{t('sbomGraph.fit')}</button>
+          <button type="button" className="mini" onClick={engine.reset}>{t('sbomGraph.reset')}</button>
         </span>
       </div>
 
       <div className={`sbom-graph-canvas${compact ? ' is-compact' : ''}`} ref={engine.wrapRef}>
         <svg ref={engine.svgRef} viewBox={`0 0 ${engine.VIEW.w} ${engine.VIEW.h}`} role="img"
-          aria-label="dependency graph of this build" {...engine.svgHandlers}>
+          aria-label={t('sbomGraph.ariaLabel')} {...engine.svgHandlers}>
           <g transform={`translate(${engine.VIEW.w / 2 + view.x} ${engine.VIEW.h / 2 + view.y}) scale(${view.zoom})`}>
             {visibleEdges.map((edge) => {
               const from = settled.get(edge.from)
@@ -220,7 +223,7 @@ export default function SbomGraph({ rows, onPick, selected, compact = false }) {
                   className={`sbom-graph-node-group${entry.fixed ? ' is-pinned' : ''}`}
                   style={{ opacity: dim ? 0.22 : 1 }}
                   role="button" tabIndex={0}
-                  aria-label={`${node.label}${node.version ? ` ${node.version}` : ''}, ${node.findings} findings`}
+                  aria-label={`${node.label}${node.version ? ` ${node.version}` : ''}, ${tCount('sbomGraph.findings', node.findings)}`}
                   {...engine.nodeHandlers(entry, node)}>
                   <circle r={node.r + 8} className="sbom-graph-hit" fill="transparent" />
                   <circle r={node.r} fill={color || 'var(--panel-2)'}
@@ -245,8 +248,7 @@ export default function SbomGraph({ rows, onPick, selected, compact = false }) {
           </g>
         </svg>
         <span className="graph-hint">
-          drag a node to move it with its dependencies · drag the canvas to pan · scroll to zoom ·
-          double-click releases it
+          {t('sbomGraph.hint')}
         </span>
       </div>
     </Card>

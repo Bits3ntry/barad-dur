@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from './api'
+import { useI18n } from './i18n'
 import {
   Card, Drawer, EmptyState, ErrorBanner, Loading, Pager, PageHeader, SeverityBadge,
   Table, serverPager,
@@ -43,20 +44,22 @@ function versionLabel(action) {
   return [action.project, action.component, action.version].filter(Boolean).join(' · ')
 }
 
-function severityBreakdown(findings) {
+function severityBreakdown(findings, t) {
   const bySeverity = findings?.by_severity || {}
   const open = Object.entries(bySeverity)
     .map(([severity, count]) => `${count} ${severity}`)
-    .join(' · ') || 'none'
-  return `${open} open${findings?.closed ? ` · ${findings.closed} closed` : ''}`
+    .join(' · ') || t('common.none')
+  return findings?.closed
+    ? t('pipelines.findings.openClosed', { open, closed: findings.closed })
+    : t('pipelines.findings.openOnly', { open })
 }
 
 /* One line out of a timeline event's free-form detail: enough to read the story
    without dumping raw JSON into a drawer. */
-function detailText(detail) {
+function detailText(detail, t) {
   const parts = []
-  if (detail.action) parts.push(`action ${detail.action}`)
-  if (detail.task) parts.push(`task ${detail.task}`)
+  if (detail.action) parts.push(t('pipelines.detail.action', { action: detail.action }))
+  if (detail.task) parts.push(t('pipelines.detail.task', { task: detail.task }))
   if (detail.tool) parts.push(detail.tool)
   if (detail.counts) {
     const counts = Object.entries(detail.counts).map(([key, value]) => `${value} ${key}`).join(', ')
@@ -65,18 +68,24 @@ function detailText(detail) {
   if (detail.ingested) {
     const counters = detail.ingested.counters
     if (counters) {
-      parts.push(`${counters.created ?? 0} new · ${counters.existing ?? 0} existing`)
+      parts.push(t('pipelines.detail.ingested', {
+        created: counters.created ?? 0, existing: counters.existing ?? 0,
+      }))
     }
     const components = detail.ingested.components
     const advisories = detail.ingested.vulnerabilities_received
     if (components != null || advisories != null) {
-      parts.push(`${components ?? 0} new component(s) · ${advisories ?? 0} advisory(ies)`)
+      parts.push(t('pipelines.detail.advisories', {
+        components: components ?? 0, advisories: advisories ?? 0,
+      }))
     }
   }
-  if (detail.host) parts.push(`host ${detail.host}`)
-  if (detail.contract_version) parts.push(`contract ${detail.contract_version}`)
+  if (detail.host) parts.push(t('pipelines.detail.host', { host: detail.host }))
+  if (detail.contract_version) {
+    parts.push(t('pipelines.detail.contract', { version: detail.contract_version }))
+  }
   if (detail.duration_s != null) parts.push(`${detail.duration_s}s`)
-  if (detail.gap_s != null) parts.push(`gap ${detail.gap_s}s`)
+  if (detail.gap_s != null) parts.push(t('pipelines.detail.gap', { seconds: detail.gap_s }))
   if (detail.reason) parts.push(detail.reason)
   if (detail.error) parts.push(detail.error)
   return parts.join(' · ')
@@ -84,12 +93,12 @@ function detailText(detail) {
 
 /* The group's verdict is its newest run's; when the attempts behind it disagree
    the row says so instead of pretending one number answered for all of them. */
-function disagreement(group) {
+function disagreement(group, tCount) {
   if (group.earlier_failed) {
-    return `${group.earlier_failed} earlier ${group.earlier_failed === 1 ? 'run' : 'runs'} failed`
+    return tCount('pipelines.disagreement.failed', group.earlier_failed)
   }
   if (group.earlier_running) {
-    return `${group.earlier_running} earlier run${group.earlier_running === 1 ? '' : 's'} still running`
+    return tCount('pipelines.disagreement.running', group.earlier_running)
   }
   return ''
 }
@@ -104,6 +113,7 @@ function Field({ label, children }) {
 }
 
 export default function Pipelines({ onOpenFinding, onNewPipeline }) {
+  const { t, tCount, tOr } = useI18n()
   const [state, setState] = useState({ commits: [], total: 0, counters: {}, error: '', loading: true })
   const [offset, setOffset] = useState(0)
   const pager = serverPager(state.total, PER_PAGE, offset, setOffset)
@@ -153,51 +163,63 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
   const { commits, counters } = state
   const pagerNode = (
     <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
-      total={pager.total} perPage={PER_PAGE} unit="commits" />
+      total={pager.total} perPage={PER_PAGE} unit={t('pipelines.pagerUnit')} />
   )
 
   return (
     <div className="stack">
       <PageHeader
-        title="Pipelines"
-        subtitle="Action runs announced by CI, one row per commit: the row speaks with its newest run and opens to show the attempts behind it."
+        title={t('pipelines.title')}
+        subtitle={t('pipelines.subtitle')}
         actions={(
           <button className="primary-action" onClick={() => onNewPipeline?.()}>
-            new pipeline
+            {t('pipelines.newPipeline')}
           </button>
         )} />
       <div className="toolbar">
         <span className="count">
-          {counters.commits || 0} commits · {counters.runs || 0} action runs
+          {t('pipelines.counters.summary', {
+            commits: counters.commits || 0, runs: counters.runs || 0,
+          })}
         </span>
         {counters.fail > 0 && (
-          <span className="status verdict-fail">{counters.fail} failing</span>
+          <span className="status verdict-fail">
+            {t('pipelines.counters.failing', { n: counters.fail })}
+          </span>
         )}
-        {counters.running > 0 && <span className="count">{counters.running} running</span>}
+        {counters.running > 0 && (
+          <span className="count">{t('pipelines.counters.running', { n: counters.running })}</span>
+        )}
         {counters.superseded > 0 && (
-          <span className="count" title="a newer run of the same commit re-evaluated these findings">
-            {counters.superseded} re-evaluated
+          <span className="count" title={t('pipelines.counters.supersededHint')}>
+            {t('pipelines.counters.superseded', { n: counters.superseded })}
           </span>
         )}
         <span className="row-end">
           {pagerNode}
-          <button className="mini" onClick={() => load()}>refresh</button>
+          <button className="mini" onClick={() => load()}>{t('common.refresh')}</button>
         </span>
       </div>
       {state.error && <ErrorBanner error={state.error} onRetry={() => load()} />}
 
-      {state.loading && !commits.length ? <Loading rows={4} label="loading action runs" /> : (
+      {state.loading && !commits.length ? (
+        <Loading rows={4} label={t('pipelines.loadingRuns')} />
+      ) : (
         <Table
-          head={['started', 'commit', 'ref', 'event', 'actor', 'runs', 'verdict', 'findings']}
+          head={[
+            t('pipelines.column.started'), t('pipelines.column.commit'), t('pipelines.column.ref'),
+            t('pipelines.column.event'), t('pipelines.column.actor'), t('pipelines.column.runs'),
+            t('pipelines.column.verdict'), t('pipelines.column.findings'),
+          ]}
           empty={!state.error && (
             <EmptyState
-              title="No Action has reached the platform yet"
-              hint="A workflow running the Shauron action announces itself here before it starts scanning. A scan started by hand from the CLI or the console is a scanner run and lives in Orchestration." />
+              title={t('pipelines.empty.title')}
+              hint={t('pipelines.empty.hint')} />
           )}
         >
           {commits.map((group) => {
             const isOpen = !!expanded[group.key]
-            const note = disagreement(group)
+            const note = disagreement(group, tCount)
             return (
               <React.Fragment key={group.key}>
                 <tr className={`clickable${isOpen ? ' selected' : ''}`}
@@ -212,7 +234,9 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
                       </a>
                     ) : shortSha(group.commit)}
                     {group.pull_request && (
-                      <div className="muted" style={{ fontSize: 11.5 }}>PR {group.pull_request}</div>
+                      <div className="muted" style={{ fontSize: 11.5 }}>
+                        {t('pipelines.pr', { n: group.pull_request })}
+                      </div>
                     )}
                   </td>
                   <td className="mono">{group.ref || '—'}</td>
@@ -220,16 +244,18 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
                   <td>{actorOf(group)}</td>
                   <td className="num">
                     {group.counts.total > 1 ? (
-                      <span title={`${group.counts.fail} failed · ${group.counts.pass} passed · ${group.counts.running} running · ${group.counts.superseded} re-evaluated`}>
-                        {isOpen ? '▾' : '▸'} {group.counts.total} runs
+                      <span title={t('pipelines.runs.breakdown', {
+                        failed: group.counts.fail, passed: group.counts.pass,
+                        running: group.counts.running, superseded: group.counts.superseded,
+                      })}>
+                        {isOpen ? '▾' : '▸'} {tCount('pipelines.runs.total', group.counts.total)}
                       </span>
-                    ) : <span className="muted">1 run</span>}
+                    ) : <span className="muted">{t('pipelines.runs.one')}</span>}
                   </td>
                   <td>
                     {group.superseded ? (
-                      <span className="status"
-                        title="a newer run of the same commit re-evaluated these findings — that run owns them now">
-                        re-evaluated
+                      <span className="status" title={t('pipelines.superseded.hint')}>
+                        {t('pipelines.reEvaluated')}
                       </span>
                     ) : (
                       <span className={`status verdict-${group.verdict}`}
@@ -243,8 +269,10 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
                   </td>
                   <td className="num"
                     title={group.superseded
-                      ? `reported ${group.findings?.reported || 0} finding(s) when it finished; a newer run of the same commit now owns them`
-                      : `open findings · ${severityBreakdown(group.findings)}`}>
+                      ? t('pipelines.findings.reportedHint', { n: group.findings?.reported || 0 })
+                      : t('pipelines.findings.openHint', {
+                        breakdown: severityBreakdown(group.findings, t),
+                      })}>
                     {group.superseded
                       ? <span className="muted">{group.findings?.reported || 0}</span>
                       : group.findings?.total || 0}
@@ -260,10 +288,15 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
                     <td className="mono muted">{run.ref || '—'}</td>
                     <td className="muted">{run.event || '—'}</td>
                     <td className="muted">{actorOf(run)}</td>
-                    <td className="muted">{run.status} · evidence {run.evidence}</td>
+                    <td className="muted">
+                      {t('pipelines.runRow.meta', {
+                        status: tOr(`status.${run.status}`, run.status),
+                        evidence: run.evidence,
+                      })}
+                    </td>
                     <td>
                       <span className={run.superseded ? 'status' : `status verdict-${run.verdict}`}>
-                        {run.superseded ? 're-evaluated' : run.verdict}
+                        {run.superseded ? t('pipelines.reEvaluated') : run.verdict}
                       </span>
                     </td>
                     <td className="num">
@@ -283,31 +316,35 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
       )}
 
       <Drawer open={!!selected} onClose={() => setSelected(null)}
-        title={selected ? `Action ${selected.action || 'run'} · ${shortSha(selected.commit)}` : 'Action run'}>
+        title={selected
+          ? t('pipelines.drawer.title', {
+            action: selected.action || t('pipelines.drawer.runFallback'),
+            sha: shortSha(selected.commit),
+          })
+          : t('pipelines.drawer.titleFallback')}>
         {selected && (
           <div className="stack">
-            <Card title="Result">
+            <Card title={t('pipelines.card.result')}>
               <div className="row" style={{ gap: 10, alignItems: 'center' }}>
                 <span className={selected.superseded ? 'status' : `status verdict-${selected.verdict}`}>
-                  {selected.superseded ? 're-evaluated' : selected.verdict}
+                  {selected.superseded ? t('pipelines.reEvaluated') : selected.verdict}
                 </span>
                 <span className="muted" style={{ flex: 1 }}>
                   {selected.superseded
-                    ? `This run reported ${selected.findings?.reported || 0} finding(s). A newer run of the same commit re-evaluated them and owns them now — the live numbers are on that row.`
+                    ? t('pipelines.superseded.body', { n: selected.findings?.reported || 0 })
                     : selected.verdict_reason}
                 </span>
               </div>
               {!selected.superseded && (
                 <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
-                  The verdict is the gate: HIGH and above block. The CI job can still report
-                  success — that reports the process, this reports the findings.
+                  {t('pipelines.verdict.note')}
                 </p>
               )}
               <div className="row" style={{ gap: 16, marginTop: 12, flexWrap: 'wrap' }}>
-                <span className="muted">run <strong>{selected.status}</strong></span>
-                <span className="muted">evidence <strong>{selected.evidence}</strong></span>
-                <span className="muted">coverage <strong>{selected.coverage || '—'}</strong></span>
-                <span className="muted">findings{' '}
+                <span className="muted">{t('pipelines.meta.run')} <strong>{tOr(`status.${selected.status}`, selected.status)}</strong></span>
+                <span className="muted">{t('common.evidence')} <strong>{selected.evidence}</strong></span>
+                <span className="muted">{t('common.coverage')} <strong>{selected.coverage || '—'}</strong></span>
+                <span className="muted">{t('pipelines.meta.findings')}{' '}
                   <strong>{selected.superseded
                     ? (selected.findings?.reported || 0)
                     : (selected.findings?.total || 0)}</strong>
@@ -315,21 +352,21 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
               </div>
             </Card>
 
-            <Card title="Where it ran">
+            <Card title={t('pipelines.card.where')}>
               <div className="stack" style={{ gap: 8 }}>
-                <Field label="repository">
+                <Field label={t('pipelines.field.repository')}>
                   {selected.repository_url ? (
                     <a href={selected.repository_url} target="_blank" rel="noreferrer noopener">
                       {selected.repository || selected.repository_url}
                     </a>
                   ) : (selected.repository || '—')}
                 </Field>
-                <Field label="component">{versionLabel(selected) || 'unattributed'}</Field>
-                <Field label="ref">
+                <Field label={t('pipelines.field.component')}>{versionLabel(selected) || t('pipelines.field.unattributed')}</Field>
+                <Field label={t('pipelines.field.ref')}>
                   {selected.ref || '—'}
-                  {selected.pull_request && ` · PR #${selected.pull_request}`}
+                  {selected.pull_request && ` · ${t('pipelines.prNumber', { n: selected.pull_request })}`}
                 </Field>
-                <Field label="commit">
+                <Field label={t('pipelines.field.commit')}>
                   {selected.commit_url ? (
                     <a href={selected.commit_url} target="_blank" rel="noreferrer noopener"
                       className="mono">
@@ -337,35 +374,39 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
                     </a>
                   ) : <span className="mono">{selected.commit || '—'}</span>}
                 </Field>
-                <Field label="actor">{actorOf(selected)}</Field>
-                <Field label="event">{selected.event || '—'}</Field>
-                <Field label="started">{when(selected.started_at)}</Field>
-                <Field label="finished">{when(selected.finished_at)}</Field>
+                <Field label={t('pipelines.field.actor')}>{actorOf(selected)}</Field>
+                <Field label={t('pipelines.field.event')}>{selected.event || '—'}</Field>
+                <Field label={t('pipelines.field.started')}>{when(selected.started_at)}</Field>
+                <Field label={t('pipelines.field.finished')}>{when(selected.finished_at)}</Field>
               </div>
             </Card>
 
             {detail.error && <ErrorBanner error={detail.error} />}
-            {detail.loading && <Loading rows={3} label="loading the run" />}
+            {detail.loading && <Loading rows={3} label={t('pipelines.loadingRun')} />}
 
             {detail.scan && (
               <>
-                <Card title="What it asked for">
+                <Card title={t('pipelines.card.asked')}>
                   <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 6 }}>
                     {(detail.scan.tasks || []).map((task) => (
                       <li key={task.task}>
                         <span className="mono">{task.task}</span>{' '}
                         <span className="muted">· {task.contract} · {task.capability}
-                          {task.required ? '' : ' · optional'}</span>
+                          {task.required ? '' : t('pipelines.task.optional')}</span>
                       </li>
                     ))}
                   </ul>
                   <p className="muted" style={{ marginBottom: 0 }}>
-                    {detail.scan.principal ? `principal ${detail.scan.principal} · ` : ''}
-                    deadline {when(detail.scan.deadline_at)}
+                    {[
+                      detail.scan.principal
+                        ? t('pipelines.scan.principal', { principal: detail.scan.principal })
+                        : '',
+                      t('pipelines.scan.deadline', { deadline: when(detail.scan.deadline_at) }),
+                    ].filter(Boolean).join(' · ')}
                   </p>
                 </Card>
 
-                <Card title="Evidence received">
+                <Card title={t('pipelines.card.evidence')}>
                   {(detail.scan.evidence_received || []).length ? (
                     <div className="stack" style={{ gap: 6 }}>
                       {(detail.scan.evidence_received || []).map((artifact, index) => (
@@ -378,21 +419,21 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
                       ))}
                     </div>
                   ) : (
-                    <p className="muted" style={{ margin: 0 }}>Nothing came back yet.</p>
+                    <p className="muted" style={{ margin: 0 }}>{t('pipelines.evidence.empty')}</p>
                   )}
                 </Card>
               </>
             )}
 
             <Card title={selected.superseded
-              ? `Findings reported · ${selected.findings?.reported || 0}`
-              : `Findings in this run · ${selected.findings?.total || 0} open`
-                + (selected.findings?.closed ? ` of ${detail.findings.length}` : '')}>
+              ? t('pipelines.findings.cardReported', { n: selected.findings?.reported || 0 })
+              : t('pipelines.findings.cardInRun', { n: selected.findings?.total || 0 })
+                + (selected.findings?.closed
+                  ? t('pipelines.findings.ofTotal', { n: detail.findings.length })
+                  : '')}>
               {selected.findings?.closed > 0 && (
                 <p className="muted" style={{ marginTop: 0 }}>
-                  {selected.findings.closed} finding(s) here are closed (resolved, accepted
-                  risk, false positive or suppressed): they are listed, and they do not
-                  block the gate.
+                  {t('pipelines.findings.closedNote', { n: selected.findings.closed })}
                 </p>
               )}
               {detail.findings.length ? (
@@ -411,9 +452,9 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
                           <span className="mono muted">
                             {finding.path || '—'}{finding.line ? `:${finding.line}` : ''}
                           </span>
-                          <span className="muted">· {finding.status}</span>
+                          <span className="muted">· {tOr(`status.${finding.status}`, finding.status)}</span>
                           <button className="mini"
-                            onClick={() => onOpenFinding?.(finding.id)}>view</button>
+                            onClick={() => onOpenFinding?.(finding.id)}>{t('pipelines.finding.view')}</button>
                         </div>
                       </div>
                     ))}
@@ -421,13 +462,13 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
               ) : (
                 <p className="muted" style={{ margin: 0 }}>
                   {selected.superseded
-                    ? 'These findings were re-evaluated by a newer run of the same commit; open that row to read them.'
-                    : 'This action produced no finding — an empty list is a result, not a gap.'}
+                    ? t('pipelines.findings.reEvaluatedEmpty')
+                    : t('pipelines.findings.noneEmpty')}
                 </p>
               )}
             </Card>
 
-            <Card title="Timeline">
+            <Card title={t('pipelines.card.timeline')}>
               {detail.timeline.length ? (
                 <div className="stack" style={{ gap: 6 }}>
                   {detail.timeline.map((event) => (
@@ -435,12 +476,12 @@ export default function Pipelines({ onOpenFinding, onNewPipeline }) {
                       <span className="mono muted">{clock(event.at_server)}</span>
                       <span>{event.kind}</span>
                       <span className="muted" style={{ flex: 1 }}>
-                        {detailText(event.detail || {})}
+                        {detailText(event.detail || {}, t)}
                       </span>
                     </div>
                   ))}
                 </div>
-              ) : <p className="muted" style={{ margin: 0 }}>No events.</p>}
+              ) : <p className="muted" style={{ margin: 0 }}>{t('pipelines.timeline.empty')}</p>}
             </Card>
           </div>
         )}

@@ -7,7 +7,7 @@ policy; newest active policy wins within a scope.
 from backend.app import licenses, models, severity as severity_mod
 
 SEVERITY_RANK = {"UNKNOWN": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
-NON_OPEN = {"resolved", "false_positive", "accepted_risk"}
+from backend.app.status import NON_OPEN
 POLICY_VERSION = 1
 
 

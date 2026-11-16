@@ -11,23 +11,36 @@ import Grants from './Grants'
 import Members from './Members'
 import Audit from './Audit'
 import Setup from './Setup'
+import RuntimeSettings from './RuntimeSettings'
+import AiSettings from './AiSettings'
+import McpSettings from './McpSettings'
+import IntegrationsSettings from './IntegrationsSettings'
+import { useI18n, useLanguages } from './i18n'
 
 const SECTION_GROUPS = [
-  { label: 'Workspace settings', items: [
-    { key: 'organization', label: 'Organization', icon: 'organization', hint: 'Identity and workspace details' },
-    { key: 'account', label: 'Account', icon: 'members', hint: 'Sign-in and local connection' },
-    { key: 'appearance', label: 'Appearance', icon: 'appearance', hint: 'Theme and density' },
-    { key: 'delivery', label: 'Delivery', icon: 'notifications', hint: 'Email and notification routes' },
-    { key: 'intelligence', label: 'Intelligence', icon: 'vulnerabilities', hint: 'Advisory feeds and the daily re-check' },
-    { key: 'keys', label: 'Service identities', icon: 'key', hint: 'API keys for automation' },
+  { label: 'settings.group.workspace', items: [
+    { key: 'organization', label: 'settings.section.organization', icon: 'organization', hint: 'settings.section.organization.hint' },
+    { key: 'account', label: 'settings.section.account', icon: 'members', hint: 'settings.section.account.hint' },
+    { key: 'appearance', label: 'settings.section.appearance', icon: 'appearance', hint: 'settings.section.appearance.hint' },
+    // What the platform talks to, in one place: two connections and a
+    // mailserver, each naming whether it came from the console or the install.
+    { key: 'integrations', label: 'settings.section.integrations', icon: 'components', hint: 'settings.section.integrations.hint' },
+    { key: 'delivery', label: 'settings.section.delivery', icon: 'notifications', hint: 'settings.section.delivery.hint' },
+    { key: 'intelligence', label: 'settings.section.intelligence', icon: 'vulnerabilities', hint: 'settings.section.intelligence.hint' },
+    { key: 'ai', label: 'settings.section.ai', icon: 'analysis', hint: 'settings.section.ai.hint' },
+    { key: 'keys', label: 'settings.section.keys', icon: 'key', hint: 'settings.section.keys.hint' },
+    // The MCP sheet sits next to the keys it hands out: an external agent needs
+    // both, and a section that only prints JSON would send it hunting for the key.
+    { key: 'mcp', label: 'settings.section.mcp', icon: 'analysis', hint: 'settings.section.mcp.hint' },
   ] },
-  { label: 'Administration', items: [
-    { key: 'security', label: 'My security', icon: 'grants', hint: 'Multi-factor authentication' },
-    { key: 'notifications', label: 'Notifications', icon: 'notifications', hint: 'Alerts and delivery channels' },
-    { key: 'grants', label: 'Grants', icon: 'grants', hint: 'Scanner authorization' },
-    { key: 'members', label: 'Members', icon: 'members', hint: 'People, roles and invitations' },
-    { key: 'audit', label: 'Audit trail', icon: 'audit', hint: 'Recorded security actions' },
-    { key: 'setup', label: 'Setup guide', icon: 'setup', hint: 'Finish workspace configuration' },
+  { label: 'settings.group.admin', items: [
+    { key: 'security', label: 'settings.section.security', icon: 'grants', hint: 'settings.section.security.hint' },
+    { key: 'notifications', label: 'settings.section.notifications', icon: 'notifications', hint: 'settings.section.notifications.hint' },
+    { key: 'grants', label: 'settings.section.grants', icon: 'grants', hint: 'settings.section.grants.hint' },
+    { key: 'runtime', label: 'settings.section.runtime', icon: 'orchestration', hint: 'settings.section.runtime.hint' },
+    { key: 'members', label: 'settings.section.members', icon: 'members', hint: 'settings.section.members.hint' },
+    { key: 'audit', label: 'settings.section.audit', icon: 'audit', hint: 'settings.section.audit.hint' },
+    { key: 'setup', label: 'settings.section.setup', icon: 'setup', hint: 'settings.section.setup.hint' },
   ] },
 ]
 const SECTIONS = SECTION_GROUPS.flatMap((group) => group.items)
@@ -35,6 +48,8 @@ const ADMIN_SECTIONS = new Set(SECTION_GROUPS[1].items.map((item) => item.key))
 
 export default function Settings({ section = 'organization', org, onOrgChanged, onNavigate, onBack,
   onSessionChanged }) {
+  const { t, lang, setLang } = useI18n()
+  const languages = useLanguages()
   const active = SECTIONS.some((item) => item.key === section) ? section : 'organization'
   const { toasts, push, dismiss } = useToasts()
   const [orgForm, setOrgForm] = useState(() => ({
@@ -81,7 +96,7 @@ export default function Settings({ section = 'organization', org, onOrgChanged, 
   async function saveOrganization(event) {
     event.preventDefault()
     if (orgForm.name.trim().length < 2) {
-      push('Organization name must be at least 2 characters.', 'error')
+      push(t('settings.org.errorNameShort'), 'error')
       return
     }
     setBusy(true)
@@ -91,7 +106,7 @@ export default function Settings({ section = 'organization', org, onOrgChanged, 
         logo: orgForm.logo.trim(), actor: 'console',
       })
       onOrgChanged?.(data)
-      push('Organization details saved.', 'success')
+      push(t('settings.org.saved'), 'success')
     } catch (e) {
       push(String(e.message || e), 'error')
     } finally {
@@ -110,7 +125,7 @@ export default function Settings({ section = 'organization', org, onOrgChanged, 
     })
     setConnection(api.settings())
     onSessionChanged?.()
-    push('Connection saved in this browser.', 'success')
+    push(t('settings.account.connectionSaved'), 'success')
   }
 
   async function signIn(event) {
@@ -128,7 +143,7 @@ export default function Settings({ section = 'organization', org, onOrgChanged, 
         user: { email: response.session.email, display_name: response.session.display_name } })
       setLogin({ email: '', password: '', org_slug: '', new_password: '', confirm_password: '' })
       onSessionChanged?.()
-      push('Signed in.', 'success')
+      push(t('settings.account.signedIn'), 'success')
     } catch (e) {
       setError(String(e.message || e))
       push(String(e.message || e), 'error')
@@ -144,19 +159,19 @@ export default function Settings({ section = 'organization', org, onOrgChanged, 
     setConnection(next)
     setIdentity(null)
     onSessionChanged?.()
-    push('Signed out.', 'info')
+    push(t('settings.account.signedOut'), 'info')
   }
 
   async function changePassword(event) {
     event.preventDefault()
     setError('')
-    if (login.new_password.length < 8) { setError('Password must be at least 8 characters.'); return }
-    if (login.new_password !== login.confirm_password) { setError('New passwords do not match.'); return }
+    if (login.new_password.length < 8) { setError(t('settings.account.errorPasswordShort')); return }
+    if (login.new_password !== login.confirm_password) { setError(t('settings.account.errorPasswordMismatch')); return }
     try {
       await api.post(`/api/v1/auth/users/${identity.user_id}/password`,
         { password: login.new_password, actor: 'console' })
       setLogin((current) => ({ ...current, new_password: '', confirm_password: '' }))
-      push('Password changed.', 'success')
+      push(t('settings.account.passwordChanged'), 'success')
     } catch (e) {
       setError(String(e.message || e))
     }
@@ -167,7 +182,7 @@ export default function Settings({ section = 'organization', org, onOrgChanged, 
       const r = await api.post('/api/v1/org/keys', { label: 'console', actor: 'console' })
       setKeys((current) => ({ ...current, fresh: r.data.key, error: '' }))
       loadKeys()
-      push('Service key created.', 'success')
+      push(t('settings.keys.created'), 'success')
     } catch (e) {
       setKeys((current) => ({ ...current, error: String(e.message || e) }))
       push(String(e.message || e), 'error')
@@ -180,7 +195,7 @@ export default function Settings({ section = 'organization', org, onOrgChanged, 
       await api.post(`/api/v1/org/keys/${revokeRow.id}/revoke`,
         { actor: 'console', reason: 'revoked from settings' })
       loadKeys()
-      push(`Key “${revokeRow.label}” revoked.`, 'success')
+      push(t('settings.keys.revoked', { label: revokeRow.label }), 'success')
     } catch (e) {
       push(String(e.message || e), 'error')
     }
@@ -191,22 +206,24 @@ export default function Settings({ section = 'organization', org, onOrgChanged, 
     setAppearance(next)
     setTheme(next.theme)
     setDensity(next.density)
-    push('Appearance updated.', 'success')
+    push(t('settings.appearanceSaved'), 'success')
   }
 
   const nav = (key) => onNavigate?.('settings', { settingsSection: key })
   const identityLabel = identity?.kind === 'api_key'
-    ? `Service identity · ${identity.org || 'organization'}`
-    : identity?.user?.email || 'No user session'
+    ? t('settings.account.serviceIdentity', { org: identity.org || t('settings.account.organizationFallback') })
+    : identity?.user?.email || t('settings.account.noSession')
 
   const body = () => {
     if (active === 'security') return <div className="settings-body"><Security /></div>
     if (active === 'notifications') return <div className="settings-body"><Notifications /></div>
     if (active === 'grants') return <div className="settings-body"><Grants /></div>
+    if (active === 'runtime') return <RuntimeSettings />
     if (active === 'members') return <div className="settings-body"><Members /></div>
     if (active === 'audit') return <div className="settings-body"><Audit /></div>
     if (active === 'setup') return <div className="settings-body"><Setup onNavigate={onNavigate} /></div>
     if (active === 'intelligence') return <AdvisoriesSettings />
+    if (active === 'ai') return <AiSettings />
     if (active === 'organization') return (
       <div className="settings-body stack">
         <div className="settings-overview">
@@ -214,123 +231,173 @@ export default function Settings({ section = 'organization', org, onOrgChanged, 
             {orgForm.logo ? <img src={orgForm.logo} alt="" /> : <span>{(orgForm.name || 'O').slice(0, 1)}</span>}
           </div>
           <div>
-            <p className="settings-kicker">Current workspace</p>
-            <h2>{org?.name || 'Organization'}</h2>
-            <p>{org?.slug ? `Slug: ${org.slug}` : 'Workspace identity and ownership.'}</p>
+            <p className="settings-kicker">{t('settings.org.kicker')}</p>
+            <h2>{org?.name || t('settings.org.fallbackName')}</h2>
+            <p>{org?.slug ? t('settings.org.slug', { slug: org.slug }) : t('settings.org.noSlug')}</p>
           </div>
         </div>
-        <Card title="Organization profile">
+        <Card title={t('settings.org.profileTitle')}>
           <form className="settings-form" onSubmit={saveOrganization}>
-            <label>Name<input value={orgForm.name} onChange={(e) => setOrgForm({ ...orgForm, name: e.target.value })} /></label>
-            <label>Website<input value={orgForm.website} onChange={(e) => setOrgForm({ ...orgForm, website: e.target.value })} placeholder="https://example.com" /></label>
-            <label className="settings-span">Description<textarea value={orgForm.description} onChange={(e) => setOrgForm({ ...orgForm, description: e.target.value })} placeholder="What does this workspace protect?" /></label>
-            <label className="settings-span">Logo URL or image data<input value={orgForm.logo} onChange={(e) => setOrgForm({ ...orgForm, logo: e.target.value })} placeholder="https://… or saved image data" /></label>
-            <div className="settings-actions settings-span"><button className="btn-primary" disabled={busy}>Save organization</button></div>
+            <label>{t('settings.org.name')}<input value={orgForm.name} onChange={(e) => setOrgForm({ ...orgForm, name: e.target.value })} /></label>
+            <label>{t('settings.org.website')}<input value={orgForm.website} onChange={(e) => setOrgForm({ ...orgForm, website: e.target.value })} placeholder="https://example.com" /></label>
+            <label className="settings-span">{t('settings.org.description')}<textarea value={orgForm.description} onChange={(e) => setOrgForm({ ...orgForm, description: e.target.value })} placeholder={t('settings.org.descriptionPlaceholder')} /></label>
+            <label className="settings-span">{t('settings.org.logo')}<input value={orgForm.logo} onChange={(e) => setOrgForm({ ...orgForm, logo: e.target.value })} placeholder={t('settings.org.logoPlaceholder')} /></label>
+            <div className="settings-actions settings-span"><button className="btn-primary" disabled={busy}>{t('settings.org.save')}</button></div>
           </form>
         </Card>
-        <Card title="Workspace administration">
+        <Card title={t('settings.org.adminTitle')}>
           <div className="settings-link-list">
-            <button onClick={() => onNavigate?.('members')}><span><strong>Members and access</strong><small>Invite people, assign roles and manage seats.</small></span><span>→</span></button>
-            <button onClick={() => onNavigate?.('grants')}><span><strong>Authorization grants</strong><small>Review what scanner work is allowed to do.</small></span><span>→</span></button>
-            <button onClick={() => onNavigate?.('audit')}><span><strong>Audit trail</strong><small>Review recorded configuration and security actions.</small></span><span>→</span></button>
+            <button onClick={() => onNavigate?.('members')}><span><strong>{t('settings.org.membersTitle')}</strong><small>{t('settings.org.membersHint')}</small></span><span>→</span></button>
+            <button onClick={() => onNavigate?.('grants')}><span><strong>{t('settings.org.grantsTitle')}</strong><small>{t('settings.org.grantsHint')}</small></span><span>→</span></button>
+            <button onClick={() => onNavigate?.('audit')}><span><strong>{t('settings.org.auditTitle')}</strong><small>{t('settings.org.auditHint')}</small></span><span>→</span></button>
           </div>
         </Card>
       </div>
     )
     if (active === 'appearance') return (
       <div className="settings-body stack">
-        <Card title="Appearance">
-          <p className="settings-intro">Choose a contrast mode that stays calm through long investigations. System follows your device automatically.</p>
+        <Card title={t('appearance.title')}>
+          <p className="settings-intro">{t('appearance.intro')}</p>
           <div className="appearance-grid">
             {['light', 'dark', 'system'].map((value) => (
               <button key={value} className={`appearance-choice${appearance.theme === value ? ' active' : ''}`}
                 onClick={() => applyAppearance({ ...appearance, theme: value })}>
                 <Icon name={value === 'light' ? 'sun' : value === 'dark' ? 'moon' : 'appearance'} />
-                <strong>{value}</strong><small>{value === 'system' ? 'Follow device preference' : value === 'dark' ? 'Low-glare dark surface' : 'High-legibility light surface'}</small>
+                <strong>{t(`appearance.${value}`)}</strong>
+                <small>{t(`appearance.${value}Hint`)}</small>
               </button>
             ))}
           </div>
         </Card>
-        <Card title="Information density">
+        <Card title={t('appearance.densityTitle')}>
           <div className="appearance-grid density-grid">
             {['comfortable', 'compact'].map((value) => (
               <button key={value} className={`appearance-choice${appearance.density === value ? ' active' : ''}`}
                 onClick={() => applyAppearance({ ...appearance, density: value })}>
-                <Icon name="appearance" /><strong>{value}</strong><small>{value === 'comfortable' ? 'More breathing room for analysis' : 'More rows for operations'}</small>
+                <Icon name="appearance" /><strong>{t(`appearance.${value}`)}</strong>
+                <small>{t(`appearance.${value}Hint`)}</small>
               </button>
             ))}
           </div>
         </Card>
+        <Card title={t('language.title')}>
+          <p className="settings-intro">{t('language.intro')}</p>
+          <div className="lang-grid" role="radiogroup" aria-label={t('language.title')}>
+            {languages.map((entry) => (
+              <button key={entry.code} type="button" role="radio"
+                aria-checked={lang === entry.code}
+                className={`lang-choice${lang === entry.code ? ' active' : ''}`}
+                onClick={() => setLang(entry.code)}>
+                <span>
+                  <strong>{entry.name}</strong>
+                  <small>{entry.code.toUpperCase()}</small>
+                </span>
+                {lang === entry.code && <em>{t('language.current')}</em>}
+              </button>
+            ))}
+          </div>
+          <p className="settings-note">{t('language.addHint')}</p>
+        </Card>
+      </div>
+    )
+    if (active === 'integrations') return (
+      <div className="settings-body">
+        <IntegrationsSettings onOpenSection={nav} onNavigate={onNavigate} />
       </div>
     )
     if (active === 'delivery') return (
       <div className="settings-body stack">
-        <Card title="Notifications">
-          <p className="settings-intro">Notification preferences and delivery channels have their own operating screen, so alert history remains visible while you configure it.</p>
-          <button className="btn-primary" onClick={() => onNavigate?.('notifications')}>Open notifications</button>
+        <Card title={t('settings.delivery.notificationsTitle')}>
+          <p className="settings-intro">{t('settings.delivery.notificationsIntro')}</p>
+          <button className="btn-primary" onClick={() => onNavigate?.('notifications')}>{t('settings.delivery.openNotifications')}</button>
         </Card>
-        {(identity?.kind === 'api_key' || ['owner', 'admin'].includes(identity?.role)) && <Card title="Deployment email (SMTP)">
-          <p className="settings-intro">Invitations and email notification channels leave through this relay. Saving here overrides deployment variables.</p>
+        {(identity?.kind === 'api_key' || ['owner', 'admin'].includes(identity?.role)) && <Card title={t('settings.delivery.mailTitle')}>
+          <p className="settings-intro">{t('settings.delivery.mailIntro')}</p>
           <MailSettings defaultRecipient={identity?.user?.email || ''} />
         </Card>}
       </div>
     )
+    if (active === 'mcp') return (
+      <div className="settings-body">
+        <McpSettings onOpenSection={nav} />
+      </div>
+    )
     if (active === 'keys') return (
       <div className="settings-body stack">
-        <Card title="Service identities" actions={<Pager page={keyPage.page} pages={keyPage.pages} onChange={keyPage.setPage} total={keyPage.total} perPage={keyPage.perPage} unit="keys" />}>
-          <p className="settings-intro">Use service keys for automation. They are shown only once and revoked rather than deleted.</p>
+        <Card title={t('settings.keys.title')} actions={<Pager page={keyPage.page} pages={keyPage.pages} onChange={keyPage.setPage} total={keyPage.total} perPage={keyPage.perPage} unit="keys" />}>
+          <p className="settings-intro">{t('settings.keys.intro')}</p>
           {keys.error && <Banner kind="error">{keys.error}</Banner>}
-          {keys.fresh && <p className="receipt">New key (shown once): <code>{keys.fresh}</code></p>}
-          <Table head={['Label', 'Created', 'Status', '']} empty={<EmptyState title="No service identities" hint="Create one only for a concrete automation need." />}>
-            {keyPage.rows.map((row) => <tr key={row.id}><td>{row.label || '—'}</td><td>{row.created_at ? new Date(row.created_at).toLocaleString() : '—'}</td><td><span className={`status st-${row.revoked_at ? 'disabled' : 'active'}`}>{row.revoked_at ? 'revoked' : 'active'}</span></td><td>{!row.revoked_at && <button className="mini" onClick={() => setRevokeRow(row)}>revoke</button>}</td></tr>)}
+          {keys.fresh && <p className="receipt">{t('settings.keys.fresh')} <code>{keys.fresh}</code></p>}
+          <Table head={[t('settings.keys.colLabel'), t('settings.keys.colCreated'), t('settings.keys.colStatus'), '']} empty={<EmptyState title={t('settings.keys.emptyTitle')} hint={t('settings.keys.emptyHint')} />}>
+            {keyPage.rows.map((row) => <tr key={row.id}><td>{row.label || '—'}</td><td>{row.created_at ? new Date(row.created_at).toLocaleString() : '—'}</td><td><span className={`status st-${row.revoked_at ? 'disabled' : 'active'}`}>{row.revoked_at ? t('settings.keys.stateRevoked') : t('settings.keys.stateActive')}</span></td><td>{!row.revoked_at && <button className="mini" onClick={() => setRevokeRow(row)}>{t('settings.keys.revoke')}</button>}</td></tr>)}
           </Table>
-          <div className="settings-actions"><button className="btn-primary" onClick={createKey}>Create service key</button></div>
+          <div className="settings-actions"><button className="btn-primary" onClick={createKey}>{t('settings.keys.create')}</button></div>
         </Card>
       </div>
     )
     return (
       <div className="settings-body stack">
-        <Card title="Account and sign-in">
-          <div className="account-summary"><span className="identity-dot" /><div><strong>{identityLabel}</strong><small>{identity?.kind === 'user' ? `${identity.role} · ${identity.org}` : 'This browser controls the local console connection.'}</small></div>{identity?.kind === 'user' && <button className="mini" onClick={signOut}>Sign out</button>}</div>
+        <Card title={t('settings.account.title')}>
+          {/* The identity is described here and ended here. It used to carry the
+              button only for a user session: a console running on an API key had no
+              way to disconnect from anywhere in the product. */}
+          <div className="account-summary">
+            <span className="identity-dot" />
+            <div>
+              <strong>{identityLabel}</strong>
+              <small>{identity?.kind === 'user'
+                ? `${identity.role} · ${identity.org}`
+                : t('settings.account.localConnection')}</small>
+            </div>
+            {identity && (
+              <button className="mini" onClick={signOut}>
+                {identity.kind === 'user'
+                  ? t('settings.account.signOut')
+                  : t('settings.account.disconnect')}
+              </button>
+            )}
+          </div>
           <div className="settings-link-list">
-            <button onClick={() => onNavigate?.('security')}><span><strong>Multi-factor authentication</strong><small>{signOptions.mfa?.enabled ? 'Enabled for this account.' : 'Manage a second factor for your own account.'}</small></span><span>→</span></button>
+            <button onClick={() => onNavigate?.('security')}><span><strong>{t('settings.account.mfaTitle')}</strong><small>{signOptions.mfa?.enabled ? t('settings.account.mfaEnabled') : t('settings.account.mfaHint')}</small></span><span>→</span></button>
           </div>
         </Card>
-        <Card title="Console connection">
+        <Card title={t('settings.account.connectionTitle')}>
           <form className="settings-form" onSubmit={saveConnection}>
-            <label className="settings-span">Platform URL<input value={connection.url || ''} onChange={(e) => setConnection({ ...connection, url: e.target.value })} placeholder="http://127.0.0.1:8090" /></label>
-            <label className="settings-span">API key<input value={connection.key || ''} onChange={(e) => setConnection({ ...connection, key: e.target.value })} placeholder="Stored only in this browser" /></label>
-            <div className="settings-actions settings-span"><button className="btn-primary">Save connection</button></div>
+            <label className="settings-span">{t('settings.account.url')}<input value={connection.url || ''} onChange={(e) => setConnection({ ...connection, url: e.target.value })} placeholder="http://127.0.0.1:8090" /></label>
+            <label className="settings-span">{t('settings.account.apiKey')}<input value={connection.key || ''} onChange={(e) => setConnection({ ...connection, key: e.target.value })} placeholder={t('settings.account.apiKeyPlaceholder')} /></label>
+            <div className="settings-actions settings-span"><button className="btn-primary">{t('settings.account.saveConnection')}</button></div>
           </form>
         </Card>
-        <Card title="Sign in with an account">
+        <Card title={t('settings.account.signInTitle')}>
           {error && <Banner kind="error">{error}</Banner>}
           <form className="settings-form" onSubmit={signIn}>
-            <label>Email<input value={login.email} autoComplete="username" onChange={(e) => setLogin({ ...login, email: e.target.value })} /></label>
-            <label>Password<input type="password" value={login.password} autoComplete="current-password" onChange={(e) => setLogin({ ...login, password: e.target.value })} /></label>
-            <label className="settings-span">Organization slug <small>Only when your email is in more than one organization.</small><input value={login.org_slug} onChange={(e) => setLogin({ ...login, org_slug: e.target.value })} /></label>
-            <div className="settings-actions settings-span"><button disabled={busy}>Sign in</button></div>
+            <label>{t('settings.account.email')}<input value={login.email} autoComplete="username" onChange={(e) => setLogin({ ...login, email: e.target.value })} /></label>
+            <label>{t('settings.account.password')}<input type="password" value={login.password} autoComplete="current-password" onChange={(e) => setLogin({ ...login, password: e.target.value })} /></label>
+            <label className="settings-span">{t('settings.account.orgSlug')} <small>{t('settings.account.orgSlugHint')}</small><input value={login.org_slug} onChange={(e) => setLogin({ ...login, org_slug: e.target.value })} /></label>
+            <div className="settings-actions settings-span"><button disabled={busy}>{t('settings.account.signIn')}</button></div>
           </form>
-          <p className="settings-note">Single sign-on: {signOptions.sso?.configured ? `${signOptions.sso.provider} is configured.` : 'not configured on this deployment.'}</p>
+          <p className="settings-note">{t('settings.account.sso', { state: signOptions.sso?.configured
+            ? t('settings.account.ssoConfigured', { provider: signOptions.sso.provider })
+            : t('settings.account.ssoNotConfigured') })}</p>
         </Card>
-        {identity?.kind === 'user' && <Card title="Change password"><form className="settings-form" onSubmit={changePassword}><label>New password<input type="password" value={login.new_password} onChange={(e) => setLogin({ ...login, new_password: e.target.value })} /></label><label>Confirm password<input type="password" value={login.confirm_password} onChange={(e) => setLogin({ ...login, confirm_password: e.target.value })} /></label><div className="settings-actions settings-span"><button disabled={busy}>Change password</button></div></form></Card>}
+        {identity?.kind === 'user' && <Card title={t('settings.account.changePasswordTitle')}><form className="settings-form" onSubmit={changePassword}><label>{t('settings.account.newPassword')}<input type="password" value={login.new_password} onChange={(e) => setLogin({ ...login, new_password: e.target.value })} /></label><label>{t('settings.account.confirmPassword')}<input type="password" value={login.confirm_password} onChange={(e) => setLogin({ ...login, confirm_password: e.target.value })} /></label><div className="settings-actions settings-span"><button disabled={busy}>{t('settings.account.changePassword')}</button></div></form></Card>}
       </div>
     )
   }
 
   return <div className="settings-page">
-    {!ADMIN_SECTIONS.has(active) && <PageHeader title="Settings" subtitle="Organization, access and console preferences in one workspace." actions={<button className="btn-ghost" onClick={onBack}>← Back to console</button>} />}
+    {!ADMIN_SECTIONS.has(active) && <PageHeader title={t('settings.title')} subtitle={t('settings.subtitle')} actions={<button className="btn-ghost" onClick={onBack}>{t('settings.backToConsole')}</button>} />}
     <div className="settings-layout">
-      <nav className="settings-nav" aria-label="Settings sections">
-        <button className="settings-back" onClick={onBack}>← Back to console</button>
+      <nav className="settings-nav" aria-label={t('settings.navAria')}>
+        <button className="settings-back" onClick={onBack}>{t('settings.backToConsole')}</button>
         {SECTION_GROUPS.map((group) => <div className="settings-nav-group" key={group.label}>
-          <div className="settings-nav-label">{group.label}</div>
-          {group.items.map((item) => <button key={item.key} className={active === item.key ? 'active' : ''} onClick={() => nav(item.key)}><Icon name={item.icon} /><span><strong>{item.label}</strong><small>{item.hint}</small></span></button>)}
+          <div className="settings-nav-label">{t(group.label)}</div>
+          {group.items.map((item) => <button key={item.key} className={active === item.key ? 'active' : ''} onClick={() => nav(item.key)}><Icon name={item.icon} /><span><strong>{t(item.label)}</strong><small>{t(item.hint)}</small></span></button>)}
         </div>)}
       </nav>
       {body()}
     </div>
     <ToastContainer toasts={toasts} dismiss={dismiss} />
-    <Dialog open={Boolean(revokeRow)} title={`Revoke key “${revokeRow?.label || ''}”?`} destructive confirmLabel="Revoke" onClose={() => setRevokeRow(null)} onConfirm={confirmRevoke}><p className="muted">Clients using this key will stop working immediately. The last active key cannot be revoked.</p></Dialog>
+    <Dialog open={Boolean(revokeRow)} title={t('settings.keys.revokeTitle', { label: revokeRow?.label || '' })} destructive confirmLabel={t('settings.keys.revokeConfirm')} onClose={() => setRevokeRow(null)} onConfirm={confirmRevoke}><p className="muted">{t('settings.keys.revokeBody')}</p></Dialog>
   </div>
 }

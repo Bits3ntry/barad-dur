@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { api } from './api'
 import { Card, EmptyState, ErrorBanner, PageHeader, Input } from './ui'
+import { useI18n } from './i18n'
 
 /* My security: the second factor, by the person it protects.
 
@@ -10,6 +11,7 @@ import { Card, EmptyState, ErrorBanner, PageHeader, Input } from './ui'
    asking for it. Recovery codes appear exactly once. */
 
 export default function Security() {
+  const { t } = useI18n()
   const [status, setStatus] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -59,7 +61,7 @@ export default function Security() {
       setCode('')
       load()
     } catch (e) {
-      setError('That code did not match. Check the authenticator clock and try the next one.')
+      setError(t('security.mfa.errorCodeMismatch'))
     } finally {
       setBusy(false)
     }
@@ -73,7 +75,7 @@ export default function Security() {
       setDisableCode('')
       load()
     } catch (e) {
-      setError('To turn the factor off you need a current code or a recovery code.')
+      setError(t('security.disable.errorCode'))
     } finally {
       setBusy(false)
     }
@@ -99,35 +101,34 @@ export default function Security() {
   return (
     <div className="stack">
       <PageHeader
-        title="My security"
-        subtitle="Optional second factor for your own account — it is never enabled on your behalf"
-        actions={<button onClick={load}>refresh</button>}
+        title={t('security.title')}
+        subtitle={t('security.subtitle')}
+        actions={<button onClick={load}>{t('common.refresh')}</button>}
       />
 
       {error && <ErrorBanner error={error} onRetry={load} />}
 
       {!isUser && identity && (
-        <Card title="Second factor needs a signed-in user">
-          <EmptyState title="You are using an API key"
-            hint="Multi-factor belongs to a person. Sign in with email and password (or SSO) to manage it." />
+        <Card title={t('security.apiKey.title')}>
+          <EmptyState title={t('security.apiKey.emptyTitle')}
+            hint={t('security.apiKey.emptyHint')} />
         </Card>
       )}
 
       {isUser && status && (
-        <Card title="Multi-factor authentication (TOTP)"
+        <Card title={t('security.mfa.title')}
           actions={<span className={`status st-${status.enabled ? 'active' : 'disabled'}`}>
-            {status.enabled ? 'enabled' : 'off'}
+            {status.enabled ? t('security.mfa.enabled') : t('security.mfa.off')}
           </span>}>
           {!status.enabled && !enrolment && (
             <>
               <p className="muted" style={{ marginTop: 0 }}>
-                Works with any authenticator app (Google Authenticator, 1Password, Aegis…).
-                Enrolment is two steps: scan the secret, then prove a code from it.
+                {t('security.mfa.intro')}
               </p>
-              <Input label="Confirm your password to start" type="password" value={password}
-                onChange={setPassword} placeholder="current password" />
+              <Input label={t('security.mfa.passwordLabel')} type="password" value={password}
+                onChange={setPassword} placeholder={t('security.mfa.passwordPlaceholder')} />
               <button className="primary-action" disabled={busy || !password} onClick={startEnrol}>
-                start enrolment
+                {t('security.mfa.start')}
               </button>
             </>
           )}
@@ -135,30 +136,29 @@ export default function Security() {
           {enrolment && (
             <div className="stack">
               <p className="muted" style={{ marginTop: 0 }}>
-                Scan with the authenticator, or type the secret. Nothing changes at
-                login until you confirm a code.
+                {t('security.enrol.intro')}
               </p>
               <div className="mfa-enrol">
                 <div className="mfa-qr">
                   <QRCodeSVG value={enrolment.otpauth} size={148} includeMargin />
                 </div>
                 <div className="stack" style={{ gap: 6 }}>
-                  <span className="muted">secret (manual entry)</span>
+                  <span className="muted">{t('security.enrol.secretLabel')}</span>
                   <code className="mono" style={{ fontSize: 13, wordBreak: 'break-all' }}>
                     {enrolment.secret}
                   </code>
                   <span className="muted" style={{ fontSize: 12 }}>
-                    {enrolment.digits} digits · {enrolment.period}s period · SHA1
+                    {t('security.enrol.params', { digits: enrolment.digits, period: enrolment.period })}
                   </span>
-                  <a className="link" href={enrolment.otpauth}>open in authenticator</a>
+                  <a className="link" href={enrolment.otpauth}>{t('security.enrol.open')}</a>
                 </div>
               </div>
-              <Input label="Code from the app" value={code} onChange={setCode}
+              <Input label={t('security.enrol.codeLabel')} value={code} onChange={setCode}
                 placeholder="123456" />
               <div className="row">
                 <button className="primary-action" disabled={busy || code.trim().length < 6}
-                  onClick={confirmEnrol}>confirm and enable</button>
-                <button onClick={() => { setEnrolment(null); setCode('') }}>cancel</button>
+                  onClick={confirmEnrol}>{t('security.enrol.confirm')}</button>
+                <button onClick={() => { setEnrolment(null); setCode('') }}>{t('security.enrol.cancel')}</button>
               </div>
             </div>
           )}
@@ -166,41 +166,41 @@ export default function Security() {
           {recovery && (
             <div className="stack">
               <p className="muted" style={{ marginTop: 0 }}>
-                Save these now — they are shown once and each works a single time.
+                {t('security.recovery.intro')}
               </p>
               <div className="mfa-codes">
                 {recovery.map((item) => <code key={item}>{item}</code>)}
               </div>
-              <button onClick={() => setRecovery(null)}>I saved them</button>
+              <button onClick={() => setRecovery(null)}>{t('security.recovery.saved')}</button>
             </div>
           )}
 
           {status.enabled && (
             <div className="stack">
               <p className="muted" style={{ marginTop: 0 }}>
-                {status.recovery_codes_left} recovery code(s) left
+                {t('security.recovery.left', { n: status.recovery_codes_left })}
                 {status.enrolled_at
-                  ? ` · enabled ${new Date(status.enrolled_at).toLocaleDateString()}` : ''}.
+                  ? t('security.recovery.enabledAt', { date: new Date(status.enrolled_at).toLocaleDateString() }) : ''}.
               </p>
               <div className="row">
-                <Input label="Confirm password to rotate codes" type="password" value={password}
-                  onChange={setPassword} placeholder="current password" />
+                <Input label={t('security.recovery.rotateLabel')} type="password" value={password}
+                  onChange={setPassword} placeholder={t('security.mfa.passwordPlaceholder')} />
                 <button disabled={busy || !password} onClick={rotateCodes}>
-                  new recovery codes
+                  {t('security.recovery.rotate')}
                 </button>
               </div>
               <div className="row">
-                <Input label="Code or recovery code to turn it off" value={disableCode}
+                <Input label={t('security.disable.codeLabel')} value={disableCode}
                   onChange={setDisableCode} placeholder="123456 or XXXXX-XXXXX" />
                 <button className="btn-danger" disabled={busy || !disableCode.trim()}
-                  onClick={disable}>disable multi-factor</button>
+                  onClick={disable}>{t('security.disable.button')}</button>
               </div>
             </div>
           )}
         </Card>
       )}
 
-      {loading && !status && <Card><span className="muted">loading…</span></Card>}
+      {loading && !status && <Card><span className="muted">{t('security.loading')}</span></Card>}
     </div>
   )
 }

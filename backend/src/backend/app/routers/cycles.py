@@ -11,12 +11,15 @@ Rules that hold:
   * a cycle never grants an authorization.
 """
 from datetime import datetime, timezone
+import hashlib
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app import auth, models, projects as projects_ref, severity as severity_vocab
+from backend.app import (auth, claims, decisions, models, projects as projects_ref,
+                         severity as severity_vocab, threat_plan)
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
 
@@ -28,6 +31,13 @@ TRANSITIONS = {
     "close": ("review", "closed"),
 }
 CRITERIA_VERDICTS = {"met", "not_met", "not_measurable", "pending"}
+HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"}
+
+# The origin a cycle writes on the rows it holds. `origin` is the "who said so"
+# axis: a claim from a pentest is not a manual note somebody typed, and the
+# findings screen filters on exactly these values. The map lives in `claims.py`
+# because the estate door writes the same rows.
+ORIGIN_BY_KIND = claims.ORIGIN_BY_KIND
 
 
 def _ts(value: str | None, name: str) -> datetime | None:
@@ -46,6 +56,15 @@ def _cycle_or_404(session: Session, org_id: str, cycle_id: str) -> models.Cycle:
     if cycle is None or cycle.org_id != org_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "cycle not found")
     return cycle
+
+
+def _kind_or_422(value: str) -> str:
+    """The exercise kind is a closed set: a typo must not create a KPI bucket."""
+    kind = (value or "").strip()
+    if kind not in models.CYCLE_KINDS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"kind must be one of {sorted(models.CYCLE_KINDS)}")
+    return kind
 
 
 def _resolve_selection(session: Session, org: models.Organization,
@@ -99,6 +118,37 @@ def _resolve_selection(session: Session, org: models.Organization,
             if asset is not None and asset.org_id == org.id:
                 add("asset", asset.id, asset.value)
 
+    for asset_id in selection.get("assets") or []:
+        asset = session.get(models.Asset, asset_id)
+        if asset is None or asset.org_id != org.id:
+            gaps.append(f"asset {asset_id} does not exist in this organization")
+            continue
+        if asset.archived_at is None:
+            add("asset", asset.id, asset.value)
+
+    for repo_id in selection.get("repositories") or []:
+        repository = session.get(models.Repository, repo_id)
+        if repository is None or repository.org_id != org.id:
+            gaps.append(f"repository {repo_id} does not exist in this organization")
+            continue
+        add("repository", repository.id, repository.name)
+
+    component_ids = [cid for cid in (selection.get("components") or []) if cid]
+    if component_ids:
+        components = (session.query(models.ApplicationComponent)
+                      .filter(models.ApplicationComponent.org_id == org.id,
+                              models.ApplicationComponent.id.in_(component_ids)).all())
+        found = {component.id for component in components}
+        for missing in [cid for cid in component_ids if cid not in found]:
+            gaps.append(f"component {missing} does not exist in this organization")
+        assets = threat_plan.assets_for_components(session, org.id, list(found))
+        for component in components:
+            add("component", component.id, component.name)
+        for asset_id in sorted(set().union(*assets.values()) if assets else set()):
+            asset = session.get(models.Asset, asset_id)
+            if asset is not None and asset.org_id == org.id:
+                add("asset", asset.id, asset.value)
+
     for environment in selection.get("environments") or []:
         deployments = (session.query(models.Deployment)
                        .filter_by(org_id=org.id, environment=environment).all())
@@ -120,8 +170,40 @@ def _cycle_data(session: Session, cycle: models.Cycle) -> dict:
                .filter_by(cycle_id=cycle.id).count())
     linked = (session.query(models.CycleFinding)
               .filter_by(cycle_id=cycle.id).count())
+    # What activation froze, and whether the live charter has moved since. The
+    # review judges the frozen copy; the screen can then say "amended" out loud
+    # instead of pretending the goalposts never moved.
+    frozen_charter = (cycle.snapshot or {}).get("charter") if cycle.snapshot_at else None
+    frozen_selection = (cycle.snapshot or {}).get("selection") if cycle.snapshot_at else None
+    amended = bool(frozen_charter is not None
+                   and ((cycle.charter or {}) != frozen_charter
+                        or (cycle.selection or {}) != (frozen_selection or {})))
+    # The autonomous runs of this campaign: "is something running right now" is a
+    # question the screen that launches them has to answer, not one you go hunting
+    # for in another list.
+    missions = (session.query(models.AgentMission)
+                .filter(models.AgentMission.org_id == cycle.org_id,
+                        models.AgentMission.evidence.like(f'%"cycle_id": "{cycle.id}"%'))
+                .order_by(models.AgentMission.created_at.desc()).limit(5).all())
+    runs = []
+    for mission in missions:
+        tasks = session.query(models.AgentTask).filter_by(mission_id=mission.id).all()
+        runs.append({
+            "id": mission.id, "status": mission.status, "goal": mission.goal,
+            "capability": mission.capability, "profile": mission.profile,
+            "approved_by": mission.approved_by,
+            "created_at": mission.created_at.isoformat() if mission.created_at else None,
+            "finished_at": mission.finished_at.isoformat() if mission.finished_at else None,
+            "tasks": len(tasks),
+            "queued": sum(1 for task in tasks if task.status == "queued"),
+            "running": sum(1 for task in tasks if task.status == "running"),
+            "done": sum(1 for task in tasks if task.status == "done"),
+        })
     return {"id": cycle.id, "name": cycle.name, "description": cycle.description,
-            "owner": cycle.owner, "state": cycle.state,
+            "agent_missions": runs,
+            "notes": cycle.notes,
+            "owner": cycle.owner, "kind": cycle.kind, "state": cycle.state,
+            "frozen_charter": frozen_charter, "amended": amended,
             "starts_on": cycle.starts_on.isoformat() if cycle.starts_on else None,
             "ends_on": cycle.ends_on.isoformat() if cycle.ends_on else None,
             "charter": cycle.charter or {}, "selection": cycle.selection or {},
@@ -138,7 +220,11 @@ def _cycle_data(session: Session, cycle: models.Cycle) -> dict:
 class CycleIn(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=8192)
+    notes: str | None = Field(default=None, max_length=20000)
     owner: str | None = Field(default=None, max_length=255)
+    # The exercise this window is. Validated against models.CYCLE_KINDS: a free
+    # string would make the KPI bucket and the review criterion meaningless.
+    kind: str = Field(default="sweep", max_length=24)
     starts_on: str | None = None
     ends_on: str | None = None
     charter: dict = Field(default_factory=dict)
@@ -149,7 +235,9 @@ class CycleIn(BaseModel):
 class CyclePatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=8192)
+    notes: str | None = Field(default=None, max_length=20000)
     owner: str | None = Field(default=None, max_length=255)
+    kind: str | None = Field(default=None, max_length=24)
     starts_on: str | None = None
     ends_on: str | None = None
     charter: dict | None = None
@@ -193,7 +281,8 @@ def create_cycle(payload: CycleIn = None,
         raise HTTPException(status.HTTP_409_CONFLICT, "a cycle with that name exists")
     cycle = models.Cycle(
         org_id=org.id, name=name, description=payload.description,
-        owner=payload.owner, state="planning",
+        notes=payload.notes, owner=payload.owner,
+        kind=_kind_or_422(payload.kind), state="planning",
         starts_on=_ts(payload.starts_on, "starts_on"),
         ends_on=_ts(payload.ends_on, "ends_on"),
         charter=payload.charter or {}, selection=payload.selection or {},
@@ -203,6 +292,44 @@ def create_cycle(payload: CycleIn = None,
     _audit_log(session, org.id, payload.actor, "cycle.created", "cycle", cycle.id, name)
     session.commit()
     return {"data": _cycle_data(session, cycle)}
+
+
+@router.get("/scope-search")
+def scope_search(q: str = Query(..., min_length=1, max_length=200),
+                 limit: int = Query(default=8, ge=1, le=50),
+                 org: models.Organization = Depends(auth.require_org),
+                 session: Session = Depends(get_session)):
+    """One box for everything a campaign is scoped to: domain, project, repository.
+
+    Searching is how a scope is written: an operator knows the host or the repo, not
+    the uuid, and a list of 273 assets is not a picker.
+    """
+    needle = f"%{q.strip()}%"
+    assets = (session.query(models.Asset)
+              .filter(models.Asset.org_id == org.id,
+                      models.Asset.archived_at.is_(None),
+                      models.Asset.value.ilike(needle))
+              .order_by(models.Asset.value).limit(limit).all())
+    projects = (session.query(models.Project)
+                .filter(models.Project.org_id == org.id,
+                        models.Project.name.ilike(needle)
+                        | models.Project.slug.ilike(needle))
+                .order_by(models.Project.name).limit(limit).all())
+    repositories = (session.query(models.Repository)
+                    .filter(models.Repository.org_id == org.id,
+                            models.Repository.name.ilike(needle)
+                            | models.Repository.remote_url.ilike(needle))
+                    .order_by(models.Repository.name).limit(limit).all())
+    project_names = {row.id: row for row in
+                     session.query(models.Project).filter_by(org_id=org.id).all()}
+    return {"assets": [{"id": row.id, "label": row.value, "type": row.type,
+                        "project": project_names[row.project_id].slug
+                        if row.project_id in project_names else None}
+                       for row in assets],
+            "projects": [{"id": row.slug, "label": row.name, "slug": row.slug}
+                         for row in projects],
+            "repositories": [{"id": row.id, "label": row.name,
+                              "provider": row.provider} for row in repositories]}
 
 
 @router.get("/{cycle_id}")
@@ -238,20 +365,44 @@ def get_cycle(cycle_id: str,
 def patch_cycle(cycle_id: str, payload: CyclePatch = None,
                 org: models.Organization = Depends(auth.require_org),
                 session: Session = Depends(get_session)):
+    """Amend a cycle: freely in planning, by amendment after it is activated.
+
+    Activation freezes a **snapshot** — charter and membership as they were — and
+    that snapshot is never rewritten. The live charter stays editable because a
+    campaign learns things while it runs (an attacker profile appears, a criterion
+    turns out unmeasurable), and refusing the edit does not stop the learning; it
+    only hides it. What the review judges is the frozen charter, so an amendment
+    cannot move the goalposts after the fact.
+
+    Two fields stay out of reach once activated: `kind` (it is the KPI bucket) and
+    `selection` (the membership is frozen; the next cycle carries changes).
+    """
     if payload is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
     cycle = _cycle_or_404(session, org.id, cycle_id)
-    if cycle.state != "planning":
+    if cycle.state == "closed":
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "an activated cycle is frozen; changing it needs a new cycle or an "
-            "explicit amendment (post-v0)")
+            "a closed cycle is a historical record; start the next one")
+    activated = cycle.snapshot_at is not None
+    if activated and payload.kind is not None and payload.kind != cycle.kind:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "the kind is frozen at activation: it is the KPI bucket")
+    # A selection edit after activation is an amendment: the frozen snapshot keeps
+    # the reference the review is judged against, and the membership is rebuilt so
+    # the engine and the screen never disagree about what is in scope now.
     changes = []
+    if payload.notes is not None:
+        cycle.notes = payload.notes
+        changes.append("notes")
     for field_name in ("name", "description", "owner"):
         value = getattr(payload, field_name)
         if value is not None:
             setattr(cycle, field_name, value)
             changes.append(field_name)
+    if payload.kind is not None and not activated:
+        cycle.kind = _kind_or_422(payload.kind)
+        changes.append("kind")
     for field_name in ("starts_on", "ends_on"):
         value = getattr(payload, field_name)
         if value is not None:
@@ -263,11 +414,24 @@ def patch_cycle(cycle_id: str, payload: CyclePatch = None,
     if payload.selection is not None:
         cycle.selection = payload.selection
         changes.append("selection")
+        if activated:
+            members, gaps = _resolve_selection(session, org, cycle.selection or {})
+            (session.query(models.CycleMembership)
+             .filter_by(cycle_id=cycle.id).delete(synchronize_session=False))
+            now = models.utcnow()
+            for member in members:
+                session.add(models.CycleMembership(
+                    org_id=org.id, cycle_id=cycle.id,
+                    entity_type=member["entity_type"], entity_id=member["entity_id"],
+                    label=member["label"], included_at=now))
+            cycle.updated_at = now
+            session.expire(cycle, ["snapshot"])
     if not changes:
         return {"data": _cycle_data(session, cycle), "changed": False}
     cycle.updated_at = models.utcnow()
-    _audit_log(session, org.id, payload.actor, "cycle.updated", "cycle", cycle.id,
-               ", ".join(changes))
+    _audit_log(session, org.id, payload.actor,
+               "cycle.charter_amended" if activated else "cycle.updated",
+               "cycle", cycle.id, ", ".join(changes))
     session.commit()
     return {"data": _cycle_data(session, cycle), "changed": True}
 
@@ -292,7 +456,10 @@ def preview(cycle_id: str,
     if incomplete:
         gaps.append("selection is empty: an empty selection is incomplete, "
                     "not 'the whole organization'")
+    plan = threat_plan.plan(session, org, selection.get("components"),
+                            (cycle.charter or {}).get("profile_ids"))
     return {"data": {"cycle": cycle.id, "state": cycle.state,
+                     "plan": plan,
                      "members": len(members), "assets": len(assets),
                      "by_type": {kind: sum(1 for item in members
                                            if item["entity_type"] == kind)
@@ -329,8 +496,14 @@ def activate(cycle_id: str, actor: str = Query(default="console"),
             org_id=org.id, cycle_id=cycle.id,
             entity_type=member["entity_type"], entity_id=member["entity_id"],
             label=member["label"], included_at=now))
+    snapshot_plan = threat_plan.plan(session, org,
+                                     (cycle.selection or {}).get("components"),
+                                     (cycle.charter or {}).get("profile_ids"))
     cycle.snapshot = {"charter": cycle.charter or {},
                       "selection": cycle.selection or {},
+                      "plan": {"jewels": snapshot_plan["jewels"],
+                               "coverage": snapshot_plan["coverage"],
+                               "capabilities": snapshot_plan["capabilities"]},
                       "members": len(members),
                       "by_type": {kind: sum(1 for item in members
                                             if item["entity_type"] == kind)
@@ -430,6 +603,202 @@ def link_findings(cycle_id: str, payload: LinkFindingsIn = None,
                cycle.id, f"{len(linked)} linked, {len(skipped)} skipped")
     session.commit()
     return {"data": {"linked": len(linked), "skipped": skipped}}
+
+
+# The claim's shape lives in `claims.py`: the cycle ledger and `POST /findings/record`
+# write the same row, so they read the same model.
+CycleFindingIn = claims.ClaimIn
+
+
+class FindingDecisionIn(BaseModel):
+    decision: Literal["validate", "dismiss", "accept_risk"] = "validate"
+    reason: str | None = Field(default=None, max_length=2000)
+    actor: str = Field(default="console", max_length=255)
+
+
+def _finding_record(finding: models.Finding, cycle_id: str) -> dict:
+    """The claim as it was written: where, with which session, and what proves it."""
+    return {
+        "id": finding.id, "title": finding.title,
+        "severity": severity_vocab.canonical(finding.severity),
+        "status": finding.status, "triage_status": finding.triage_status,
+        "origin": finding.origin, "cycle_id": cycle_id,
+        "version_id": finding.last_seen_version_id,
+        "kind": finding.kind, "cwe": finding.cwe, "url": finding.url,
+        "endpoint": finding.endpoint, "http_method": finding.http_method,
+        "impact": finding.impact, "reproduction": finding.reproduction,
+        "auth_required": finding.auth_required,
+        "auth_profile_id": finding.auth_profile_id,
+        "product_component_id": finding.product_component_id,
+        "expected_result": finding.expected_result,
+        "observed_result": finding.observed_result,
+        "validation_output": finding.validation_output,
+        "proof_request": finding.proof_request,
+        "proof_response": finding.proof_response,
+        "evidence_level": finding.evidence_level,
+        "first_seen_at": finding.first_seen_at.isoformat() if finding.first_seen_at else None,
+    }
+
+
+@router.post("/{cycle_id}/findings", status_code=status.HTTP_201_CREATED)
+def record_finding(cycle_id: str, payload: CycleFindingIn = None,
+                   response: Response = None,
+                   org: models.Organization = Depends(auth.require_org),
+                   session: Session = Depends(get_session)):
+    """Record one vulnerability inside a cycle, by hand.
+
+    The row is a claim, not a confirmation: a pentest's report and an analyst's
+    note both enter the same way, and the human key is applied later from the
+    finding — never by the act of typing it. The record itself is built by
+    `claims.record_claim`, which is what `POST /findings/record` calls too, so the
+    ledger and the estate queue cannot disagree about what a claim is.
+    """
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    cycle = _cycle_or_404(session, org.id, cycle_id)
+    if cycle.state == "closed":
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "a closed cycle takes no new findings; open the next one")
+    try:
+        finding, created = claims.record_claim(session, org, payload, cycle)
+    except ValueError as error:
+        message = str(error)
+        code = (status.HTTP_404_NOT_FOUND if message.endswith("not found")
+                else status.HTTP_422_UNPROCESSABLE_ENTITY)
+        raise HTTPException(code, message) from None
+    if not created:
+        if response is not None:
+            response.status_code = status.HTTP_200_OK
+        return {"data": _finding_record(finding, cycle.id), "created": False}
+    _audit_log(session, org.id, payload.actor, "cycle.finding_recorded", "finding",
+               finding.id, f"{cycle.id}: {finding.title}")
+    session.commit()
+    return {"data": _finding_record(finding, cycle.id), "created": True}
+
+
+@router.post("/{cycle_id}/findings/{finding_id}/decide")
+def decide_finding(cycle_id: str, finding_id: str,
+                   payload: FindingDecisionIn = None,
+                   org: models.Organization = Depends(auth.require_org),
+                   session: Session = Depends(get_session)):
+    """The human key, applied from the cycle's ledger.
+
+    A claim recorded by hand has no run to be triaged from, so the decision is made
+    here: it lands on the finding, on the cycle's audit trail, and — for `validate`
+    — attaches the asset it named. A closed cycle is history and takes no decisions.
+    """
+    if payload is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "payload required")
+    cycle = _cycle_or_404(session, org.id, cycle_id)
+    if cycle.state == "closed":
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "a closed cycle is a historical record; decide in the next one")
+    link = (session.query(models.CycleFinding)
+            .filter_by(cycle_id=cycle.id, finding_id=finding_id).one_or_none())
+    if link is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "that finding is not in this cycle's ledger")
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != org.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    outcome = decisions.apply(session, org, finding, payload.decision,
+                              payload.actor, payload.reason)
+    _audit_log(session, org.id, payload.actor, "cycle.finding_decided", "finding",
+               finding.id,
+               f"{cycle.id}: {payload.decision}"
+               + (f" — {payload.reason}" if payload.reason else ""))
+    session.commit()
+    return {"data": {"id": finding.id, "title": finding.title,
+                     "status": finding.status,
+                     "triage_status": finding.triage_status,
+                     "asset_id": finding.asset_id,
+                     "severity": severity_vocab.canonical(finding.severity),
+                     "decision": outcome["decision"],
+                     "attached_asset": outcome["attached_asset"]},
+            "cycle_id": cycle.id}
+
+
+@router.get("/{cycle_id}/documents")
+def list_documents(cycle_id: str,
+                   org: models.Organization = Depends(auth.require_org),
+                   session: Session = Depends(get_session)):
+    """The campaign's files, metadata only: the bytes are fetched one at a time."""
+    cycle = _cycle_or_404(session, org.id, cycle_id)
+    rows = (session.query(models.CycleDocument)
+            .filter_by(cycle_id=cycle.id)
+            .order_by(models.CycleDocument.created_at.desc()).all())
+    return {"data": [{"id": row.id, "filename": row.filename,
+                      "media_type": row.media_type, "size": row.size,
+                      "uploaded_by": row.uploaded_by,
+                      "created_at": row.created_at.isoformat()
+                      if row.created_at else None} for row in rows],
+            "total": len(rows)}
+
+
+MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
+
+
+@router.post("/{cycle_id}/documents", status_code=status.HTTP_201_CREATED)
+async def upload_document(cycle_id: str, request: Request,
+                          filename: str = Query(..., min_length=1, max_length=512),
+                          media_type: str = Query(default="application/octet-stream",
+                                                  max_length=128),
+                          actor: str = Query(default="console", max_length=255),
+                          org: models.Organization = Depends(auth.require_org),
+                          session: Session = Depends(get_session)):
+    """Keep one file with the cycle: scope letter, pentest report, client brief.
+
+    The raw body is the file (no multipart): the console already posts bytes that
+    way for SBOMs, and one shape for uploads is one shape to get right.
+    """
+    cycle = _cycle_or_404(session, org.id, cycle_id)
+    body = await request.body()
+    if not body:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "empty file")
+    if len(body) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            "file larger than 20 MB")
+    safe = filename.replace("/", "_").replace("\\", "_").strip() or "document"
+    document = models.CycleDocument(
+        org_id=org.id, cycle_id=cycle.id, filename=safe[:512],
+        media_type=(media_type or "application/octet-stream")[:128],
+        size=len(body), data=body, uploaded_by=actor)
+    session.add(document)
+    _audit_log(session, org.id, actor, "cycle.document_added", "cycle", cycle.id,
+               f"{safe} ({len(body)} bytes)")
+    session.commit()
+    return {"data": {"id": document.id, "filename": document.filename,
+                     "size": document.size, "media_type": document.media_type}}
+
+
+@router.get("/{cycle_id}/documents/{document_id}")
+def download_document(cycle_id: str, document_id: str,
+                      org: models.Organization = Depends(auth.require_org),
+                      session: Session = Depends(get_session)):
+    cycle = _cycle_or_404(session, org.id, cycle_id)
+    document = session.get(models.CycleDocument, document_id)
+    if document is None or document.cycle_id != cycle.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    return Response(content=document.data,
+                    media_type=document.media_type or "application/octet-stream",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{document.filename}"'})
+
+
+@router.delete("/{cycle_id}/documents/{document_id}")
+def delete_document(cycle_id: str, document_id: str,
+                    actor: str = Query(default="console"),
+                    org: models.Organization = Depends(auth.require_org),
+                    session: Session = Depends(get_session)):
+    cycle = _cycle_or_404(session, org.id, cycle_id)
+    document = session.get(models.CycleDocument, document_id)
+    if document is None or document.cycle_id != cycle.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    name = document.filename
+    session.delete(document)
+    _audit_log(session, org.id, actor, "cycle.document_removed", "cycle", cycle.id, name)
+    session.commit()
+    return {"data": {"id": document_id, "removed": True}}
 
 
 @router.get("/{cycle_id}/candidates")

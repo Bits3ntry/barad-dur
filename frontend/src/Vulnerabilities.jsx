@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api } from './api'
-import { EmptyState, ErrorBanner, PageHeader, Pager, SeverityBadge, Table,
+import { EmptyState, ErrorBanner, PageHeader, Pager, SeverityBadge, Table, Tabs,
          serverPager } from './ui'
+import VulnWorld from './VulnWorld'
+import { useI18n } from './i18n'
 
 /* Vulnerabilities is an aggregate over findings this organization actually has,
    not a catalog browser. Every number links back to concrete finding ids, and
@@ -10,282 +12,248 @@ import { EmptyState, ErrorBanner, PageHeader, Pager, SeverityBadge, Table,
 
 const EMPTY_FILTERS = { q: '', severity: '', kev: false, project: '' }
 const PER_PAGE = 25
+// The list used to keep its question in component state only, so opening an
+// advisory and coming back reset every filter — the reader's work was lost on the
+// one navigation this screen now makes. The question outlives the visit.
+const FILTER_KEY = 'barad.vuln.filters'
+
+function storedFilters() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FILTER_KEY) || 'null')
+    return raw && typeof raw === 'object' ? { ...EMPTY_FILTERS, ...raw } : null
+  } catch {
+    return null
+  }
+}
 
 function EnrichmentCell({ enrichment }) {
+  const { t } = useI18n()
   const kev = enrichment.kev
   const epss = enrichment.epss
   return (
     <div className="stack" style={{ gap: 2 }}>
       <span className={kev.listed ? 'sev sev-high' : 'muted'}>
-        {kev.listed ? `KEV · added ${kev.date_added || 'date unknown'}` : 'KEV not listed'}
+        {kev.listed
+          ? t('vulnerabilities.kev.added', {
+            date: kev.date_added || t('vulnerabilities.kev.dateUnknown'),
+          })
+          : t('vulnerabilities.kev.notListed')}
       </span>
       <span className="muted" style={{ fontSize: 11.5 }}>
         {epss.known
-          ? `EPSS ${Math.round(Number(epss.score) * 100)}%ile ${epss.percentile}`
-          : 'EPSS unknown'}
+          ? t('vulnerabilities.epss.known', {
+            score: Math.round(Number(epss.score) * 100), percentile: epss.percentile,
+          })
+          : t('vulnerabilities.epss.unknown')}
       </span>
       <span className="muted" style={{ fontSize: 11.5 }}>
-        {commissioned(kev, epss)}
+        {commissioned(kev, epss, t)}
       </span>
     </div>
   )
 }
 
-function commissioned(kev, epss) {
-  if (!kev.known && !epss.known) return 'no enrichment source connected'
+function commissioned(kev, epss, t) {
+  if (!kev.known && !epss.known) return t('vulnerabilities.enrichment.none')
   const stamp = kev.known ? kev.fetched_at : epss.fetched_at
-  return stamp ? `enriched ${new Date(stamp).toLocaleDateString()}` : 'enrichment date unknown'
+  return stamp
+    ? t('vulnerabilities.enrichment.enriched', { date: new Date(stamp).toLocaleDateString() })
+    : t('vulnerabilities.enrichment.dateUnknown')
 }
 
-export default function Vulnerabilities({ onNavigate }) {
-  const [filters, setFilters] = useState({ ...EMPTY_FILTERS })
+export default function Vulnerabilities({ onNavigate, onOpenCve, focus = {} }) {
+  const { t, tCount, tOr } = useI18n()
+  // Two readings of the same word: what this estate has (`estate`) and what the world
+  // published (`world`). They are different questions with different filters, and
+  // mixing them was the reason "¿me afecta?" could only be asked as "¿tengo el
+  // finding?".
+  const [scope, setScope] = useState(focus.scope === 'world' ? 'world' : 'estate')
+  // A deep link may arrive with the question already asked (the dashboard's
+  // "known exploited" KPI). The filter is the screen's own state; the hash only
+  // seeds it, so the reader can clear it without leaving the list.
+  const [filters, setFilters] = useState(() => {
+    const seeded = {
+      ...EMPTY_FILTERS,
+      ...(focus.kev ? { kev: true } : {}),
+      ...(focus.severity ? { severity: focus.severity } : {}),
+      ...(focus.q ? { q: focus.q } : {}),
+      ...(focus.project ? { project: focus.project } : {}),
+    }
+    // A link that names the question wins; otherwise the last one this reader
+    // asked is still the question.
+    const asked = focus.kev || focus.severity || focus.q || focus.project
+    return asked ? seeded : (storedFilters() || seeded)
+  })
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
   const [projects, setProjects] = useState([])
-  const [openCve, setOpenCve] = useState('')
-  const [detail, setDetail] = useState(null)
-  const [selected, setSelected] = useState([])
-  const [preview, setPreview] = useState(null)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
-  const [busy, setBusy] = useState(false)
   const [offset, setOffset] = useState(0)
   const pager = serverPager(total, PER_PAGE, offset, setOffset)
 
   // Paging and filtering share the offset: a new question starts at page one,
-  // so `apply` only reloads when it is already there.
-  useEffect(() => { load() }, [offset])
+  // so `apply` only reloads when it is already there. The world tab owns its data.
+  useEffect(() => { if (scope === 'estate') load() }, [offset, scope])
   useEffect(() => {
     api.get('/api/v1/projects').then((r) => setProjects(r.data || [])).catch(() => setProjects([]))
   }, [])
 
-  function load() {
+  // The screen can already be mounted when a second link arrives (search while
+  // reading this list): the hash is the question, so it re-seeds the filter
+  // instead of being ignored because the component did not remount.
+  const appliedFocus = useRef('')
+  useEffect(() => {
+    if (!focus.cve && !focus.q) return
+    const key = `${focus.q || ''}|${focus.cve || ''}|${focus.project || ''}`
+    if (appliedFocus.current === key) return
+    appliedFocus.current = key
+    const next = { ...EMPTY_FILTERS, q: focus.q || focus.cve,
+      severity: focus.severity || '', kev: Boolean(focus.kev),
+      project: focus.project || '' }
+    setFilters(next)
+    setOffset(0)
+    load(next, 0)
+  }, [focus.cve, focus.q, focus.project])
+
+  function load(overrides = filters, atOffset = offset) {
     const params = new URLSearchParams()
-    if (filters.q.trim()) params.set('q', filters.q.trim())
-    if (filters.severity) params.set('severity', filters.severity)
-    if (filters.kev) params.set('kev_only', 'true')
-    if (filters.project) params.set('project', filters.project)
+    if (overrides.q.trim()) params.set('q', overrides.q.trim())
+    if (overrides.severity) params.set('severity', overrides.severity)
+    if (overrides.kev) params.set('kev_only', 'true')
+    if (overrides.project) params.set('project', overrides.project)
     params.set('limit', PER_PAGE)
-    params.set('offset', offset)
+    params.set('offset', atOffset)
+    // Written before the request so the question survives a navigation that
+    // happens while it is still in flight (click a row fast enough).
+    try { localStorage.setItem(FILTER_KEY, JSON.stringify(overrides)) } catch { /* private mode */ }
     api.get(`/api/v1/vulnerabilities?${params}`)
       .then((r) => { setRows(r.data || []); setTotal(r.total || 0) })
       .catch((e) => setError(String(e.message || e)))
   }
 
-  async function toggle(cveId) {
-    setPreview(null)
-    setSelected([])
-    if (openCve === cveId) { setOpenCve(''); setDetail(null); return }
-    setOpenCve(cveId)
-    try {
-      const { data } = await api.get(`/api/v1/vulnerabilities/${encodeURIComponent(cveId)}`)
-      setDetail(data)
-      setSelected(data.findings_detail
-        .filter((row) => row.status !== 'resolved').map((row) => row.id))
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-  }
-
-  async function previewBulk() {
-    if (!detail || !selected.length) return
-    setBusy(true)
-    try {
-      const result = await api.post(
-        `/api/v1/vulnerabilities/${encodeURIComponent(detail.cve_id)}/bulk-preview`,
-        { finding_ids: selected, status: 'resolved' })
-      setPreview(result.data)
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-    setBusy(false)
-  }
-
-  async function applyBulk() {
-    if (!detail || !preview) return
-    setBusy(true)
-    try {
-      const result = await api.post(
-        `/api/v1/vulnerabilities/${encodeURIComponent(detail.cve_id)}/bulk-status?actor=console`,
-        { finding_ids: selected, status: 'resolved' })
-      setNotice(`${result.data.changed} finding(s) resolved on ${detail.cve_id}`
-        + (result.data.skipped.length ? `, ${result.data.skipped.length} skipped` : ''))
-      setPreview(null)
-      setSelected([])
-      setDetail(null)
-      setOpenCve('')
-      load()
-    } catch (e) {
-      setError(String(e.message || e))
-    }
-    setBusy(false)
+  // One row is one problem: opening it is a page of its own (`/cve/<id>`), not a
+  // drawer under the table — the advisory needs its description, its impact, the
+  // components it touches and the findings behind it, and none of that fits in a
+  // detail row without turning the list into two screens at once.
+  function open(row) {
+    if (onOpenCve) onOpenCve(row.cve_id || row.signature)
   }
 
   return (
     <div className="stack">
       <PageHeader
-        title="Vulnerabilities"
-        subtitle={`${total} CVE${total === 1 ? '' : 's'} affecting this inventory · grouped from findings, never from the catalog`}
+        title={t('vulnerabilities.title')}
+        subtitle={scope === 'estate'
+          ? tCount('vulnerabilities.subtitle', total)
+          : t('vulnerabilities.world.lead')}
       />
 
+      <Tabs
+        tabs={[
+          { id: 'estate', label: t('vulnerabilities.world.estateTab') },
+          { id: 'world', label: t('vulnerabilities.world.tab') },
+        ]}
+        active={scope}
+        onChange={setScope}
+      />
+
+      {scope === 'world' ? <VulnWorld onOpenCve={onOpenCve} /> : (<>
       <div className="toolbar">
-        <input placeholder="search CVE id…" value={filters.q}
+        <input placeholder={t('vulnerabilities.searchPlaceholder')} value={filters.q}
           onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value }))}
           onKeyDown={(e) => e.key === 'Enter' && load()} />
         <select value={filters.severity}
           onChange={(e) => setFilters((f) => ({ ...f, severity: e.target.value }))}>
-          <option value="">any severity</option>
-          <option value="CRITICAL">critical</option>
-          <option value="HIGH">high</option>
-          <option value="MEDIUM">medium</option>
-          <option value="LOW">low</option>
-          <option value="UNKNOWN">unknown</option>
+          <option value="">{t('vulnerabilities.filter.anySeverity')}</option>
+          {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'].map((value) => (
+            <option key={value} value={value}>
+              {tOr('severity.' + value.toLowerCase(), value.toLowerCase())}
+            </option>
+          ))}
         </select>
         <select value={filters.project}
           onChange={(e) => setFilters((f) => ({ ...f, project: e.target.value }))}>
-          <option value="">every project</option>
+          <option value="">{t('vulnerabilities.filter.everyProject')}</option>
           {projects.map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
         </select>
         <label className="check">
           <input type="checkbox" checked={filters.kev}
             onChange={(e) => setFilters((f) => ({ ...f, kev: e.target.checked }))} />
-          <span>KEV only</span>
+          <span>{t('vulnerabilities.filter.kevOnly')}</span>
         </label>
-        <button onClick={() => (offset === 0 ? load() : setOffset(0))}>apply</button>
+        <button onClick={() => (offset === 0 ? load() : setOffset(0))}>{t('vulnerabilities.apply')}</button>
         <span className="row-end">
           <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
-            total={pager.total} perPage={PER_PAGE} unit="CVEs" />
+            total={pager.total} perPage={PER_PAGE} unit={t('vulnerabilities.unit')} />
         </span>
       </div>
 
       {error && <ErrorBanner error={error} />}
-      {notice && <div className="banner banner-ok">{notice}</div>}
 
       {rows.length ? (
-        <Table head={['CVE', 'severity', 'priority', 'findings', 'assets', 'projects', 'enrichment', '']}>
+        <Table className="vuln-table" head={[t('vulnerabilities.col.cve'), t('common.severity'),
+          t('vulnerabilities.col.findings'), t('vulnerabilities.col.projects'),
+          t('vulnerabilities.col.signals')]}>
           {rows.map((row) => (
-            <React.Fragment key={row.cve_id}>
-              <tr className={openCve === row.cve_id ? 'selected' : ''}>
-                <td className="title mono">{row.cve_id}
-                  {row.title && (
-                    <div className="muted" style={{ fontSize: 11.5 }}>{row.title}</div>
-                  )}
-                </td>
-                <td><SeverityBadge severity={row.severity} /></td>
-                <td>{row.priority || <span className="muted">unclassified</span>}</td>
-                <td>
-                  {row.findings}
+            /* The row is the door: the id is the button for the keyboard, the row
+               for the pointer, and the last column this replaces held nothing the
+               first one did not. */
+            <tr key={row.cve_id || row.id} className="row-link"
+              onClick={() => open(row)}>
+              <td className="title mono">
+                <button className="linkish mono" onClick={() => open(row)}>
+                  {row.cve_id || row.signature}
+                </button>
+                {/* Priority is a property of the advisory, so it rides with its
+                    name instead of owning a column that is empty on most rows. */}
+                {row.priority && (
+                  <span className={`prio prio-${row.priority.toLowerCase()}`}>{row.priority}</span>
+                )}
+                {row.title && (
+                  /* One line, clamped: the full description belongs to the
+                     advisory page. A paragraph inside a nowrap table cell made the
+                     table 2.8k wider than its card and every column slid. */
+                  <div className="muted vuln-title">{row.title}</div>
+                )}
+              </td>
+              <td><SeverityBadge severity={row.severity} /></td>
+              <td>
+                {row.findings}
+                <div className="muted" style={{ fontSize: 11.5 }}>
+                  {t('vulnerabilities.openCount', { n: row.open_findings })}
+                </div>
+                {/* The row is the vulnerability, not the package: when it takes
+                    more than one package to close, the list says so here and the
+                    advisory page is where each upgrade is a line. */}
+                {row.components?.length > 1 && (
                   <div className="muted" style={{ fontSize: 11.5 }}>
-                    {row.open_findings} open
+                    {tCount('vulnerabilities.packages', row.components.length)}
                   </div>
-                </td>
-                <td>
-                  {row.assets.count}
-                  <div className="muted" style={{ fontSize: 11.5 }}>
-                    {row.assets.coverage === 'complete' ? 'linked' : 'no linked asset'}
-                  </div>
-                </td>
-                <td className="muted">
-                  {row.projects.map((p) => p.slug).join(', ') || '—'}
-                </td>
-                <td><EnrichmentCell enrichment={row.enrichment} /></td>
-                <td>
-                  <button className="mini" onClick={() => toggle(row.cve_id)}>
-                    {openCve === row.cve_id ? 'hide' : 'open'}
-                  </button>
-                </td>
-              </tr>
-              {openCve === row.cve_id && detail && (
-                <tr className="detail-row"><td colSpan={8}>
-                  <div className="detail">
-                    <dl>
-                      <dt>findings behind this CVE</dt>
-                      <dd>
-                        <Table head={['', 'finding', 'project', 'version', 'component', 'severity', 'status', 'assignee']}>
-                          {detail.findings_detail.map((finding) => (
-                            <tr key={finding.id}>
-                              <td>
-                                <input type="checkbox"
-                                  checked={selected.includes(finding.id)}
-                                  disabled={finding.status === 'suppressed'}
-                                  onChange={(e) => setSelected((current) => (
-                                    e.target.checked
-                                      ? [...current, finding.id]
-                                      : current.filter((id) => id !== finding.id)
-                                  ))} />
-                              </td>
-                              <td className="mono">{finding.id.slice(0, 8)}</td>
-                              <td>{finding.project || '—'}</td>
-                              <td>{finding.version || <span className="muted">unknown</span>}</td>
-                              <td className="mono muted">{finding.component || '—'}</td>
-                              <td><SeverityBadge severity={finding.severity} /></td>
-                              <td>
-                                <span className={finding.status === 'open' ? 'pill' : 'muted'}>
-                                  {finding.status}
-                                </span>
-                              </td>
-                              <td className="muted">{finding.assignee || 'unassigned'}</td>
-                            </tr>
-                          ))}
-                        </Table>
-                        {onNavigate && (
-                          <button className="mini"
-                            onClick={() => onNavigate('findings')}>
-                            open the global findings list
-                          </button>
-                        )}
-                      </dd>
-                      <dt>versions</dt>
-                      <dd className="muted">
-                        {detail.versions_known
-                          ? `affected ${detail.affected_versions.join(', ') || '—'}`
-                            + ` · fixed ${detail.fixed_versions.join(', ') || '—'}`
-                          : detail.versions_reason}
-                      </dd>
-                      <dt>grouped action</dt>
-                      <dd>
-                        <div className="row">
-                          <button className="mini" disabled={!selected.length || busy}
-                            onClick={previewBulk}>
-                            preview resolve {selected.length} finding(s)
-                          </button>
-                          {preview && (
-                            <button className="mini" disabled={busy || !preview.would_change}
-                              onClick={applyBulk}>
-                              apply to {preview.would_change}
-                            </button>
-                          )}
-                        </div>
-                        {preview && (
-                          <div className="muted" style={{ marginTop: 6 }}>
-                            would change {preview.would_change} · unchanged {preview.unchanged}
-                            {' · '}skipped {preview.skipped.length}
-                            {preview.skipped.map((row) => (
-                              <div key={row.finding_id} className="occ-row">
-                                {row.finding_id.slice(0, 8)}: {row.reason}
-                              </div>
-                            ))}
-                            <div>{preview.requires}</div>
-                          </div>
-                        )}
-                      </dd>
-                    </dl>
-                  </div>
-                </td></tr>
-              )}
-            </React.Fragment>
+                )}
+              </td>
+              <td className="muted wrap">
+                {row.projects.map((p) => p.slug).join(', ') || '—'}
+                <div style={{ fontSize: 11.5 }}>
+                  {row.assets.count} · {row.assets.coverage === 'complete'
+                    ? t('vulnerabilities.asset.linked')
+                    : t('vulnerabilities.asset.none')}
+                </div>
+              </td>
+              <td className="wrap"><EnrichmentCell enrichment={row.enrichment} /></td>
+            </tr>
           ))}
         </Table>
       ) : (
-        !error && <EmptyState title="No CVE affects this inventory yet"
-          hint="This list fills from findings that carry an advisory. Importing an SBOM alone does not create CVEs — run the analysis that matches a version against advisories." />
+        !error && <EmptyState title={t('vulnerabilities.empty.title')}
+          hint={t('vulnerabilities.empty.hint')} />
       )}
       {pager.pages > 1 && (
         <div className="row row-end" style={{ marginTop: 10 }}>
           <Pager page={pager.page} pages={pager.pages} onChange={pager.setPage}
-            total={pager.total} perPage={PER_PAGE} unit="CVEs" />
+            total={pager.total} perPage={PER_PAGE} unit={t('vulnerabilities.unit')} />
         </div>
       )}
+      </>)}
     </div>
   )
 }

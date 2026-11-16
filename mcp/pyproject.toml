@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "barad-dur-mcp"
+version = "0.1.0"
+description = "MCP server for Barad-dûr: one catalog, exposed to external agents."
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=2",
+    "httpx>=0.27",
+]
+
+# The catalog is not copied, it is imported: `backend.app.ai.tools` is the single
+# declaration shared with the platform's in-process executor (D2). Install the
+# platform package next to this one (`pip install -e ../backend`) or put
+# `backend/src` on PYTHONPATH, which is what the console image already does.
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+barad-mcp = "barad_mcp.server:main"
+
+[tool.setuptools.packages.find]
+include = ["barad_mcp*"]
