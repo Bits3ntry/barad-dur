@@ -891,3 +891,34 @@ def test_the_field_report_lands_in_the_thread_that_asked(context, monkeypatch):
     report = [t for t in turns if "Informe del agente de campo" in (t.content or "")]
     assert report, "the verdict has to come back to the thread"
     assert "VULNERABLE" in report[-1].content
+
+
+def test_a_relative_endpoint_is_not_a_target(context, monkeypatch):
+    """A finding whose only address is a path (`/rest/user/login`) has no host to talk to.
+    Taking the path as an origin produced `https:///rest/user/login` and a scope refusal
+    that read like a policy problem instead of a malformed value."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    finding = _finding_for_thread(http, headers, session, org, with_asset=False,
+                                  endpoint="/rest/user/login")
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"validá el impacto de {finding.id}"},
+                     headers=headers).json()["data"]
+    assert "https:///rest" not in body["turn"]["content"]
+    assert session.query(models.AgentMission).count() == 0
+
+
+def test_validá_a_finding_id_reaches_the_field_agent(context, monkeypatch):
+    """"validá el impacto de <id>" is an action even without a host: the finding may carry
+    one. Falling back to a read-only essay about "reading it as a component" is the dead
+    end this path exists to avoid."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"validá el impacto de {finding.id}"},
+                     headers=headers).json()["data"]
+    assert "acción contra un host" in body["turn"]["content"]
+    assert session.query(models.AgentMission).count() == 1

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import urlsplit
 from datetime import timedelta
 
 from fastapi import (APIRouter, Depends, HTTPException, Query, Response,
@@ -424,8 +425,9 @@ def create_turn(session_id: str, payload: TurnIn, response: Response,
                 answer_prefix = (f"No specialist is called «{mention}». Available today: "
                                  f"Palantír (read-only analyst).\n\n")
                 assistant_role = "orchestrator"
-    elif ACTIVE_VERB_RE.search(user_turn.content) and \
-            TARGET_RE.search(user_turn.content):
+    elif ACTIVE_VERB_RE.search(user_turn.content) and (
+            TARGET_RE.search(user_turn.content)
+            or FINDING_ID_RE.search(user_turn.content)):
         # No mention, but the sentence asks for an action against a host. Answering it in
         # read-only mode is correct and useless: the operator would have to retype the
         # same sentence with a name in front. The verb is the intent, the host is the
@@ -734,7 +736,14 @@ def _finding_target(session_db: Session, finding: models.Finding) -> tuple[str |
         if asset is not None and asset.value:
             return str(asset.value).strip(), "asset.value"
     if finding.endpoint and str(finding.endpoint).strip():
-        return str(finding.endpoint).strip(), "finding.endpoint"
+        # An endpoint is often a *path* (`/rest/user/login`), not an origin. Taking it as
+        # one produced `https:///rest/user/login` — a target with no host, refused by the
+        # scope check with a message that read like a policy problem instead of a
+        # malformed value.
+        candidate = str(finding.endpoint).strip()
+        parsed = urlsplit(candidate if "//" in candidate else f"https://{candidate}")
+        if parsed.netloc:
+            return candidate, "finding.endpoint"
     return None, "none"
 
 
@@ -788,13 +797,15 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
         ids = {"finding": None, "asset": None, "component": None}
 
     # Same normalisation the mission API applies: the envelope names the origin.
-    from urllib.parse import urlsplit
     target_value = value
     if "//" not in target_value:
         target_value = f"https://{target_value}"
     parts = urlsplit(target_value)
     origin = f"{parts.scheme}://{parts.netloc}" if parts.netloc else target_value
 
+    if not urlsplit(origin).netloc:
+        return {"blocked": (f"the target for this finding is not an address: "
+                            f"`{value}`"), "needs": "target", "ids": ids}
     decision = agent_router._scope_decision(session_db, org, "url", origin, capability)
     if not decision.allowed:
         return {"blocked": decision.reason or "outside the effective scope",
