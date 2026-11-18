@@ -105,6 +105,47 @@ def test_a_specialist_offers_every_tool_its_prompt_names():
     assert not problems, "\n".join(problems)
 
 
+def _greedy_stub(calls: list[list[str]]):
+    """Always asks for a tool until the offer is empty, then answers."""
+
+    def fake(provider, key, messages, tools, transport=None, session_id=None):
+        offered = sorted(row["function"]["name"] for row in (tools or []))
+        calls.append(offered)
+        if offered:
+            name = "findings_search" if "findings_search" in offered else offered[0]
+            return {"content": "", "tokens_in": 50, "tokens_out": 10,
+                    "tool_calls": [{"id": f"call-{len(calls)}", "type": "function",
+                                    "function": {"name": name,
+                                                 "arguments": "{\"q\": \"x\"}"}}]}
+        return {"content": "Respuesta final.", "tool_calls": [],
+                "tokens_in": 50, "tokens_out": 10}
+    return fake
+
+
+def test_a_single_specialist_has_the_round_it_needs_to_close_the_answer(
+        app_client, monkeypatch):
+    """A one-specialist run *is* the answer: it has to search, open, resolve and speak.
+
+    At three calls the run always spent its last round on a tool and answered with "no
+    consulté el despliegue" — a budget gap reported as a gap in the estate. A member of a
+    chain keeps the tighter cap; the whole chain shares `max_steps`.
+    """
+    http, headers, _session = app_client
+    _provider(http, headers)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(engine, "complete", _greedy_stub(calls))
+    monkeypatch.setattr("backend.app.ai.dispatch.call",
+                        lambda name, args, *, org, session: {
+                            "data": [{"purl": "pkg:npm/x", "component_id": "C-1"}]})
+
+    run = http.post("/api/v1/ai/runs", json={"question": "¿cuántos findings tengo?"},
+                    headers=headers).json()["data"]
+
+    assert run["status"] == "answered", run.get("stop_reason")
+    assert run["steps"] == orchestrator.SINGLE_SPECIALIST_CALLS
+    assert calls[-1] == [], "the last call is offered no tools: it is the answer"
+
+
 def test_claims_citing_unknown_ids_are_downgraded():
     state = AgentState(question="q")
     state.add_claim(Claim(text="la versión es vulnerable", evidence_refs=["pkg:npm/x@1"]))

@@ -32,6 +32,12 @@ from backend.app.ai.state import (AgentState, Claim, Fact, brief_result, digest,
                                   projection, refs_from)
 
 MAX_CALLS_PER_SPECIALIST = 3
+#: A single-specialist answer is the whole run: it has to search, open the details and
+#: resolve the deployment before it may speak. At three calls the arithmetic never closes
+#: and every answer ended in "no consulté el despliegue" — a gap of our budget, reported
+#: as a gap of the estate. A chain member keeps the tighter cap, because `max_steps`
+#: belongs to the whole chain.
+SINGLE_SPECIALIST_CALLS = 5
 
 
 def _usage_json(result: dict) -> str | None:
@@ -162,7 +168,9 @@ def execute(session: Session, run: models.AiRun, *,
             transport=transport, context=context,
             json_mode=(bool((named.get(name) or {}).get("json_output"))
                        or not terminal),
-            calls_left=calls_left, prompt_set=prompt_set, named=named)
+            calls_left=calls_left, prompt_set=prompt_set, named=named,
+            cap=(SINGLE_SPECIALIST_CALLS if len(plan) == 1
+                 else MAX_CALLS_PER_SPECIALIST))
 
         if outcome["stopped"]:
             failed += 1
@@ -203,7 +211,8 @@ def _run_specialist(session: Session, run: models.AiRun, state: AgentState,
                     settings: models.AiSettings, *, transport, context,
                     json_mode: bool, calls_left: int | None = None,
                     prompt_set: dict[str, tuple[str, str]] | None = None,
-                    named: dict[str, dict] | None = None) -> dict:
+                    named: dict[str, dict] | None = None,
+                    cap: int = MAX_CALLS_PER_SPECIALIST) -> dict:
     spec = (named or {}).get(name) or specialists.get(name)
     if spec is None:
         return {"content": "", "new": False, "stopped": "unknown specialist"}
@@ -224,8 +233,7 @@ def _run_specialist(session: Session, run: models.AiRun, state: AgentState,
     content = ""
     step: models.AiStep | None = None
 
-    calls_allowed = min(MAX_CALLS_PER_SPECIALIST,
-                        calls_left or MAX_CALLS_PER_SPECIALIST)
+    calls_allowed = min(cap, calls_left or cap)
     # A repeated (tool, args) inside one run is not new evidence: answer from the cache
     # and keep the raw result in run_state. The tool stays callable — it is cached, not
     # forbidden.

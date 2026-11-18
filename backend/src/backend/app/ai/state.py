@@ -292,6 +292,11 @@ BRIEF_TOOL_CHARS = 600
 #: detail came back with references only, no proof body" about a row it had just read —
 #: the pointer was the reason, not the data. Lists still travel as pointers.
 BRIEF_FULL_CHARS = 2600
+#: What a list-shaped payload may cost once it is summarized: counts, the completeness
+#: notes and one sample row per list. A bare list of refs is not a summary — a run that
+#: read `deployment_chain` answered "the chain came back as eight references with no
+#: content", which is our projection talking, not the estate.
+BRIEF_SUMMARY_CHARS = 2000
 
 
 def _compact(value):
@@ -304,13 +309,59 @@ def _compact(value):
     return value
 
 
+def _clip(value, limit: int = 180):
+    """Strings get shortened; numbers and booleans keep their type."""
+    if not isinstance(value, str):
+        return value
+    text = " ".join(value.split())
+    return text if len(text) <= limit else text[:limit].rstrip(" ,;.") + "…"
+
+
+def _summarize(value, depth: int = 0):
+    """Counts, scalars and one sample per list — enough to answer, small enough to send.
+
+    `completeness.unknown_edges` is the part that decides an answer ("no deployment runs
+    this version"), so dicts are walked one level in rather than flattened away, and a
+    list of strings (the notes) travels whole — it is the reason the payload exists.
+    """
+    if not isinstance(value, dict):
+        return _clip(value)
+    out: dict = {}
+    for key, item in value.items():
+        if item is None or item == "":
+            continue
+        if isinstance(item, list):
+            # An empty list is an answer ("no deployment runs this version"), not noise:
+            # only nulls are dropped.
+            if all(not isinstance(entry, (dict, list)) for entry in item):
+                out[key] = [_clip(entry) for entry in item[:6]]
+                if len(item) > 6:
+                    out[key].append(f"…+{len(item) - 6} more")
+            else:
+                out[key] = {"count": len(item),
+                            "sample": _compact(item[0]) if item else None}
+                if isinstance(out[key]["sample"], dict):
+                    out[key]["sample"] = {k: _clip(v) for k, v in
+                                          list(out[key]["sample"].items())[:8]}
+        elif isinstance(item, dict):
+            if not item:
+                out[key] = {}
+            else:
+                out[key] = (_summarize(item, depth + 1) if depth < 1
+                            else {"keys": sorted(item)[:10]})
+        else:
+            out[key] = _clip(item)
+    return out
+
+
 def brief_result(payload, tool: str = "") -> str:
-    """What a later step needs: the record when it is small, a pointer when it is not.
+    """What a later step needs: the record when it is small, its shape when it is not.
 
     The raw rows are already in `run_state` and in the artefact; re-sending a 200-row
-    page on every step is what turned a 3-step run into 26k input tokens. But a pointer
-    is only honest for a *list*: a single record read by id is the answer, so it is sent
-    compacted up to `BRIEF_FULL_CHARS`, and only past that does it become a pointer.
+    page on every step is what turned a 3-step run into 26k input tokens. So: a single
+    record travels compacted up to `BRIEF_FULL_CHARS`; a bigger payload travels as a
+    summary — per-list counts, scalars, completeness notes and one sample row — because a
+    pointer the model cannot open is read as a truncated answer.
     """
     if not isinstance(payload, dict):
         payload = {"data": payload}
@@ -322,8 +373,10 @@ def brief_result(payload, tool: str = "") -> str:
                if key in {"total", "count", "limit", "offset", "coverage", "status"}
                and isinstance(value, (int, float, str)) and len(str(value)) < 200}
     text = json.dumps({**scalars, "tool": tool,
+                       "summary": _summarize(payload),
                        "refs": sorted(refs_from(payload))[:8],
-                       "note": "full result kept in run_state; ask again only if the "
-                               "summary is not enough"},
+                       "note": "counts and one sample per list; ask again with a "
+                               "narrower query (a project, an asset, a purl) for the "
+                               "rest"},
                       default=str, ensure_ascii=False)
-    return text[:BRIEF_TOOL_CHARS]
+    return text[:BRIEF_SUMMARY_CHARS]

@@ -23,14 +23,57 @@ def test_a_large_tool_result_is_bounded_and_keeps_the_scalars():
     assert '"coverage": "full"' in text
 
 
-def test_a_brief_result_is_a_pointer_not_a_copy():
-    payload = {"total": 900, "rows": [{"id": i} for i in range(500)],
-               "components": [{"purl": f"pkg:npm/x{i}@1"} for i in range(500)]}
+def test_a_big_tool_result_travels_as_a_summary_not_a_pointer():
+    payload = {"total": 900, "rows": [{"id": f"x{index}", "name": "n" * 200}
+                                      for index in range(500)],
+               "components": [{"purl": f"pkg:npm/x{index}@1"} for index in range(500)]}
     text = state.brief_result(payload, "project_inventory")
-    assert len(text) <= state.BRIEF_TOOL_CHARS
-    assert "project_inventory" in text
-    assert "run_state" in text, "it must say where the full result lives"
-    assert "note" in json.loads(text)
+    body = json.loads(text)
+    assert len(text) <= state.BRIEF_SUMMARY_CHARS
+    assert body["tool"] == "project_inventory"
+    assert body["total"] == 900
+    assert body["summary"]["rows"]["count"] == 500
+    assert body["summary"]["components"]["sample"]["purl"] == "pkg:npm/x0@1"
+    assert "narrower query" in body["note"]
+    assert "n" * 200 not in text, "a summary is not a copy of the page"
+
+
+def test_a_deployment_chain_summary_carries_the_completeness_notes():
+    """The chain is the payload whose *reason* is `completeness.unknown_edges`.
+
+    Sent as eight bare refs, a run answered "the deployment chain came back as eight
+    references with no content" — reporting our projection as a gap in the estate. The
+    summary keeps the notes and the counts, so the answer can say "no deployment runs
+    this version" when that is what the estate said.
+    """
+    payload = {
+        "query": {"purl": "pkg:pypi/django@2.2.0", "component": None,
+                  "project": None, "asset": None},
+        "as_of": "2026-11-17T16:32:11+00:00",
+        "edges": {
+            "components": [{"id": "76025d4d", "name": "django", "version": "2.2.0"}],
+            "builds": [],
+            "deployments": [],
+            "assets": [],
+            "observations": [],
+            "findings": [{"id": f"f{index}", "kind": "vulnerability"}
+                         for index in range(120)],
+        },
+        "completeness": {"has_sbom": False, "has_deployment": False,
+                         "has_asset": False, "has_observation": False,
+                         "unknown_edges": ["no build links this component to a version",
+                                           "no deployment runs this version"],
+                         "truncated": {}},
+        "ages_days": {"sbom": None, "deployment_check": None, "observation": None},
+    }
+    body = json.loads(state.brief_result(payload, "deployment_chain"))
+    assert body["summary"]["edges"]["findings"]["count"] == 120
+    assert body["summary"]["edges"]["deployments"] == [], \
+        "an empty edge is an answer, not a field to drop"
+    notes = body["summary"]["completeness"]["unknown_edges"]
+    assert any("no deployment runs this version" in note for note in notes)
+    assert body["summary"]["completeness"]["has_deployment"] is False, \
+        "a boolean keeps its type"
 
 
 def test_a_single_record_keeps_its_body_on_a_later_step():
