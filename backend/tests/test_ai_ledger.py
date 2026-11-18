@@ -136,6 +136,38 @@ def test_a_field_completion_is_a_step_the_meter_can_see(context, monkeypatch):
     assert spend["tokens"] == 120, "the monthly meter reads the field half now"
 
 
+def test_a_field_call_is_recorded_with_its_status_and_its_command(context, monkeypatch):
+    """The run view paints a call red when it has no `status`, and it did.
+
+    `{"tool": "run_tool"}` is the envelope's name with no outcome, so ten calls that
+    answered 200 appeared as ten failures. The record now carries the status and the
+    command the envelope asked for.
+    """
+    http, headers, session, _ = context
+    _provider(http, headers)
+    _, _, token = _mission_and_task(http, headers, tokens=10_000)
+
+    def fake(provider, api_key, messages, tools, *, transport=None, session_id="",
+             max_tokens=None):
+        return {"content": "",
+                "tool_calls": [{"function": {
+                    "name": "run_tool",
+                    "arguments": json.dumps({"tool": "curl", "argv": ["-sS", "https://x/"]})}}],
+                "tokens_in": 10, "tokens_out": 5, "cached_tokens": 0}
+
+    monkeypatch.setattr(engine, "complete", fake)
+    response = http.post("/api/v1/agent/llm/complete",
+                         json={"messages": [{"role": "user", "content": "go"}]},
+                         headers={"X-Agent-Token": token})
+    assert response.status_code == 200, response.text
+
+    session.expire_all()
+    calls = json.loads(session.query(models.AiStep).one().tool_calls)
+    assert calls[0]["status"] == 200, "sin status el panel pinta la llamada como fallida"
+    assert calls[0]["tool"] == "curl", "run_tool es el sobre: el nombre útil es el comando"
+    assert calls[0]["args"]["argv"] == ["-sS", "https://x/"]
+
+
 def test_the_mission_ceiling_refuses_the_next_completion(context, monkeypatch):
     http, headers, session, _ = context
     _provider(http, headers)

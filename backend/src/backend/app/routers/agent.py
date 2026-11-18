@@ -1167,8 +1167,20 @@ def complete(payload: CompleteIn = None,
             .order_by(models.AiStep.seq.desc()).first())
     seq = (last.seq if last else 0) + 1
     cost, known = engine.price(provider, result["tokens_in"], result["tokens_out"])
-    asked = [{"tool": ((call.get("function") or {}).get("name") or "")}
-             for call in (result.get("tool_calls") or [])]
+    # The console paints a call red when its `status` is not 200, so a record without
+    # `status` painted every field step as `failed` over calls that ran fine. The name
+    # is the tool that actually ran (`run_tool` is the envelope, the enum value is the
+    # command), because "run_tool · run_tool · run_tool" says nothing.
+    asked = []
+    for call in (result.get("tool_calls") or []):
+        function = call.get("function") or {}
+        try:
+            args = json.loads(function.get("arguments") or "{}")
+        except ValueError:
+            args = {}
+        inner = args.get("tool") if isinstance(args, dict) else None
+        asked.append({"tool": inner or function.get("name") or "",
+                      "fn": function.get("name") or "", "args": args, "status": 200})
     session.add(models.AiStep(
         org_id=run.org_id, run_id=run.id, seq=seq, role="field",
         prompt_version=field_label, phase=task.kind, parent_run_id=run.id,
