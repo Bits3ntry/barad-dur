@@ -257,6 +257,45 @@ def _run_brief(run: models.AiRun) -> dict:
             "steps": run.steps, "tool_calls": run.tool_calls}
 
 
+def _opened_findings(session_db: Session, org: models.Organization,
+                     run: models.AiRun | None, limit: int = 3) -> list[models.Finding]:
+    """The findings this run opened with `finding_detail`, in the order it read them.
+
+    A validation button is a fact of the run, not a mood of the model: if the answer
+    opened the row, the operator can ask for its proof. Leaving it to the model produced
+    answers that ended in "pedí `@angmar <finding id>`" — asking a human to copy an id the
+    platform had just read.
+    """
+    if run is None:
+        return []
+    opened: list[str] = []
+    steps = (session_db.query(models.AiStep).filter_by(run_id=run.id)
+             .order_by(models.AiStep.seq).all())
+    for step in steps:
+        try:
+            calls = json.loads(step.tool_calls or "[]")
+        except ValueError:
+            continue
+        for call in calls if isinstance(calls, list) else []:
+            if not isinstance(call, dict) or call.get("tool") != "finding_detail":
+                continue
+            if call.get("status") != 200:
+                continue
+            finding_id = str((call.get("args") or {}).get("finding_id") or "").strip()
+            if finding_id and finding_id not in opened:
+                opened.append(finding_id)
+            if len(opened) >= limit:
+                break
+        if len(opened) >= limit:
+            break
+    out: list[models.Finding] = []
+    for finding_id in opened:
+        row = session_db.get(models.Finding, finding_id)
+        if row is not None and row.org_id == org.id:
+            out.append(row)
+    return out
+
+
 def _write_turn(session_db: Session, row: models.ChatSession,
                 run: models.AiRun | None, *, answer: str, actor: str,
                 profile_key: str, assistant_role: str,
@@ -302,6 +341,18 @@ def _finish_turn(session_db: Session, row: models.ChatSession, run: models.AiRun
         # honour. `org` is None only on the background path, which carries none.
         text, buttons = suggestions_ai.extract(session_db, org, run.answer or "")
         run.answer = text or run.answer
+        if (ACTIVE_VERB_RE.search(run.question or "")
+                and not any(button.get("action") == "validate_finding"
+                            for button in buttons)):
+            # The operator asked to validate, and the run read the rows: offer the
+            # button. The model omits it often enough that the answer then dead-ends in
+            # "pedí @angmar <id>", which asks the operator to copy an id this run read.
+            wanted = [{"action": "validate_finding",
+                       "label": f"Validar {_short_title(row.title or row.id, 56)}",
+                       "finding_id": row.id}
+                      for row in _opened_findings(session_db, org, run)]
+            if wanted:
+                buttons = suggestions_ai.validate(session_db, org, buttons + wanted)
         answer = answer_prefix + (text
                                   or (run.error or f"the run ended as {run.status}"))
     assistant = _write_turn(session_db, row, run, answer=answer, actor=actor,
@@ -1089,17 +1140,17 @@ def _proposal_answer(result: dict, capability: str) -> str:
                 "hex). Sin él no sé qué se va a probar ni contra qué host.")
     if needs == "target":
         advisory = result.get("advisory_url")
+        finding_ref = (result.get("ids") or {}).get("finding")
+        example = (f"validá {finding_ref} en https://host…" if finding_ref
+                   else "validá esto en https://host…")
         return (
-            f"**No armé la misión**: no sé contra qué host probar. "
-            f"{result.get('blocked')}\n\n"
+            f"**No armé la misión**: {result.get('blocked')}.\n\n"
             + (f"(El `url` del hallazgo es la referencia del advisory —{advisory}—, no "
                "un host del parque: probar contra ahí no diría nada.)\n\n" if advisory
                else "")
-            + "Un hallazgo sin asset ni endpoint no dice dónde corre. Dos salidas, y "
-              "ninguna inventa un host:\n\n"
-              "- si sabés dónde corre, decímelo en el mismo mensaje (`validá esto en "
-              "https://host…`): ese target queda declarado en el chat y la misión se "
-              "arma contra su origin;\n"
+            + "Dos salidas, y ninguna inventa un host:\n\n"
+              f"- si sabés dónde corre, decímelo en el mismo mensaje (`{example}`): ese "
+              "target queda declarado en el chat y la misión se arma contra su origin;\n"
               "- si no lo sabés, el vínculo falta en el inventario, que es exactamente "
               "lo que un deployment con `last_checked_at: null` está diciendo.\n\n"
               f"Ids: {ids}.")

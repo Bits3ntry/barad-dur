@@ -278,6 +278,54 @@ def test_the_answer_carries_the_ids_the_run_read(context, monkeypatch):
     assert len(turn["citations"]) > 0
 
 
+def _findings_stub(finding_id: str):
+    """A specialist that opens one finding with `finding_detail`, then answers."""
+
+    def fake(provider, key, messages, tools, transport=None, session_id=None):
+        offered = {row["function"]["name"] for row in (tools or [])}
+        already_read = any(message.get("role") == "tool" for message in messages)
+        if "finding_detail" in offered and not already_read:
+            return {"content": "", "tokens_in": 120, "tokens_out": 20,
+                    "tool_calls": [{"id": "call-1", "type": "function",
+                                    "function": {
+                                        "name": "finding_detail",
+                                        "arguments": json.dumps(
+                                            {"finding_id": finding_id})}}]}
+        return {"content": "El sumidero está en shop/views.py, sin PoC registrada.",
+                "tool_calls": [], "tokens_in": 200, "tokens_out": 40}
+    return fake
+
+
+def test_a_validation_question_gets_the_button_from_the_rows_it_opened(context, monkeypatch):
+    """`validame con POC el sqli` as the *first* message: no id, no host, no suggestion.
+
+    The answer read the detail and then ended in "pedí @angmar <id>" — asking the
+    operator to copy an id the run had just read. The button is built from the run's own
+    `finding_detail` calls, so it does not depend on the model remembering to offer it.
+    """
+    http, headers, session, org = context
+    _provider(http, headers)
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    monkeypatch.setattr(engine, "complete", _findings_stub(finding.id))
+    monkeypatch.setattr("backend.app.ai.dispatch.call",
+                        lambda name, args, *, org, session: {
+                            "data": {"id": finding.id, "title": finding.title,
+                                     "severity": finding.severity,
+                                     "status": finding.status}})
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "validame con POC el sqli que tenemos"},
+                     headers=headers).json()["data"]
+
+    buttons = body["turn"]["suggestions"]
+    validate = [b for b in buttons if b["action"] == "validate_finding"]
+    assert validate, f"the answer read the finding; offer the mission: {buttons}"
+    assert validate[0]["finding_id"] == finding.id
+    assert "@angmar" in validate[0]["prompt"]
+
+
 def test_a_session_with_a_subject_tells_the_prompt_what_it_is_about(context):
     """A subject was stored from the first session and never reached the prompt: the
     model re-derived it from the turns, and compaction could drop it."""
