@@ -774,6 +774,32 @@ def test_a_proof_without_a_model_plan_still_arms_the_mission(context, monkeypatc
     assert "derivado de la evidencia" in body["turn"]["content"]
 
 
+def test_a_discovery_verb_proposes_a_recon_mission(context, monkeypatch):
+    """"descubrí la superficie de <host>" is not a validation.
+
+    Same envelope, different lane: `discover` → morgoth → `recon.surface`, and the task
+    asks for observations instead of a verdict. Folding it into validate spent an
+    angmar run looking for a proof of something nobody claimed.
+    """
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "descubrí la superficie de https://app.example.test"},
+                     headers=headers).json()["data"]
+
+    mission = session.query(models.AgentMission).one()
+    assert mission.capability == "discover"
+    assert mission.profile == "morgoth"
+    evidence = json.loads(mission.evidence)
+    assert evidence["task_kind"] == "recon.surface"
+    assert evidence["required"] == ["observation", "request", "response"]
+    assert "discovery" in body["turn"]["content"]
+    task = session.query(models.AgentTask).one()
+    assert task.kind == "recon.surface"
+
+
 def test_an_ungranted_target_is_refused_with_the_reason_and_no_mission(context):
     http, headers, session, org = context
     finding = _finding_for_thread(http, headers, session, org,

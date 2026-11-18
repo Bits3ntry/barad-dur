@@ -1013,16 +1013,22 @@ def _announce_in_chat(session: Session, mission: models.AgentMission,
             actor="agent", profile_key=mission.profile, assistant_role="specialist",
             extra_citations=[ref for ref in (mission.id, task.id) if ref])
         return
-    verdict = ""
-    upper = answer.upper()
-    for candidate in ("NOT VULNERABLE", "VULNERABLE", "INCONCLUSIVE"):
-        if candidate in upper:
-            verdict = f" · **{candidate}**"
-            break
+    # A recon run has no verdict to give: the worker still ends its brief with one, so
+    # grading a discovery as `INCONCLUSIVE` read as a failed validation of something
+    # nobody claimed. The badge says what the run was.
+    recon = task.kind == "recon.surface"
+    verdict = " · **discovery**" if recon else ""
+    if not recon:
+        upper = answer.upper()
+        for candidate in ("NOT VULNERABLE", "VULNERABLE", "INCONCLUSIVE"):
+            if candidate in upper:
+                verdict = f" · **{candidate}**"
+                break
     from backend.app.routers import chat as chat_router
+    title = "Informe de reconocimiento" if recon else "Informe del agente de campo"
     chat_router._write_turn(
         session, row, None,
-        answer=(f"**Informe del agente de campo** · tarea `{task.id[:8]}…` · "
+        answer=(f"**{title}** · tarea `{task.id[:8]}…` · "
                 f"`{task.status}`{verdict}\n\n{answer}"),
         actor="agent", profile_key=mission.profile, assistant_role="specialist",
         extra_citations=[ref for ref in (mission.id, task.id) if ref])

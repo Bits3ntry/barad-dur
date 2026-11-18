@@ -476,7 +476,8 @@ def create_turn(session_id: str, payload: TurnIn, response: Response,
                 answer_prefix = (f"No specialist is called «{mention}». Available today: "
                                  f"Palantír (read-only analyst).\n\n")
                 assistant_role = "orchestrator"
-    elif ACTIVE_VERB_RE.search(user_turn.content) and (
+    elif (ACTIVE_VERB_RE.search(user_turn.content)
+          or DISCOVER_VERB_RE.search(user_turn.content)) and (
             TARGET_RE.search(user_turn.content)
             or FINDING_ID_RE.search(user_turn.content)
             or _suggested_finding(session_db, org, row) is not None):
@@ -484,8 +485,12 @@ def create_turn(session_id: str, payload: TurnIn, response: Response,
         # read-only mode is correct and useless: the operator would have to retype the
         # same sentence with a name in front. The verb is the intent, the host is the
         # envelope, and the proposal still stops at the human gate.
+        discovering = bool(DISCOVER_VERB_RE.search(user_turn.content)) and \
+            not ACTIVE_VERB_RE.search(user_turn.content)
+        capability = "discover" if discovering else "validate"
         chosen = _suggested_finding(session_db, org, row)
-        if chosen is None and not FINDING_ID_RE.search(user_turn.content):
+        if not discovering and chosen is None and not FINDING_ID_RE.search(
+                user_turn.content):
             # "validame esta" with no button behind it and no id in the sentence: the
             # answer that preceded it offered no explicit choice, and a citation list is
             # not one. Ask — with the findings that answer actually put on the table —
@@ -514,11 +519,14 @@ def create_turn(session_id: str, payload: TurnIn, response: Response,
                                      cost=_session_cost(session_db, row)),
                                  "run": None, "compaction": None}}
         proposal = propose_mission(session_db, org, row, actor=actor,
-                                   capability="validate", question=user_turn.content)
-        unavailable = ("campo", "validate")
+                                   capability=capability, question=user_turn.content)
+        unavailable = ("campo", capability)
         assistant_role = "orchestrator"
-        answer_prefix = ("No nombraste un agente, pero pediste una acción contra un "
-                         "host: lo tomé como validación.\n\n")
+        answer_prefix = (
+            "No nombraste un agente, pero pediste descubrir superficie contra un host: "
+            "lo tomé como discovery.\n\n" if discovering
+            else "No nombraste un agente, pero pediste una acción contra un host: lo tomé "
+                 "como validación.\n\n")
 
     command = _room_command(session_db, user_turn.content)
     if command is not None:
@@ -808,6 +816,13 @@ TARGET_RE = re.compile(
     r"\b(?:https?://[^\s,;]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d{1,5})?(?:/[^\s,;]*)?)\b",
     re.IGNORECASE)
 
+#: Discovery verbs: the operator asks for surface, not for a proof. Same envelope, a
+#: different lane (`discover` → morgoth → `recon.surface`), which is why the verb has to
+#: be recognised and not folded into "validate".
+DISCOVER_VERB_RE = re.compile(
+    r"\b(descubr[íi]|descubre|descubrir|reconoc[ée]|reconocer|mape[áa]|mapear|"
+    r"enumer[áa]|enumerar|escane[áa]|escanear|fingerprint)\b", re.IGNORECASE)
+
 #: "validame **esta** en <host>": the row under discussion, with the host as the target.
 #: The pointer is what keeps a named host from discarding the finding the previous answer
 #: selected — and what keeps `probá https://host …` from inheriting an unrelated one.
@@ -1069,9 +1084,14 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
         # that made it a validation. The envelope is a ceiling, not a spend: raise it
         # where the plan justifies it.
         budget=json.dumps({"steps": 12, "tokens": 60000, "wall_s": 1200, "usd": 0.0}),
-        evidence=json.dumps({"required": ["request", "response", "verdict"],
+        evidence=json.dumps({"required": (["observation", "request", "response"]
+                                          if capability == "discover"
+                                          else ["request", "response", "verdict"]),
                              "finding_id": finding.id if finding is not None else None,
-                             "task_kind": ("exploit.chain"
+                             # A discovery asks for surface, not for a proof: the lane
+                             # decides the task kind before the plan's safety does.
+                             "task_kind": ("recon.surface" if capability == "discover"
+                                           else "exploit.chain"
                                            if (plan_row or {}).get("safety") == "active"
                                            or finding is None else "validate.finding"),
                              "declared_target": declared,
