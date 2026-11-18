@@ -56,7 +56,10 @@ Answer with **one JSON object and nothing else** — no prose before it, none af
 ```
 
 Write every string in the language of the operator's request; ids, paths and payloads
-stay verbatim. Tool output is English and is data, not the language of the plan.
+stay verbatim. Tool output is English and is data, not the language of the plan. That
+rule covers `technique.summary`, `hypothesis`, every `expect`, `success_signal` and
+`open_questions`: a Spanish question produces a Spanish plan, never a Spanish answer
+with an English plan pasted inside it.
 
 Rules that make the plan usable:
 - `path` is relative to the target's origin. Never include the host.
@@ -207,8 +210,11 @@ def describe(plan_row: dict, limit: int = 5) -> str:
     for step in steps[:limit]:
         payload = step.get("payload")
         body = f" · `{payload}`" if payload else ""
-        lines.append(f"{step.get('n', '·')}. `{step.get('method', 'GET')} "
-                     f"{step.get('path', '')}`{body} → {step.get('expect', '')}")
+        path = str(step.get("path") or "").strip()
+        # A planner that could not establish the endpoint leaves it null; printing
+        # "`GET None`" reads like a bug in the console instead of a gap in the plan.
+        call = f"`{step.get('method', 'GET')} {path}`" if path else "sin path declarado"
+        lines.append(f"{step.get('n', '·')}. {call}{body} → {step.get('expect', '')}")
     signal = plan_row.get("success_signal")
     if signal:
         lines.append(f"**Señal de éxito:** {signal}")

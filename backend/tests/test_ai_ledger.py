@@ -672,6 +672,33 @@ def test_a_field_mention_proposes_a_mission_instead_of_a_dead_end(context, monke
     assert finding.id in body["turn"]["citations"]
 
 
+def test_the_planner_reads_the_operators_own_sentence(context, monkeypatch):
+    """The plan is written in the language of its question.
+
+    The question was synthesized in English (`Plan for finding …`), so a Spanish
+    conversation produced a Spanish answer with an English plan pasted in the middle —
+    hypothesis, steps and success signal in a language the operator did not write in.
+    """
+    http, headers, session, org = context
+    seen: dict = {}
+
+    def fake_plan(*args, **kwargs):
+        seen["question"] = kwargs.get("question") or args[-1]
+        return PLAN, ""
+
+    monkeypatch.setattr("backend.app.ai.planner.plan", fake_plan)
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+              json={"question": f"@angmar validá el impacto de {finding.id}"},
+              headers=headers)
+
+    assert "validá el impacto" in seen["question"], "the operator's words travel"
+    assert "Plan for finding" not in seen["question"]
+    assert finding.id in seen["question"], "the finding travels as a fact"
+
+
 def test_an_ungranted_target_is_refused_with_the_reason_and_no_mission(context):
     http, headers, session, org = context
     finding = _finding_for_thread(http, headers, session, org,
@@ -698,6 +725,94 @@ def test_a_mention_without_a_finding_asks_for_one(context):
     assert session.query(models.AgentMission).count() == 0
 
 
+def test_a_follow_up_can_validate_the_single_finding_the_chat_offered(context, monkeypatch):
+    """The normal conversation is analysis first, then "validame esta con PoC".
+
+    A suggestion is an explicit selection made by the preceding answer, so the follow-up
+    may reuse its one finding without asking the operator to copy a 32-hex id back into
+    the composer. It still creates an approval-gated mission, never an execution.
+    """
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    session.add(models.ChatTurn(
+        org_id=org.id, session_id=row["id"], seq=1, role="orchestrator",
+        content="El hallazgo se puede validar en campo.",
+        suggestions=json.dumps([{"action": "validate_finding",
+                                 "finding_id": finding.id}])))
+    session.commit()
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "validame esta con PoC"},
+                     headers=headers).json()["data"]
+
+    assert "esperando tu aprobación" in body["turn"]["content"]
+    mission = session.query(models.AgentMission).one()
+    assert mission.status == "awaiting_approval"
+    assert json.loads(mission.evidence)["finding_id"] == finding.id
+
+
+def test_a_deictic_follow_up_keeps_the_finding_and_takes_the_typed_host(context, monkeypatch):
+    """"validame **esta** con POC en <host>": the pointer selects the row, the host is
+    only where it runs.
+
+    A host in the sentence used to discard the finding the previous answer had selected,
+    so the planner was asked to plan a mission about nothing and refused — after the
+    operator had already said which finding and where.
+    """
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    finding = _finding_for_thread(http, headers, session, org, with_asset=False)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    session.add(models.ChatTurn(
+        org_id=org.id, session_id=row["id"], seq=1, role="orchestrator",
+        content="El sink está en shop/views.py y se puede probar.",
+        suggestions=json.dumps([{"action": "validate_finding",
+                                 "finding_id": finding.id}])))
+    session.commit()
+
+    http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+              json={"question": "validame esta con POC en https://app.example.test"},
+              headers=headers)
+
+    mission = session.query(models.AgentMission).one()
+    assert json.loads(mission.evidence)["finding_id"] == finding.id
+    assert json.loads(mission.targets)[0]["value"] == "https://app.example.test", \
+        "the host the operator typed becomes the target"
+
+
+def test_a_follow_up_without_a_button_asks_which_finding(context):
+    """`validame esta` after an answer that only linked a screen.
+
+    The citations are evidence, not a choice: an analysis answer can cite a dozen rows,
+    so picking one for the operator probes the wrong finding. The platform asks, with the
+    rows that answer actually named, and still creates nothing.
+    """
+    http, headers, session, org = context
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    session.add(models.ChatTurn(
+        org_id=org.id, session_id=row["id"], seq=1, role="orchestrator",
+        content="El SQLi vive en shop/views.py, líneas 16–19.",
+        citations=json.dumps([finding.id])))
+    session.commit()
+
+    body = http.post(
+        f"/api/v1/ai/sessions/{row['id']}/turns",
+        json={"question": "validame esta con POC en http://app.example.test"},
+        headers=headers).json()["data"]
+
+    answer = body["turn"]["content"]
+    assert "cuál" in answer and "no es una elección" in answer
+    buttons = body["turn"]["suggestions"]
+    assert buttons and buttons[0]["action"] == "ask"
+    assert finding.id in buttons[0]["prompt"]
+    assert "http://app.example.test" in buttons[0]["prompt"], \
+        "the host the operator typed travels into the button"
+    assert session.query(models.AgentMission).count() == 0
+
+
 def test_an_advisory_link_is_never_a_target_and_the_gap_is_named(context):
     """The live case: a scanner finding whose only URL is the NVD page. Probing it would
     be theatre, so the answer names the real blocker instead — nobody knows which asset
@@ -713,6 +828,10 @@ def test_an_advisory_link_is_never_a_target_and_the_gap_is_named(context):
     assert "referencia del advisory" in answer
     assert "nvd.nist.gov" in answer
     assert "last_checked_at" in answer
+    # The operator's way out is the one that exists: declare the host in the chat.
+    assert "declarado en el chat" in answer
+    assert "not attached to an asset" not in answer, \
+        "the refusal is operator copy, not an internal reason code"
     assert session.query(models.AgentMission).count() == 0
 
 

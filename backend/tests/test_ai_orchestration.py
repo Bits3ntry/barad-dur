@@ -11,6 +11,7 @@ What is under test, and why each one is structural rather than cosmetic:
 * a dead provider leaves `failed` with its error, not a hang.
 """
 import json
+import re
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -21,7 +22,7 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_ROOT / "src"))
 
 from backend.app import auth_local, models  # noqa: E402
-from backend.app.ai import engine, orchestrator, router  # noqa: E402
+from backend.app.ai import engine, orchestrator, router, tools  # noqa: E402
 from backend.app.ai import specialists  # noqa: E402
 from backend.app.ai.state import AgentState, Claim  # noqa: E402
 from backend.app.auth import create_key  # noqa: E402
@@ -78,6 +79,30 @@ def test_a_specialist_cannot_call_a_tool_it_was_not_given():
     assert "deployment_chain" not in intel
     report = engine.openai_tools(specialists.tools_for("evidence.report"))
     assert report == [], "the report writes prose; it does not read new facts"
+
+
+def test_a_specialist_offers_every_tool_its_prompt_names():
+    """A prompt that says "open it with `finding_detail`" is a contract with the offer.
+
+    The offer is built from `spec["tools"]`, and anything absent from it is filtered out
+    of the request before the model sees it. The model then reports the missing data as a
+    gap in the estate (`no he leído el cuerpo de prueba`, `me quedé sin consultas`) when
+    the tool existed, was dispatched, and was simply never offered — which is how one
+    answer refused to validate a finding it had itself listed.
+    """
+    named_re = re.compile(r"`([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)?)`")
+    problems: list[str] = []
+    for name, spec in specialists.SPECIALISTS.items():
+        offered = set(spec["tools"])
+        unknown = offered - set(tools.BY_NAME)
+        if unknown:
+            problems.append(f"{name} offers tools that are not in the catalog: "
+                            f"{sorted(unknown)}")
+        for token in named_re.findall(spec["prompt"]):
+            if token in tools.BY_NAME and token not in offered:
+                problems.append(f"{name} tells the model to call `{token}` but does "
+                                f"not offer it")
+    assert not problems, "\n".join(problems)
 
 
 def test_claims_citing_unknown_ids_are_downgraded():

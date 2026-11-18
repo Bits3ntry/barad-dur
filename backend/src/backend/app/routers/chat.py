@@ -427,11 +427,41 @@ def create_turn(session_id: str, payload: TurnIn, response: Response,
                 assistant_role = "orchestrator"
     elif ACTIVE_VERB_RE.search(user_turn.content) and (
             TARGET_RE.search(user_turn.content)
-            or FINDING_ID_RE.search(user_turn.content)):
+            or FINDING_ID_RE.search(user_turn.content)
+            or _suggested_finding(session_db, org, row) is not None):
         # No mention, but the sentence asks for an action against a host. Answering it in
         # read-only mode is correct and useless: the operator would have to retype the
         # same sentence with a name in front. The verb is the intent, the host is the
         # envelope, and the proposal still stops at the human gate.
+        chosen = _suggested_finding(session_db, org, row)
+        if chosen is None and not FINDING_ID_RE.search(user_turn.content):
+            # "validame esta" with no button behind it and no id in the sentence: the
+            # answer that preceded it offered no explicit choice, and a citation list is
+            # not one. Ask — with the findings that answer actually put on the table —
+            # instead of spending a planner run on a mission nobody can target.
+            candidates = _findings_on_the_table(session_db, org, row)
+            if candidates:
+                target = next(iter(TARGET_RE.findall(user_turn.content)), "").rstrip(
+                    ".,;)")
+                answer = _which_finding_answer(candidates, target)
+                buttons = [{"action": "ask", "label": f"{(finding.title or finding.id)}"[:78],
+                            "prompt": (f"validá {finding.id} en {target}" if target
+                                       else f"validá {finding.id}")}
+                           for finding in candidates]
+                assistant = _write_turn(
+                    session_db, row, None, answer=answer, actor=actor,
+                    profile_key=profile_key, assistant_role="orchestrator",
+                    extra_citations=[row.id for row in candidates],
+                    suggestions=buttons)
+                session_db.commit()
+                row.status = "idle"
+                return {"data": {"turn": _turn_data(assistant),
+                                 "session": _session_data(
+                                     row,
+                                     turns=session_db.query(models.ChatTurn)
+                                     .filter_by(session_id=row.id).count(),
+                                     cost=_session_cost(session_db, row)),
+                                 "run": None, "compaction": None}}
         proposal = propose_mission(session_db, org, row, actor=actor,
                                    capability="validate", question=user_turn.content)
         unavailable = ("campo", "validate")
@@ -719,13 +749,106 @@ FINDING_ID_RE = re.compile(r"\b[0-9a-f]{32}\b")
 #: design — and the conversation stopped there. The verb is the intent; the host is the
 #: envelope. Both present means: propose the mission, and say that is what happened.
 ACTIVE_VERB_RE = re.compile(
-    r"\b(prob[aá]|probar|probalo|valid[aá]|validar|ejecut[aá]|ejecutar|reproduc[ií]|"
+    r"\b(prob[aá]|probar|probalo|valid[aá](?:me(?:lo|la)?|lo|la)?|validar|ejecut[aá]|ejecutar|reproduc[ií]|"
     r"reproducir|explot[aá]|explotar|dispar[aá]|corr[eé]|correr|lanza|chequear\s+en\s+vivo)\b",
     re.IGNORECASE)
 
-TARGET_RE = re.compile(r"\b(?:https?://[^\s,;]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?)\b",
-                       re.IGNORECASE)
+TARGET_RE = re.compile(
+    r"\b(?:https?://[^\s,;]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d{1,5})?(?:/[^\s,;]*)?)\b",
+    re.IGNORECASE)
+
+#: "validame **esta** en <host>": the row under discussion, with the host as the target.
+#: The pointer is what keeps a named host from discarding the finding the previous answer
+#: selected — and what keeps `probá https://host …` from inheriting an unrelated one.
+DEICTIC_RE = re.compile(r"\b(esta|este|esto|esa|ese|eso|aquel|aquella|la\s+poc|"
+                        r"el\s+hallazgo|ese\s+hallazgo|este\s+hallazgo)\b",
+                        re.IGNORECASE)
 FIELD_TOOLS = ["curl", "python"]
+
+
+def _suggested_finding(session_db: Session, org: models.Organization,
+                       thread: models.ChatSession) -> models.Finding | None:
+    """The one finding selected by the latest answer's validation affordance.
+
+    Natural follow-ups such as ``validame esta con PoC`` should not make an
+    operator paste an opaque id. We only recover an id from the preceding answer's
+    `validate_finding` suggestion, never from its broad citation list: a suggestion is
+    an explicit choice; a list of evidence may contain dozens of unrelated findings.
+    """
+    turns = (session_db.query(models.ChatTurn)
+             .filter_by(session_id=thread.id)
+             .order_by(models.ChatTurn.seq.desc()).all())
+    for turn in turns:
+        try:
+            suggestions = json.loads(turn.suggestions or "[]")
+        except ValueError:
+            continue
+        ids = []
+        for suggestion in suggestions if isinstance(suggestions, list) else []:
+            if not isinstance(suggestion, dict) or suggestion.get("action") != "validate_finding":
+                continue
+            finding_id = str(suggestion.get("finding_id") or "").strip()
+            if finding_id and finding_id not in ids:
+                ids.append(finding_id)
+        if not ids:
+            continue
+        if len(ids) != 1:
+            return None
+        finding = session_db.get(models.Finding, ids[0])
+        return finding if finding is not None and finding.org_id == org.id else None
+    return None
+
+
+def _findings_on_the_table(session_db: Session, org: models.Organization,
+                           thread: models.ChatSession, limit: int = 3
+                           ) -> list[models.Finding]:
+    """The findings the last answer put in front of the operator, in its order.
+
+    Used to **ask** which one, never to pick. A citation list is evidence, not a choice:
+    an analysis answer cites a dozen rows, and selecting one of them on the operator's
+    behalf is how "validame esta" validates the wrong finding.
+    """
+    last = (session_db.query(models.ChatTurn)
+            .filter_by(session_id=thread.id, role="orchestrator")
+            .order_by(models.ChatTurn.seq.desc()).first())
+    if last is None:
+        return []
+    try:
+        citations = json.loads(last.citations or "[]")
+    except ValueError:
+        return []
+    out: list[models.Finding] = []
+    seen: set[str] = set()
+    for ref in citations if isinstance(citations, list) else []:
+        if not isinstance(ref, str) or ref in seen:
+            continue
+        seen.add(ref)
+        found = session_db.get(models.Finding, ref)
+        if found is not None and found.org_id == org.id:
+            out.append(found)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _short_title(text: str | None, limit: int = 120) -> str:
+    """Scanner titles are rule prose, sometimes 300 characters: the list has to read."""
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= limit else flat[:limit].rstrip(" ,;.") + "…"
+
+
+def _which_finding_answer(candidates: list[models.Finding], target: str) -> str:
+    """One question, with the rows the previous answer named, and no guess."""
+    listing = "\n".join(f"- **{_short_title(row.title or row.id)}** · {row.severity} · "
+                        f"`{row.id}`" for row in candidates)
+    where = f" contra `{target}`" if target else ""
+    return (
+        "Para armar la misión necesito saber **cuál** de los hallazgos que acabo de "
+        f"mostrarte{where} se valida: la lista de citas no es una elección, y elegir por "
+        "vos me haría probar la fila equivocada.\n\n"
+        f"{listing}\n\n"
+        "Tocá uno y armo la misión con ese id — sigue esperando tu aprobación antes de "
+        "ejecutar nada.")
 
 
 def _finding_target(session_db: Session, finding: models.Finding) -> tuple[str | None, str]:
@@ -801,8 +924,15 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
         declared = candidate.rstrip(".,;)")
         break
 
+    if finding is None and (declared is None
+                            or DEICTIC_RE.search(question or "")):
+        # A host in the sentence does not discard the row the conversation selected: in
+        # "validame esta … en <host>", "esta" is the finding and the host is only where
+        # it runs. Without the deictic, `probá https://host …` stays a fresh lab probe.
+        finding = _suggested_finding(session_db, org, thread)
+
     if finding is None and declared is None:
-        return {"blocked": "no finding id in the question", "needs": "finding",
+        return {"blocked": "no hay un id de hallazgo en el mensaje", "needs": "finding",
                 "ids": {"candidates": candidates}}
 
     if finding is not None:
@@ -810,9 +940,8 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
         ids = {"finding": finding.id, "asset": finding.asset_id,
                "component": finding.component_id}
         if not value and declared is None:
-            return {"blocked": ("this finding is not attached to an asset or an "
-                                "endpoint, so nothing in the estate says which host it "
-                                "runs on"),
+            return {"blocked": ("el hallazgo no está atado a un asset ni a un endpoint, "
+                                "así que el inventario no dice en qué host corre"),
                     "needs": "target", "ids": ids, "advisory_url": finding.url}
         if not value:
             value, source = declared, "chat.declared"
@@ -828,7 +957,7 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
     origin = f"{parts.scheme}://{parts.netloc}" if parts.netloc else target_value
 
     if not urlsplit(origin).netloc:
-        return {"blocked": (f"the target for this finding is not an address: "
+        return {"blocked": (f"el target de este hallazgo no es una dirección: "
                             f"`{value}`"), "needs": "target", "ids": ids}
     decision = agent_router._scope_decision(session_db, org, "url", origin, capability)
     if not decision.allowed:
@@ -839,10 +968,13 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
 
     # The plan, before the mission: a goal is not a plan, and approving one without the
     # other is how the operator approves a sentence and the agent improvises.
+    # The planner writes in the language of its question, so it gets the operator's own
+    # sentence plus the facts. A synthesized English "Plan for finding …" made a Spanish
+    # conversation produce an English plan inside a Spanish answer.
+    facts = (f"[hallazgo {finding.id} · {finding.title} · target {origin}]"
+             if finding is not None else f"[target {origin}]")
     plan_row, plan_prose = planner.plan(
-        session_db, org, actor=actor,
-        question=(f"Plan for finding {finding.id}: {finding.title}. Target: {origin}."
-                  if finding is not None else f"Plan for {origin}: {question.strip()}"))
+        session_db, org, actor=actor, question=f"{question.strip()}\n\n{facts}")
     if plan_row is None:
         # Fail closed: a mission without a plan is a sentence the worker improvises on.
         # The planner's own prose is the reason, and it is worth more than a template.
@@ -958,14 +1090,19 @@ def _proposal_answer(result: dict, capability: str) -> str:
     if needs == "target":
         advisory = result.get("advisory_url")
         return (
-            f"No puedo armarla: {result.get('blocked')}.\n\n"
+            f"**No armé la misión**: no sé contra qué host probar. "
+            f"{result.get('blocked')}\n\n"
             + (f"(El `url` del hallazgo es la referencia del advisory —{advisory}—, no "
                "un host del parque: probar contra ahí no diría nada.)\n\n" if advisory
                else "")
-            + "Lo que falta es el vínculo que hoy nadie tiene: qué asset corre esto "
-            "realmente — el mismo hueco que un deployment con `last_checked_at: null` "
-            f"está gritando. Ids: {ids}. Cuando el hallazgo apunte a un asset, la "
-            "misión se arma sola.")
+            + "Un hallazgo sin asset ni endpoint no dice dónde corre. Dos salidas, y "
+              "ninguna inventa un host:\n\n"
+              "- si sabés dónde corre, decímelo en el mismo mensaje (`validá esto en "
+              "https://host…`): ese target queda declarado en el chat y la misión se "
+              "arma contra su origin;\n"
+              "- si no lo sabés, el vínculo falta en el inventario, que es exactamente "
+              "lo que un deployment con `last_checked_at: null` está diciendo.\n\n"
+              f"Ids: {ids}.")
     return (
         "No puedo armarla todavía, y el motivo es concreto: "
         f"**{result.get('blocked')}**.\n\n"

@@ -38,9 +38,14 @@ SPECIALISTS: dict[str, dict] = {
     "estate.inventory": {
         "name": "estate.inventory",
         "executor": "analyst",
+        # `lookup`, `finding_detail` and `finding_trace` are not optional: the prompt
+        # below tells the model to open a finding before calling it absent, and a tool
+        # missing from this list is dropped from the offer at call time — the model then
+        # answers "I could not read any proof" while the tool existed all along.
         "tools": ["advisory_resolve", "intel_kev_catalog", "components_impact",
                   "deployment_chain", "projects_list", "vulnerabilities_search",
-                  "findings_search", "assets_search"],
+                  "findings_search", "finding_detail", "finding_trace", "lookup",
+                  "assets_search"],
         "wants": ["where it lives: purls, builds, deployments, environments",
                   "counts, when the question is a count"],
         "sees": [],

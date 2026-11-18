@@ -154,6 +154,21 @@ def test_chain_names_the_edge_it_could_not_establish(seeded):
     assert any("no observation" in note for note in body["completeness"]["unknown_edges"])
 
 
+def test_chain_accepts_a_purl_handed_in_component(seeded):
+    """`component=pkg:npm/lodash@4.17.15` is the same question as `purl=…`.
+
+    A model reads the two parameter names as synonyms, and the 404 it got back was
+    reported to the operator as "the estate has no deployment chain for this purl" —
+    a wrong answer built from our own status code.
+    """
+    http, headers = seeded
+    body = http.get("/api/v1/deployment/chain",
+                    params={"component": "pkg:npm/lodash@4.17.15"},
+                    headers=headers).json()
+    assert body["edges"]["components"][0]["purl"] == "pkg:npm/lodash@4.17.15"
+    assert {row["environment"] for row in body["edges"]["deployments"]} == {"PRO", "DEV"}
+
+
 def test_chain_requires_a_query(seeded):
     http, headers = seeded
     response = http.get("/api/v1/deployment/chain", headers=headers)

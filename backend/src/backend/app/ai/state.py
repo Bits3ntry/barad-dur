@@ -29,8 +29,31 @@ MAX_REFS = 400
 MAX_SUMMARY_CHARS = 3000
 
 
+def _digest_key(value) -> str:
+    """A deterministic JSON-object key for a non-JSON mapping key."""
+    return f"{type(value).__module__}.{type(value).__qualname__}:{value!r}"
+
+
+def _digestable(value):
+    """Normalize exceptional mapping keys without changing ordinary payload hashes."""
+    if isinstance(value, dict):
+        return {_digest_key(key): _digestable(item)
+                for key, item in sorted(value.items(), key=lambda pair: _digest_key(pair[0]))}
+    if isinstance(value, list):
+        return [_digestable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_digestable(item) for item in value]
+    return value
+
+
 def digest(payload) -> str:
-    blob = json.dumps(payload, sort_keys=True, default=str).encode()
+    try:
+        blob = json.dumps(payload, sort_keys=True, default=str).encode()
+    except TypeError:
+        # Python sorts the original key objects before applying `default=str`; an
+        # external tool payload containing both `null` and string keys otherwise
+        # kills the run while we are only trying to write its receipt.
+        blob = json.dumps(_digestable(payload), sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
 
 
@@ -263,17 +286,38 @@ class AgentState:
 
 
 BRIEF_TOOL_CHARS = 600
+#: A **single record** a later step asked for by id belongs in the prompt, not behind a
+#: pointer: `finding_detail` is the call whose whole value is `proof_request`,
+#: `reproduction` and `evidence`. Dropping the body there made the model report "the
+#: detail came back with references only, no proof body" about a row it had just read —
+#: the pointer was the reason, not the data. Lists still travel as pointers.
+BRIEF_FULL_CHARS = 2600
+
+
+def _compact(value):
+    """The payload without its empty fields: a finding carries ~60 keys, most null."""
+    if isinstance(value, dict):
+        return {key: _compact(item) for key, item in value.items()
+                if item not in (None, "", [], {})}
+    if isinstance(value, list):
+        return [_compact(item) for item in value]
+    return value
 
 
 def brief_result(payload, tool: str = "") -> str:
-    """What a later step needs: the numbers, the refs, and a pointer to the rest.
+    """What a later step needs: the record when it is small, a pointer when it is not.
 
-    The raw rows are already in `run_state` and in the artefact; re-sending them on
-    every step is what turned a 3-step run into 26k input tokens. This is a pointer, not
-    a truncation: it says where the result lives and the tool can be asked again.
+    The raw rows are already in `run_state` and in the artefact; re-sending a 200-row
+    page on every step is what turned a 3-step run into 26k input tokens. But a pointer
+    is only honest for a *list*: a single record read by id is the answer, so it is sent
+    compacted up to `BRIEF_FULL_CHARS`, and only past that does it become a pointer.
     """
     if not isinstance(payload, dict):
         payload = {"data": payload}
+    compact = _compact(payload)
+    body = json.dumps(compact, default=str, ensure_ascii=False)
+    if len(body) <= BRIEF_FULL_CHARS:
+        return body
     scalars = {key: value for key, value in payload.items()
                if key in {"total", "count", "limit", "offset", "coverage", "status"}
                and isinstance(value, (int, float, str)) and len(str(value)) < 200}
