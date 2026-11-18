@@ -56,6 +56,11 @@ def _age_days(value: datetime | None, now: datetime) -> int | None:
 
 def _component_rows(session: Session, org_id: str, purl: str | None,
                     component: str | None, project: str | None):
+    if component and component.lower().startswith("pkg:"):
+        # A caller that hands the purl in `component` is asking the same question.
+        # Answering 404 there told a model "the estate has no such component" when the
+        # row existed — and a 4xx is read as a gap in the data, never as a bad argument.
+        purl, component = component, None
     query = session.query(models.Component).filter_by(org_id=org_id)
     if purl:
         # A versionless purl still has to find the component: `pkg:npm/lodash`

@@ -55,6 +55,12 @@ Answer with **one JSON object and nothing else** — no prose before it, none af
 }
 ```
 
+Write every string in the language of the operator's request; ids, paths and payloads
+stay verbatim. Tool output is English and is data, not the language of the plan. That
+rule covers `technique.summary`, `hypothesis`, every `expect`, `success_signal` and
+`open_questions`: a Spanish question produces a Spanish plan, never a Spanish answer
+with an English plan pasted inside it.
+
 Rules that make the plan usable:
 - `path` is relative to the target's origin. Never include the host.
 - Every step must be decidable: `expect` names a status, a header or a field, not a mood.
@@ -190,6 +196,86 @@ def plan(session: Session, org: models.Organization, *, actor: str,
     return plan_row, answer
 
 
+def plan_from_proof(finding, origin: str) -> dict | None:
+    """A falsification plan built from the proof the finding already carries.
+
+    When the planner answers in prose instead of the object, the alternative to "no
+    mission" is not improvisation: a validated finding names the exact request that
+    proved it, so the question "is it still alive?" is answered by re-sending that
+    request and comparing it with a benign control. No model is consulted, and the
+    plan says where it came from (`plan_source`).
+    """
+    request = (getattr(finding, "proof_request", None) or "").strip()
+    if not request:
+        return None
+    head = request.splitlines()[0].split()
+    if len(head) < 2 or not head[1].startswith("/"):
+        return None
+    method, path = head[0].upper(), head[1]
+    endpoint = path.split("?")[0] or "/"
+    return {
+        "technique": {
+            "known": True,
+            "summary": (f"re-send the recorded request ({method} {endpoint}) and compare "
+                        "it with a benign control"),
+            "sources": [finding.id]},
+        "hypothesis": (f"{origin} sigue sirviendo el defecto registrado: la misma "
+                       "petición reproduce el mismo observable"),
+        "steps": [
+            {"n": 1, "method": method, "path": path, "payload": None,
+             "expect": ("el status y el tamaño del cuerpo registrados en la evidencia "
+                        "(reproduce el observable)")},
+            {"n": 2, "method": method, "path": endpoint, "payload": None,
+             "expect": ("una respuesta distinta de la del paso 1: sin payload no hay "
+                        "observable, que es el control negativo")},
+        ],
+        "success_signal": ("el paso 1 reproduce el observable registrado y el paso 2 "
+                           "no; si ambos coinciden, el defecto ya no está"),
+        "safety": "read_only" if method == "GET" else "active",
+        "needs_grant": True,
+        "open_questions": ["si el paso 1 no reproduce, el hallazgo está mitigado o el "
+                           "host cambió: eso también es un resultado"],
+        "plan_source": "recorded-proof",
+    }
+
+
+def plan_for_discovery(origin: str) -> dict:
+    """The recon plan is the same every time, so it does not ask a model.
+
+    Discovery answers "what is here", not "is this vulnerable": a planner prompted for a
+    falsification hypothesis wrote sentences like "there is no documented technique for
+    this vulnerability" about a host nobody had claimed anything about. The lane's steps
+    are fixed and honest, and the plan says where it came from.
+    """
+    return {
+        "technique": {"known": True,
+                      "summary": (f"identificar y enumerar {origin}: identidad del origen, "
+                                  "superficie declarada y exposición accidental"),
+                      "sources": []},
+        "hypothesis": (f"{origin} expone una superficie más amplia que la registrada en el "
+                       "inventario: rutas, documentación de API o respaldos accesibles"),
+        "steps": [
+            {"n": 1, "method": "GET", "path": "/", "payload": None,
+             "expect": "status y cabecera Server: la identidad del origen"},
+            {"n": 2, "method": "GET", "path": "/robots.txt", "payload": None,
+             "expect": "las rutas que el propio sitio declara"},
+            {"n": 3, "method": "GET", "path": "/rest/admin/application-version",
+             "payload": None, "expect": "versión del producto sin autenticación, o 401/404"},
+            {"n": 4, "method": "GET", "path": "/api-docs/", "payload": None,
+             "expect": "documentación de API expuesta, o ausencia"},
+            {"n": 5, "method": "GET", "path": "/ftp/", "payload": None,
+             "expect": "listado o respaldos accesibles, o ausencia"},
+        ],
+        "success_signal": ("la superficie queda inventariada: cada ruta con su status y su "
+                           "tamaño, sin declarar vulnerable nada que no se haya probado"),
+        "safety": "read_only",
+        "needs_grant": False,
+        "open_questions": ["un 200 no es una vulnerabilidad: la interpretación es del "
+                           "analista, y lo que no se listó sigue sin observarse"],
+        "plan_source": "recon-template",
+    }
+
+
 def describe(plan_row: dict, limit: int = 5) -> str:
     """The plan as the operator reads it, before approving anything."""
     technique = plan_row.get("technique") or {}
@@ -204,8 +290,11 @@ def describe(plan_row: dict, limit: int = 5) -> str:
     for step in steps[:limit]:
         payload = step.get("payload")
         body = f" · `{payload}`" if payload else ""
-        lines.append(f"{step.get('n', '·')}. `{step.get('method', 'GET')} "
-                     f"{step.get('path', '')}`{body} → {step.get('expect', '')}")
+        path = str(step.get("path") or "").strip()
+        # A planner that could not establish the endpoint leaves it null; printing
+        # "`GET None`" reads like a bug in the console instead of a gap in the plan.
+        call = f"`{step.get('method', 'GET')} {path}`" if path else "sin path declarado"
+        lines.append(f"{step.get('n', '·')}. {call}{body} → {step.get('expect', '')}")
     signal = plan_row.get("success_signal")
     if signal:
         lines.append(f"**Señal de éxito:** {signal}")

@@ -33,7 +33,6 @@ function shortRef(ref) {
 export function useSessions() {
   const [sessions, setSessions] = useState([])
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
   const reload = useCallback(async () => {
     try {
       const body = await api.get('/api/v1/ai/sessions')
@@ -62,6 +61,8 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
   const [startedAt, setStartedAt] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState('')
+  // The confirmation of an in-place action (mission approved, cycle created).
+  const [notice, setNotice] = useState('')
   const endRef = useRef(null)
 
   useEffect(() => {
@@ -83,6 +84,17 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
   }, [sessionId])
 
   useEffect(() => { load() }, [load])
+  /* While a mission is alive the conversation is the harness: one poll of the same
+     payload the thread renders, so the operator sees the task, its attempts and every
+     command as they land — instead of a blank screen that does not say if it is
+     working. */
+  const missions = session?.missions || []
+  const live = missions.some(missionAlive)
+  useEffect(() => {
+    if (!live) return undefined
+    const timer = setInterval(() => { load() }, 3000)
+    return () => clearInterval(timer)
+  }, [live, load])
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
   }, [session?.turn_rows?.length, busy])
@@ -168,6 +180,14 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
       }
       return
     }
+    // A validation button sends the sentence the platform wrote for it — never its own
+    // label. Sending the label turned "validá el impacto de <id>" into "Validar el SQLi de
+    // Juice Shop", a description with no id, and the turn fell back to a read-only essay.
+    if (suggestion.action === "validate_finding" && suggestion.finding_id) {
+      await submit(suggestion.prompt ||
+                   `@angmar validá el impacto de ${suggestion.finding_id}`)
+      return
+    }
     if (suggestion.href) {
       const [screen, arg] = suggestion.href.replace(/^#/, "").split("::")
       if (screen === "ai-runs" && arg) onNavigate?.("ai-runs", { runId: arg })
@@ -246,15 +266,28 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
   if (!session) return <Loading label={t('chat.loading')} />
 
   const turns = session.turn_rows || []
+  // A mission belongs to the turn that armed it (its citation) or reported it. One
+  // mapping, so the panel under a turn shows that turn's run and nothing else.
+  const missionByTurn = {}
+  for (const mission of missions) {
+    for (const turn of turns) {
+      const refs = [mission.id, mission.run_id,
+                    ...(turn.citations || []),
+                    ...((turn.suggestions || []).map((item) => item.mission_id))]
+      if (refs.filter(Boolean).includes(mission.id)) missionByTurn[turn.id] = mission
+    }
+  }
   const pinByTurn = {}
   for (const pin of session.pins || []) {
     if (pin.turn_id && !pinByTurn[pin.turn_id]) pinByTurn[pin.turn_id] = pin
   }
   return (
     <div className={`chat${compact ? ' chat-compact' : ''}`}>
+      {sessionId && <ThreadTrace sessionId={sessionId} />}
       {notice && <Banner kind="info">{notice}</Banner>}
       {error && <Banner kind="error">{error}</Banner>}
       <div className="chat-log">
+        {live && <LiveStrip missions={missions} />}
         {turns.length === 0 && (
           <p className="chat-hint muted">
             {t('chat.hint')}{' '}
@@ -282,7 +315,8 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
                 {pinByTurn[turn.id] ? '📌' : '📍'}
               </button>
             </div>
-            <div className="chat-body">{turn.content}</div>
+            <div className="chat-body chat-md"
+                 dangerouslySetInnerHTML={{ __html: markdownToHtml(turn.content) }} />
             {(turn.suggestions || []).length > 0 && turn.role !== "user" && (
               <div className="chat-suggest">
                 {turn.suggestions.map((suggestion, index) => (
@@ -310,9 +344,8 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
                 )}
               </div>
             )}
-            {turn.run_id && (
-              <RunTrace runId={turn.run_id} tokens={turn.tokens}
-                        label={t('chat.run.open')} />
+            {(turn.run_id || missionByTurn[turn.id]) && (
+              <Harness runId={turn.run_id} mission={missionByTurn[turn.id]} />
             )}
           </div>
         )))}
@@ -371,71 +404,281 @@ export function Conversation({ sessionId, compact = false, onTurn, onNavigate })
 }
 
 
-// The run, in place. Leaving the thread to see what the assistant just did is the exact
-// friction this harness exists to remove: the steps are one disclosure away.
-function RunTrace({ runId, tokens, label }) {
-  const [rows, setRows] = useState(null)
+/* ── the harness, in the thread ───────────────────────────────────────────────
+   Leaving the conversation to find out what the assistant is doing is the friction
+   this exists to remove. A mission this thread armed renders its task, its attempts
+   and every command under the turn that armed it, and the strip at the top says it is
+   alive while it is. Same records the Missions screen reads. */
+
+const PROVISIONAL = ['queued', 'claimed', 'running']
+
+function missionAlive(mission) {
+  if (!mission) return false
+  if (['approved', 'running'].includes(mission.status)) return true
+  return (mission.tasks || []).some((task) => PROVISIONAL.includes(task.status))
+}
+
+/* One line per event: what was run, what came back. The status of a response lives in
+   the first line of its head, because that is what curl wrote. */
+function eventLine(event) {
+  const payload = event.payload || {}
+  if (event.kind === 'tool') {
+    const argv = (payload.argv || []).join(' ')
+    return { text: `${event.tool || payload.tool || 'tool'} ${argv}`.trim(),
+             meta: payload.rc === 0 ? 'rc 0' : `rc ${payload.rc}` }
+  }
+  if (event.kind === 'observation') {
+    const first = String(payload.head || '').split('\n')[0]
+    const status = first.match(/\s(\d{3})\b/)
+    return { text: status ? first.replace(/^HTTP\/[\d.]+\s*/, '') : '—',
+             meta: payload.bytes ? `${payload.bytes} B` : '' }
+  }
+  if (event.kind === 'refusal') {
+    return { text: payload.reason || payload.detail || 'refused', meta: '' }
+  }
+  if (event.kind === 'final') {
+    const verdict = /VERDICT:\s*([A-Z ]+)/i.exec(String(payload.answer || ''))
+    if (verdict) return { text: verdict[1].trim(), meta: payload.error || '' }
+    return { text: payload.error ? 'error' : 'final', meta: payload.error || '' }
+  }
+  return { text: event.kind, meta: '' }
+}
+
+function LiveStrip({ missions }) {
+  const { t } = useI18n()
+  const running = missions.filter(missionAlive)
+  const task = running.flatMap((mission) => mission.tasks || [])
+    .find((row) => PROVISIONAL.includes(row.status))
+  const events = running.flatMap((mission) =>
+    (mission.tasks || []).flatMap((row) => row.events || []))
+  const last = events[events.length - 1]
+  const line = last ? eventLine(last) : null
+  return (
+    <div className="chat-live" role="status">
+      <span className="chat-live__dot" aria-hidden="true" />
+      <span className="chat-live__title">{t('chat.harness.running')}</span>
+      {task && (
+        <span className="chat-live__task">
+          <code>{task.kind}</code> · {task.status}
+          {task.attempts > 1 ? ` · intento ${task.attempts}` : ''}
+        </span>
+      )}
+      {line && <span className="chat-live__last">{line.text}</span>}
+      <span className="chat-live__n">
+        {t('chat.harness.calls', { n: events.filter((event) => event.kind === 'tool').length })}
+      </span>
+    </div>
+  )
+}
+
+function Harness({ runId, mission }) {
+  const { t, tOr } = useI18n()
+  const [steps, setSteps] = useState(null)
   const [busy, setBusy] = useState(false)
+  const live = missionAlive(mission)
+  const tasks = mission?.tasks || []
+  const events = tasks.flatMap((task) => task.events || [])
+  const tools = events.filter((event) => event.kind === 'tool').length
 
   const open = async (element) => {
-    if (!element.open || rows || busy) return
+    if (!element.open || steps || busy || !runId) return
     setBusy(true)
     try {
       const body = await api.get(`/api/v1/ai/runs/${runId}`)
-      setRows(body?.data?.step_rows || [])
+      setSteps(body?.data?.step_rows || [])
     } catch {
-      setRows([])
+      setSteps([])
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <details className="chat-run-inline" onToggle={(event) => open(event.currentTarget)}>
+    <details className={`chat-harness${live ? ' live' : ''}`} open={live || undefined}
+             onToggle={(event) => open(event.currentTarget)}>
       <summary>
-        {label}{tokens > 0 ? ` · ${tokens} tok` : ''}
+        {live && <span className="chat-harness__pulse" aria-hidden="true" />}
+        <span className="chat-harness__title">
+          {mission ? `${mission.capability} · ${mission.profile}` : t('chat.run.open')}
+        </span>
+        {mission && (
+          <span className="chat-harness__state">
+            {tOr(`chat.harness.state.${mission.status}`, mission.status)}
+          </span>
+        )}
+        {tools > 0 && (
+          <span className="chat-harness__count">{t('chat.harness.calls', { n: tools })}</span>
+        )}
+        {mission?.tokens ? (
+          <span className="chat-harness__budget">{t('chat.harness.budget', { n: mission.tokens })}</span>
+        ) : null}
       </summary>
-      {!rows && busy && <div className="chat-run-step">cargando…</div>}
-      {rows && rows.length === 0 && <div className="chat-run-step">sin pasos registrados</div>}
-      {(rows || []).map((step) => {
-        let tools = []
-        try { tools = JSON.parse(step.tool_calls || '[]') } catch { tools = [] }
-        return (
-          <div className="chat-run-step" key={`${runId}-${step.seq}`}>
-            <span className="chat-run-step__n">{step.seq}</span>
-            <span className="chat-run-step__role">{step.role}</span>
-            {step.phase && <span className="chat-run-step__phase">{step.phase}</span>}
-            {tools.length > 0 && (
-              <span className="chat-run-step__tools">
-                {tools.map((call) => call.tool).filter(Boolean).join(' · ')}
-              </span>
-            )}
-            <span className="chat-run-step__tok">
-              {(step.tokens_in || 0) + (step.tokens_out || 0)} tok
+      {tasks.map((task) => (
+        <div className="chat-harness__task" key={task.id}>
+          <div className="chat-harness__task-head">
+            <code>{task.kind}</code>
+            <span className={`chat-harness__task-state state-${task.status}`}>
+              {tOr(`chat.harness.state.${task.status}`, task.status)}
             </span>
+            {task.attempts > 1 && (
+              <span className="muted">· {t('chat.harness.attempt', { n: task.attempts })}</span>
+            )}
+            {task.error && <span className="chat-harness__error">{task.error}</span>}
           </div>
-        )
-      })}
+          {(task.events || []).length === 0 && (
+            <div className="chat-harness__row muted">{t('chat.harness.noEvents')}</div>
+          )}
+          {(task.events || []).map((event) => {
+            const line = eventLine(event)
+            return (
+              <div className={`chat-harness__row kind-${event.kind}`} key={`${task.id}-${event.seq}`}>
+                <span className="chat-harness__seq">{event.seq}</span>
+                <span className="chat-harness__kind">{event.kind}</span>
+                <span className="chat-harness__what">{line.text}</span>
+                {line.meta && <span className="chat-harness__meta">{line.meta}</span>}
+              </div>
+            )
+          })}
+        </div>
+      ))}
+      {steps && steps.length > 0 && (
+        <div className="chat-harness__steps">
+          <div className="chat-harness__row muted">{t('chat.harness.modelCalls')}</div>
+          {steps.map((step) => {
+            let toolCalls = []
+            try { toolCalls = JSON.parse(step.tool_calls || '[]') } catch { toolCalls = [] }
+            return (
+              <div className="chat-harness__row" key={`step-${step.seq}`}>
+                <span className="chat-harness__seq">{step.seq}</span>
+                <span className="chat-harness__kind">
+                  {step.role}{step.phase ? ` · ${step.phase}` : ''}
+                </span>
+                <span className="chat-harness__what">
+                  {toolCalls
+                    .map((call) => `${call.tool || '?'}${call.status && call.status !== 200 ? ' ⚠' : ''}`)
+                    .join(' · ') || '—'}
+                </span>
+                <span className="chat-harness__meta">
+                  {(step.tokens_in || 0) + (step.tokens_out || 0)} tok
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {busy && <div className="chat-harness__row muted">{t('chat.loading')}</div>}
     </details>
   )
 }
 
-export default function Chat({ onBack, onNavigate }) {
+
+
+// Minimal markdown, on purpose: bold, inline code, fenced code and line breaks are what a
+// field report actually uses. A full parser is a dependency and a surface; this is neither.
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
+function markdownToHtml(source) {
+  let html = escapeHtml(source)
+  const fences = []
+  html = html.replace(/```[a-zA-Z]*\n?([\s\S]*?)```/g, (_match, code) => {
+    fences.push(`<pre class="chat-code">${code.replace(/^\n/, "")}</pre>`)
+    return `\u0000${fences.length - 1}\u0000`
+  })
+  html = html
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+  html = html
+    .split(/\n{2,}/)
+    .map((block) => {
+      const trimmed = block.trim()
+      if (!trimmed) return ""
+      if (/^\u0000\d+\u0000$/.test(trimmed)) return trimmed
+      return `<p>${trimmed.replace(/\n/g, "<br/>")}</p>`
+    })
+    .join("")
+  html = html.replace(/\u0000(\d+)\u0000/g, (_m, index) => fences[Number(index)])
+  return html
+}
+
+// The relation view, inside the conversation: who spoke, delegating to whom, what each
+// run cost. Hermes shows the room while it works; a separate tab you have to remember to
+// open is the friction this replaces.
+function ThreadTrace({ sessionId }) {
+  const [events, setEvents] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const open = async (element) => {
+    if (!element.open || events || busy) return
+    setBusy(true)
+    try {
+      const body = await api.get(`/api/v1/ai/sessions/${sessionId}/thread`)
+      setEvents((body?.data?.events) || [])
+    } catch {
+      setEvents([])
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <details className="chat-thread" onToggle={(event) => open(event.currentTarget)}>
+      <summary>relaciones de esta sesión</summary>
+      {busy && !events && <div className="chat-thread__row">cargando…</div>}
+      {events && events.length === 0 && (
+        <div className="chat-thread__row">sin actividad registrada</div>
+      )}
+      {(events || []).map((event) => (
+        <div className="chat-thread__row" key={`${event.order}-${event.kind}`}>
+          <span className="chat-thread__n">{event.order}</span>
+          <span className={`chat-thread__kind chat-thread__kind--${event.kind}`}>
+            {event.kind}
+          </span>
+          <span className="chat-thread__who">
+            {event.author}{event.role && event.role !== "user" ? ` · ${event.role}` : ""}
+          </span>
+          <span className="chat-thread__what">{(event.content || "").slice(0, 90)}</span>
+          {event.tokens > 0 && (
+            <span className="chat-thread__tok">{event.tokens} tok</span>
+          )}
+        </div>
+      ))}
+    </details>
+  )
+}
+
+export default function Chat({ onBack, onNavigate, focus }) {
   const { t, tOr, tCount } = useI18n()
   const { sessions, reload, error } = useSessions()
-  const [active, setActive] = useState('')
+  // The address owns which conversation is open: `#chat::<id>` survives an F5, a
+  // bookmark and a paste, and the rail is a shortcut to the same address.
+  const [active, setActive] = useState(focus?.sessionId || '')
   // Two readings of one conversation: what was said (the chat) and who asked whom for
   // what (the thread). Same records, so switching cannot disagree with itself.
   const [view, setView] = useState('chat')
 
+  const select = (id) => {
+    setActive(id)
+    if (id) window.history.pushState({}, '', `/#chat::${id}`)
+  }
+
+  // A focus that changes under us (a link, the back button) reopens that conversation.
   useEffect(() => {
-    if (!active && sessions.length) setActive(sessions[0].id)
+    if (focus?.sessionId && focus.sessionId !== active) setActive(focus.sessionId)
+  }, [focus?.sessionId])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!active && sessions.length) select(sessions[0].id)
   }, [sessions, active])
 
   const create = async () => {
     const body = await api.post('/api/v1/ai/sessions', {})
     await reload()
-    setActive(body.data.id)
+    select(body.data.id)
   }
 
   return (
@@ -473,7 +716,7 @@ export default function Chat({ onBack, onNavigate }) {
             <button
               key={session.id}
               className={`chat-rail-item${active === session.id ? ' active' : ''}`}
-              onClick={() => setActive(session.id)}
+              onClick={() => select(session.id)}
             >
               <span className="chat-rail-title">{session.title || t('chat.untitled')}</span>
               <span className="chat-rail-meta">

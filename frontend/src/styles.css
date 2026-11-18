@@ -5581,6 +5581,177 @@ button.rem-title:hover { color: var(--accent); }
 }
 
 /* The run, inside the turn: steps and the tools each one used. */
+/* The harness, inside the conversation: the mission, its task and every command the
+   field agent ran, under the turn that armed it. */
+.chat-live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--line, #2a2f3a);
+  border-left: 3px solid var(--accent, #6ea8fe);
+  border-radius: 8px;
+  background: var(--panel, #14171d);
+  font-size: 0.82rem;
+}
+
+.chat-live__dot,
+.chat-harness__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent, #6ea8fe);
+  animation: chat-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes chat-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+.chat-live__title {
+  font-weight: 600;
+}
+
+.chat-live__task,
+.chat-live__last,
+.chat-live__n {
+  color: var(--muted, #9aa4b2);
+}
+
+.chat-live__last {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
+}
+
+.chat-harness {
+  margin-top: 10px;
+  font-size: 0.84rem;
+  border: 1px solid var(--line, #2a2f3a);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.chat-harness.live {
+  border-left: 3px solid var(--accent, #6ea8fe);
+}
+
+.chat-harness > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.chat-harness > summary::marker,
+.chat-harness > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-harness > summary::before {
+  content: "▸ ";
+  color: var(--muted, #9aa4b2);
+}
+
+.chat-harness[open] > summary::before {
+  content: "▾ ";
+}
+
+.chat-harness__title {
+  font-weight: 600;
+}
+
+.chat-harness__state,
+.chat-harness__count,
+.chat-harness__budget {
+  color: var(--muted, #9aa4b2);
+}
+
+.chat-harness__task {
+  margin-top: 8px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line, #2a2f3a);
+}
+
+.chat-harness__task-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.chat-harness__task-state {
+  font-size: 0.78rem;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line, #2a2f3a);
+}
+
+.chat-harness__task-state.state-running,
+.chat-harness__task-state.state-claimed {
+  border-color: var(--accent, #6ea8fe);
+  color: var(--accent, #6ea8fe);
+}
+
+.chat-harness__task-state.state-failed {
+  border-color: var(--danger, #f26d6d);
+  color: var(--danger, #f26d6d);
+}
+
+.chat-harness__error {
+  color: var(--danger, #f26d6d);
+}
+
+.chat-harness__row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.78rem;
+}
+
+.chat-harness__seq {
+  color: var(--muted, #9aa4b2);
+  min-width: 18px;
+  text-align: right;
+}
+
+.chat-harness__kind {
+  min-width: 74px;
+  color: var(--muted, #9aa4b2);
+}
+
+.chat-harness__what {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-harness__meta {
+  color: var(--muted, #9aa4b2);
+}
+
+.chat-harness__row.kind-observation .chat-harness__what {
+  color: var(--muted, #9aa4b2);
+}
+
+.chat-harness__steps {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line, #2a2f3a);
+}
+
 .chat-run-inline {
   margin-top: 10px;
   font-size: 0.84rem;
@@ -5626,4 +5797,105 @@ button.rem-title:hover { color: var(--accent); }
 .chat-run-step__tools,
 .chat-run-step__tok {
   color: var(--muted, #9aa4b2);
+}
+
+/* Relations, inside the conversation. */
+.chat-thread {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  border: 1px solid var(--line, #2a2f3a);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.chat-thread > summary {
+  cursor: pointer;
+  color: var(--muted, #9aa4b2);
+}
+
+.chat-thread__row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.chat-thread__n,
+.chat-thread__tok {
+  color: var(--muted, #9aa4b2);
+}
+
+.chat-thread__kind {
+  font-variant: small-caps;
+  opacity: 0.8;
+}
+
+.chat-thread__kind--delegated {
+  color: var(--accent, #6ea8fe);
+}
+
+.chat-thread__who {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chat-thread__what {
+  color: var(--muted, #9aa4b2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Rendered markdown in a turn: a field report is a document, not a line of text. */
+.chat-md p {
+  margin: 0 0 10px;
+  line-height: 1.55;
+}
+
+.chat-md p:last-child {
+  margin-bottom: 0;
+}
+
+.chat-md strong {
+  font-weight: 650;
+}
+
+.chat-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86em;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.chat-md .chat-code {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+/* The session list: a long title truncates, it never bleeds out of the rail. */
+.chat-rail button,
+.chat-rail a,
+.chat-rail-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* The rail itself: the column never grows past its width because a title is long. */
+.chat-rail {
+  overflow-x: hidden;
+}
+
+.chat-rail > * {
+  max-width: 100%;
+  min-width: 0;
 }

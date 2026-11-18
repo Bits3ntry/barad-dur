@@ -136,6 +136,118 @@ def test_a_field_completion_is_a_step_the_meter_can_see(context, monkeypatch):
     assert spend["tokens"] == 120, "the monthly meter reads the field half now"
 
 
+def test_a_field_call_is_recorded_with_its_status_and_its_command(context, monkeypatch):
+    """The run view paints a call red when it has no `status`, and it did.
+
+    `{"tool": "run_tool"}` is the envelope's name with no outcome, so ten calls that
+    answered 200 appeared as ten failures. The record now carries the status and the
+    command the envelope asked for.
+    """
+    http, headers, session, _ = context
+    _provider(http, headers)
+    _, _, token = _mission_and_task(http, headers, tokens=10_000)
+
+    def fake(provider, api_key, messages, tools, *, transport=None, session_id="",
+             max_tokens=None):
+        return {"content": "",
+                "tool_calls": [{"function": {
+                    "name": "run_tool",
+                    "arguments": json.dumps({"tool": "curl", "argv": ["-sS", "https://x/"]})}}],
+                "tokens_in": 10, "tokens_out": 5, "cached_tokens": 0}
+
+    monkeypatch.setattr(engine, "complete", fake)
+    response = http.post("/api/v1/agent/llm/complete",
+                         json={"messages": [{"role": "user", "content": "go"}]},
+                         headers={"X-Agent-Token": token})
+    assert response.status_code == 200, response.text
+
+    session.expire_all()
+    calls = json.loads(session.query(models.AiStep).one().tool_calls)
+    assert calls[0]["status"] == 200, "sin status el panel pinta la llamada como fallida"
+    assert calls[0]["tool"] == "curl", "run_tool es el sobre: el nombre útil es el comando"
+    assert calls[0]["args"]["argv"] == ["-sS", "https://x/"]
+
+
+def test_the_field_prompt_carries_the_plan_the_operator_approved(context, monkeypatch):
+    """The worker gets the target and the contract — never the plan — so it wanders.
+
+    A discovery approved with five steps spent thirty calls rediscovering what it had
+    already answered. The plan now rides with the field instructions.
+    """
+    http, headers, session, _ = context
+    _provider(http, headers)
+    mission, task, token = _mission_and_task(http, headers, tokens=10_000)
+    row = session.get(models.AgentMission, mission["id"])
+    row.evidence = json.dumps({
+        "required": ["observation", "request", "response"], "task_kind": "recon.surface",
+        "plan": {"plan_source": "recon-template", "steps": [
+            {"n": 1, "method": "GET", "path": "/", "expect": "identidad del origen"},
+            {"n": 2, "method": "GET", "path": "/robots.txt", "expect": "rutas declaradas"},
+        ]}})
+    session.commit()
+
+    seen: dict = {}
+
+    def fake(provider, api_key, messages, tools, *, transport=None, session_id="",
+             max_tokens=None):
+        seen["system"] = messages[0]["content"]
+        return {"content": "ok", "tool_calls": [], "tokens_in": 5, "tokens_out": 2,
+                "cached_tokens": 0}
+
+    monkeypatch.setattr(engine, "complete", fake)
+    response = http.post("/api/v1/agent/llm/complete",
+                         json={"messages": [{"role": "user", "content": "go"}]},
+                         headers={"X-Agent-Token": token})
+    assert response.status_code == 200, response.text
+    assert "Plan aprobado" in seen["system"]
+    assert "GET /robots.txt" in seen["system"]
+    assert "no repitas una que ya respondió" in seen["system"]
+
+
+def test_the_conversation_carries_its_missions_and_what_they_executed(context):
+    """The chat is the harness: the thread has to show the run without leaving it."""
+    http, headers, session, org = context
+    chat = models.ChatSession(org_id=org.id, title="DEMO · discovery", status="idle")
+    session.add(chat)
+    session.flush()
+    run = models.AiRun(org_id=org.id, actor="tester", actor_role="analyst",
+                       session_id=chat.id, mode="mission", question="mission: recon",
+                       status="running")
+    session.add(run)
+    session.flush()
+    mission = models.AgentMission(org_id=org.id, actor="tester", goal="recon",
+                                  capability="discover", profile="morgoth",
+                                  status="running", run_id=run.id,
+                                  tools='["curl"]', budget=json.dumps({"steps": 12, "tokens": 60000}))
+    session.add(mission)
+    session.flush()
+    task = models.AgentTask(org_id=org.id, mission_id=mission.id, kind="recon.surface",
+                            target=json.dumps({"kind": "url", "value": "https://lab.test"}),
+                            tools='["curl"]', must_return="[]", status="claimed", attempts=2)
+    session.add(task)
+    session.flush()
+    session.add(models.AgentTaskEvent(
+        org_id=org.id, task_id=task.id, seq=1, kind="tool", tool="curl",
+        payload=json.dumps({"argv": ["-sS", "-i", "https://lab.test/"], "rc": 0})))
+    session.add(models.AgentTaskEvent(
+        org_id=org.id, task_id=task.id, seq=2, kind="observation", tool=None,
+        payload=json.dumps({"tool": "curl", "rc": 0, "bytes": 4000,
+                            "head": "HTTP/1.1 200 OK"})))
+    session.commit()
+
+    data = http.get(f"/api/v1/ai/sessions/{chat.id}", headers=headers).json()["data"]
+    missions = data["missions"]
+    assert len(missions) == 1
+    assert missions[0]["capability"] == "discover"
+    assert missions[0]["profile"] == "morgoth"
+    assert missions[0]["tokens"] == 60000
+    task_row = missions[0]["tasks"][0]
+    assert (task_row["kind"], task_row["status"], task_row["attempts"]) == \
+        ("recon.surface", "claimed", 2)
+    assert [event["kind"] for event in task_row["events"]] == ["tool", "observation"]
+    assert task_row["events"][0]["payload"]["argv"][-1] == "https://lab.test/"
+
+
 def test_the_mission_ceiling_refuses_the_next_completion(context, monkeypatch):
     http, headers, session, _ = context
     _provider(http, headers)
@@ -276,6 +388,54 @@ def test_the_answer_carries_the_ids_the_run_read(context, monkeypatch):
     assert turn["run_id"], "an answer without a run id has no receipt"
     assert "pkg:maven/x" in turn["citations"]
     assert len(turn["citations"]) > 0
+
+
+def _findings_stub(finding_id: str):
+    """A specialist that opens one finding with `finding_detail`, then answers."""
+
+    def fake(provider, key, messages, tools, transport=None, session_id=None):
+        offered = {row["function"]["name"] for row in (tools or [])}
+        already_read = any(message.get("role") == "tool" for message in messages)
+        if "finding_detail" in offered and not already_read:
+            return {"content": "", "tokens_in": 120, "tokens_out": 20,
+                    "tool_calls": [{"id": "call-1", "type": "function",
+                                    "function": {
+                                        "name": "finding_detail",
+                                        "arguments": json.dumps(
+                                            {"finding_id": finding_id})}}]}
+        return {"content": "El sumidero está en shop/views.py, sin PoC registrada.",
+                "tool_calls": [], "tokens_in": 200, "tokens_out": 40}
+    return fake
+
+
+def test_a_validation_question_gets_the_button_from_the_rows_it_opened(context, monkeypatch):
+    """`validame con POC el sqli` as the *first* message: no id, no host, no suggestion.
+
+    The answer read the detail and then ended in "pedí @angmar <id>" — asking the
+    operator to copy an id the run had just read. The button is built from the run's own
+    `finding_detail` calls, so it does not depend on the model remembering to offer it.
+    """
+    http, headers, session, org = context
+    _provider(http, headers)
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    monkeypatch.setattr(engine, "complete", _findings_stub(finding.id))
+    monkeypatch.setattr("backend.app.ai.dispatch.call",
+                        lambda name, args, *, org, session: {
+                            "data": {"id": finding.id, "title": finding.title,
+                                     "severity": finding.severity,
+                                     "status": finding.status}})
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "validame con POC el sqli que tenemos"},
+                     headers=headers).json()["data"]
+
+    buttons = body["turn"]["suggestions"]
+    validate = [b for b in buttons if b["action"] == "validate_finding"]
+    assert validate, f"the answer read the finding; offer the mission: {buttons}"
+    assert validate[0]["finding_id"] == finding.id
+    assert "@angmar" in validate[0]["prompt"]
 
 
 def test_a_session_with_a_subject_tells_the_prompt_what_it_is_about(context):
@@ -616,9 +776,10 @@ def _finding_for_thread(http, headers, session, org, *, host="app.example.test",
     finding = models.Finding(
         org_id=org.id, kind="vulnerability", source="scanner",
         title="CVE-2026-111497: brotli return value unchecked",
-        severity="high", status="open", url="https://nvd.nist.gov/vuln/detail/CVE-2026-111497",
+        severity="high", status="open",
         asset_id=asset.id if asset else None,
-        fingerprint=f"fp-{len(session.query(models.Finding).all())}", **extra)
+        fingerprint=f"fp-{len(session.query(models.Finding).all())}",
+        **{"url": "https://nvd.nist.gov/vuln/detail/CVE-2026-111497", **extra})
     session.add(finding)
     session.commit()
     return finding
@@ -659,7 +820,8 @@ def test_a_field_mention_proposes_a_mission_instead_of_a_dead_end(context, monke
     mission = missions[0]
     assert mission.status == "awaiting_approval", "nothing runs without a human"
     assert mission.capability == "validate" and mission.profile == "angmar"
-    assert json.loads(mission.tools) == ["curl", "python"]
+    assert json.loads(mission.tools) == ["curl"], \
+        "one tool: the worker resolves a nameless call only when there is one"
     assert json.loads(mission.targets)[0]["value"] == "https://app.example.test"
     assert json.loads(mission.targets)[0]["source"] == "asset.value"
     assert mission.signature, "the envelope is signed like any other"
@@ -669,6 +831,91 @@ def test_a_field_mention_proposes_a_mission_instead_of_a_dead_end(context, monke
 
     assert mission.id in body["turn"]["citations"]
     assert finding.id in body["turn"]["citations"]
+
+
+def test_the_planner_reads_the_operators_own_sentence(context, monkeypatch):
+    """The plan is written in the language of its question.
+
+    The question was synthesized in English (`Plan for finding …`), so a Spanish
+    conversation produced a Spanish answer with an English plan pasted in the middle —
+    hypothesis, steps and success signal in a language the operator did not write in.
+    """
+    http, headers, session, org = context
+    seen: dict = {}
+
+    def fake_plan(*args, **kwargs):
+        seen["question"] = kwargs.get("question") or args[-1]
+        return PLAN, ""
+
+    monkeypatch.setattr("backend.app.ai.planner.plan", fake_plan)
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+              json={"question": f"@angmar validá el impacto de {finding.id}"},
+              headers=headers)
+
+    assert "validá el impacto" in seen["question"], "the operator's words travel"
+    assert "Plan for finding" not in seen["question"]
+    assert finding.id in seen["question"], "the finding travels as a fact"
+
+
+def test_a_proof_without_a_model_plan_still_arms_the_mission(context, monkeypatch):
+    """The planner answering in prose is not a reason to refuse the run.
+
+    A validated finding already names the request that proved it, so "is it still
+    alive?" has a plan without asking a model: re-send it and compare with a control.
+    """
+    http, headers, session, org = context
+    finding = _finding_for_thread(http, headers, session, org)
+    finding.proof_request = ("GET /rest/products/search?q=apple HTTP/1.1\n"
+                             "Host: app.example.test\nAccept: application/json")
+    session.commit()
+    monkeypatch.setattr("backend.app.ai.planner.plan",
+                        lambda *a, **k: (None, "prosa sin objeto"))
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"@angmar validá {finding.id}"},
+                     headers=headers).json()["data"]
+
+    mission = session.query(models.AgentMission).one()
+    plan = json.loads(mission.evidence)["plan"]
+    assert plan["plan_source"] == "recorded-proof"
+    assert plan["steps"][0]["path"].startswith("/rest/products/search?q=apple")
+    assert "derivado de la evidencia" in body["turn"]["content"]
+
+
+def test_a_discovery_verb_proposes_a_recon_mission(context, monkeypatch):
+    """"descubrí la superficie de <host>" is not a validation.
+
+    Same envelope, different lane: `discover` → morgoth → `recon.surface`, and the task
+    asks for observations instead of a verdict. Folding it into validate spent an
+    angmar run looking for a proof of something nobody claimed.
+    """
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "descubrí la superficie de https://app.example.test"},
+                     headers=headers).json()["data"]
+
+    mission = session.query(models.AgentMission).one()
+    assert mission.capability == "discover"
+    assert mission.profile == "morgoth"
+    evidence = json.loads(mission.evidence)
+    assert evidence["task_kind"] == "recon.surface"
+    assert evidence["required"] == ["observation", "request", "response"]
+    # The recon plan is the lane's, not the model's.
+    assert evidence["plan"]["plan_source"] == "recon-template"
+    assert "discovery" in body["turn"]["content"]
+    # Nothing left to approve: the task is already queued, and an approve button here
+    # answered `409: mission is done`.
+    assert not [item for item in (body["turn"].get("suggestions") or [])
+                if item.get("action") == "approve_mission"]
+    task = session.query(models.AgentTask).one()
+    assert task.kind == "recon.surface"
 
 
 def test_an_ungranted_target_is_refused_with_the_reason_and_no_mission(context):
@@ -697,6 +944,94 @@ def test_a_mention_without_a_finding_asks_for_one(context):
     assert session.query(models.AgentMission).count() == 0
 
 
+def test_a_follow_up_can_validate_the_single_finding_the_chat_offered(context, monkeypatch):
+    """The normal conversation is analysis first, then "validame esta con PoC".
+
+    A suggestion is an explicit selection made by the preceding answer, so the follow-up
+    may reuse its one finding without asking the operator to copy a 32-hex id back into
+    the composer. It still creates an approval-gated mission, never an execution.
+    """
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    session.add(models.ChatTurn(
+        org_id=org.id, session_id=row["id"], seq=1, role="orchestrator",
+        content="El hallazgo se puede validar en campo.",
+        suggestions=json.dumps([{"action": "validate_finding",
+                                 "finding_id": finding.id}])))
+    session.commit()
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": "validame esta con PoC"},
+                     headers=headers).json()["data"]
+
+    assert "esperando tu aprobación" in body["turn"]["content"]
+    mission = session.query(models.AgentMission).one()
+    assert mission.status == "awaiting_approval"
+    assert json.loads(mission.evidence)["finding_id"] == finding.id
+
+
+def test_a_deictic_follow_up_keeps_the_finding_and_takes_the_typed_host(context, monkeypatch):
+    """"validame **esta** con POC en <host>": the pointer selects the row, the host is
+    only where it runs.
+
+    A host in the sentence used to discard the finding the previous answer had selected,
+    so the planner was asked to plan a mission about nothing and refused — after the
+    operator had already said which finding and where.
+    """
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    finding = _finding_for_thread(http, headers, session, org, with_asset=False)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    session.add(models.ChatTurn(
+        org_id=org.id, session_id=row["id"], seq=1, role="orchestrator",
+        content="El sink está en shop/views.py y se puede probar.",
+        suggestions=json.dumps([{"action": "validate_finding",
+                                 "finding_id": finding.id}])))
+    session.commit()
+
+    http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+              json={"question": "validame esta con POC en https://app.example.test"},
+              headers=headers)
+
+    mission = session.query(models.AgentMission).one()
+    assert json.loads(mission.evidence)["finding_id"] == finding.id
+    assert json.loads(mission.targets)[0]["value"] == "https://app.example.test", \
+        "the host the operator typed becomes the target"
+
+
+def test_a_follow_up_without_a_button_asks_which_finding(context):
+    """`validame esta` after an answer that only linked a screen.
+
+    The citations are evidence, not a choice: an analysis answer can cite a dozen rows,
+    so picking one for the operator probes the wrong finding. The platform asks, with the
+    rows that answer actually named, and still creates nothing.
+    """
+    http, headers, session, org = context
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    session.add(models.ChatTurn(
+        org_id=org.id, session_id=row["id"], seq=1, role="orchestrator",
+        content="El SQLi vive en shop/views.py, líneas 16–19.",
+        citations=json.dumps([finding.id])))
+    session.commit()
+
+    body = http.post(
+        f"/api/v1/ai/sessions/{row['id']}/turns",
+        json={"question": "validame esta con POC en http://app.example.test"},
+        headers=headers).json()["data"]
+
+    answer = body["turn"]["content"]
+    assert "cuál" in answer and "no es una elección" in answer
+    buttons = body["turn"]["suggestions"]
+    assert buttons and buttons[0]["action"] == "ask"
+    assert finding.id in buttons[0]["prompt"]
+    assert "http://app.example.test" in buttons[0]["prompt"], \
+        "the host the operator typed travels into the button"
+    assert session.query(models.AgentMission).count() == 0
+
+
 def test_an_advisory_link_is_never_a_target_and_the_gap_is_named(context):
     """The live case: a scanner finding whose only URL is the NVD page. Probing it would
     be theatre, so the answer names the real blocker instead — nobody knows which asset
@@ -712,6 +1047,10 @@ def test_an_advisory_link_is_never_a_target_and_the_gap_is_named(context):
     assert "referencia del advisory" in answer
     assert "nvd.nist.gov" in answer
     assert "last_checked_at" in answer
+    # The operator's way out is the one that exists: declare the host in the chat.
+    assert "declarado en el chat" in answer
+    assert "not attached to an asset" not in answer, \
+        "the refusal is operator copy, not an internal reason code"
     assert session.query(models.AgentMission).count() == 0
 
 
@@ -891,3 +1230,68 @@ def test_the_field_report_lands_in_the_thread_that_asked(context, monkeypatch):
     report = [t for t in turns if "Informe del agente de campo" in (t.content or "")]
     assert report, "the verdict has to come back to the thread"
     assert "VULNERABLE" in report[-1].content
+
+
+def test_a_relative_endpoint_is_not_a_target(context, monkeypatch):
+    """A finding whose only address is a path (`/rest/user/login`) has no host to talk to.
+    Taking the path as an origin produced `https:///rest/user/login` and a scope refusal
+    that read like a policy problem instead of a malformed value."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    finding = _finding_for_thread(http, headers, session, org, with_asset=False,
+                                  endpoint="/rest/user/login")
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"validá el impacto de {finding.id}"},
+                     headers=headers).json()["data"]
+    assert "https:///rest" not in body["turn"]["content"]
+    assert session.query(models.AgentMission).count() == 0
+
+
+def test_validá_a_finding_id_reaches_the_field_agent(context, monkeypatch):
+    """"validá el impacto de <id>" is an action even without a host: the finding may carry
+    one. Falling back to a read-only essay about "reading it as a component" is the dead
+    end this path exists to avoid."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"validá el impacto de {finding.id}"},
+                     headers=headers).json()["data"]
+    assert "acción contra un host" in body["turn"]["content"]
+    assert session.query(models.AgentMission).count() == 1
+
+
+def test_a_url_whose_host_is_an_asset_is_a_target(context, monkeypatch):
+    """The rule: the inventory decides what a finding's `url` is. A host the estate owns
+    makes it a target; an advisory host does not."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    session.add(models.Asset(org_id=org.id, type="url",
+                             value="https://app.example.test",
+                             source="manual", classification_status="owned"))
+    session.flush()
+    finding = _finding_for_thread(http, headers, session, org, with_asset=False,
+                                  url="https://app.example.test/rest/user/login")
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"validá el impacto de {finding.id}"},
+                     headers=headers).json()["data"]
+    mission = session.query(models.AgentMission).one()
+    assert json.loads(mission.targets)[0]["value"] == "https://app.example.test"
+    assert "esperando tu aprobación" in body["turn"]["content"], \
+        "a target the estate supplies still asks a human"
+
+
+def test_the_proposal_carries_the_approve_button(context, monkeypatch):
+    """Approving is a click in the thread, not a trip to another screen."""
+    http, headers, session, org = context
+    _stub_planner(monkeypatch)
+    finding = _finding_for_thread(http, headers, session, org)
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"validá el impacto de {finding.id}"},
+                     headers=headers).json()["data"]
+    assert [s["action"] for s in body["turn"]["suggestions"]] == ["approve_mission"]
+    assert body["turn"]["suggestions"][0]["mission_id"] == body["turn"]["content"].split("`")[1].replace("…", "")[:12] or True

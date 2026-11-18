@@ -269,6 +269,9 @@ function parseHash() {
   if (tab === 'ai-runs' && tail) focus.runId = tail
   if (tab === 'activate' && tail) focus.code = decodeURIComponent(tail)
   if (tab === 'asset' && tail) focus.assetId = tail
+  // A conversation is addressable: `#chat::<session id>` reopens the same thread after
+  // an F5, and an answer can be pasted to a colleague.
+  if (tab === 'chat' && tail) focus.sessionId = tail
   // The advisory and the component sheet carry their entity in the address, so a
   // link to "CVE-2021-23337" or to one package opens that record, not a list.
   if (tab === 'cve' && tail) focus.cveId = decodeURIComponent(tail)
@@ -452,6 +455,8 @@ export default function App() {
       tail = `::${destinationFocus.runId}`
     } else if (destination === 'search' && destinationFocus.q) {
       tail = `::${encodeURIComponent(destinationFocus.q)}`
+    } else if (destination === 'chat' && destinationFocus.sessionId) {
+      tail = `::${destinationFocus.sessionId}`
     }
     window.history.pushState({}, '', `/#${destination}${tail}`)
   }
@@ -632,7 +637,7 @@ export default function App() {
       case 'scans': return <Scans initialTab={focus.scansTab || 'scans'} onNavigate={go} />
       case 'activate': return <Activate code={focus.code} />
       case 'asset': return <AssetDetail assetId={focus.assetId} />
-      case 'chat': return <Chat onBack={() => go('dashboard')} onNavigate={go} />
+      case 'chat': return <Chat focus={focus} onBack={() => go('dashboard')} onNavigate={go} />
       case 'agents': return <Agents onNavigate={go} />
       case 'ai-runs': return <AiRuns focus={focus} />
       case 'missions': return <Missions />

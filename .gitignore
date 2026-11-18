@@ -2,6 +2,7 @@ __pycache__/
 !.env.example
 .env
 .env.*
+!.env.example
 .pytest_cache/
 .secrets/
 .venv/
@@ -17,3 +18,4 @@ frontend/dist/
 
 # built console bundle (deploy artifact, rsynced at release time)
 console_html/
+.DS_Store

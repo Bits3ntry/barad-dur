@@ -38,9 +38,14 @@ SPECIALISTS: dict[str, dict] = {
     "estate.inventory": {
         "name": "estate.inventory",
         "executor": "analyst",
+        # `lookup`, `finding_detail` and `finding_trace` are not optional: the prompt
+        # below tells the model to open a finding before calling it absent, and a tool
+        # missing from this list is dropped from the offer at call time — the model then
+        # answers "I could not read any proof" while the tool existed all along.
         "tools": ["advisory_resolve", "intel_kev_catalog", "components_impact",
                   "deployment_chain", "projects_list", "vulnerabilities_search",
-                  "findings_search", "assets_search"],
+                  "findings_search", "finding_detail", "finding_trace", "lookup",
+                  "assets_search"],
         "wants": ["where it lives: purls, builds, deployments, environments",
                   "counts, when the question is a count"],
         "sees": [],
@@ -50,6 +55,10 @@ SPECIALISTS: dict[str, dict] = {
             "already knows about them. Never confuse 'in a repository' with 'running "
             "in production'. Cite the ids you read. An empty result is `unknown`, not "
             "'clean'.\n"
+            "Before you say a component is or is not deployed, call `deployment_chain` "
+            "for its purl: the chain is what carries builds, environments and "
+            "`last_checked_at`. If you did not call it, say the deployment is unread — "
+            "never that it is unknown, and never that it was truncated.\n"
             "If the operator refers to a vulnerability by a nickname or a product "
             "instead of a CVE id, call `advisory_resolve` first: it maps the lore "
             "(node2shell, log4shell) to the CVE and returns what the estate holds "

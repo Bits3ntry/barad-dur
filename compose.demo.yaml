@@ -1,0 +1,39 @@
+# POC demo override: the lab target's name, resolvable from the workers.
+#   docker compose -f compose.yaml -f compose.local.yaml -f compose.demo.yaml up -d --no-deps shauron-worker agent-worker
+# POC_TARGET_IP is the host address the published 443 is reachable on.
+services:
+  shauron-worker:
+    extra_hosts:
+      - "juice-shop.demo:${POC_TARGET_IP:-11.11.11.218}"
+    # The field lane has to verify the lab's certificate like any client: without the
+    # CA it answers `curl: (60) self-signed certificate` and the run closes INCONCLUSIVE
+    # on infrastructure, not on the app. `-k` is not the fix — the agent refuses it.
+    environment:
+      SSL_CERT_FILE: /lab-tls/ca-bundle.pem
+      CURL_CA_BUNDLE: /lab-tls/ca-bundle.pem
+    volumes:
+      - ${POC_TLS_DIR:-/Users/saf/HUB/Workspace/Councilbox/CYB/poc-juice-shop/tls}:/lab-tls:ro
+  agent-worker:
+    extra_hosts:
+      - "juice-shop.demo:${POC_TARGET_IP:-11.11.11.218}"
+    environment:
+      SSL_CERT_FILE: /lab-tls/ca-bundle.pem
+      CURL_CA_BUNDLE: /lab-tls/ca-bundle.pem
+    volumes:
+      - ${POC_TLS_DIR:-/Users/saf/HUB/Workspace/Councilbox/CYB/poc-juice-shop/tls}:/lab-tls:ro
+  # The API is here because the gates replay the decisive request *from the API
+  # process*: with only the workers knowing the alias, a finding on juice-shop.demo
+  # fails its `replay` gate on name resolution and the promotion answers 409 for
+  # evidence that was reproduced minutes earlier. Recreating platform-api with the
+  # base file alone drops this alias again — always pass the three compose files.
+  platform-api:
+    extra_hosts:
+      - "juice-shop.demo:${POC_TARGET_IP:-11.11.11.218}"
+    # The lab fronts nginx with a self-signed certificate. Trusting it here — and only
+    # here — is what lets the gates replay a request against the lab with TLS
+    # verification still on; disabling verification in the engine would be a different
+    # promise than the platform makes. The bundle is the system CAs plus the lab cert.
+    environment:
+      SSL_CERT_FILE: /lab-tls/ca-bundle.pem
+    volumes:
+      - ${POC_TLS_DIR:-/Users/saf/HUB/Workspace/Councilbox/CYB/poc-juice-shop/tls}:/lab-tls:ro

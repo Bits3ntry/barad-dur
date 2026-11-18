@@ -320,6 +320,28 @@ def _advisory_url(vulnerability: dict) -> str | None:
     return None
 
 
+def _short_title(entry: dict, source_id: str, description) -> str:
+    """A title that fits in a table cell.
+
+    A CycloneDX `description` is the vendor's paragraph, and some feeds write the
+    whole advisory in it: stored as the title, the findings table shows a
+    six-line cell and the column cannot be scanned. The first sentence is the
+    finding; the paragraph stays in `detail`.
+    """
+    explicit = entry.get("title")
+    if isinstance(explicit, str) and explicit.strip():
+        return " ".join(explicit.split())[:200]
+    text = " ".join(description.split()) if isinstance(description, str) else ""
+    if not text:
+        return source_id
+    window = text[:200]
+    for stop in (". ", "; "):
+        index = window.find(stop)
+        if 20 <= index <= 180:
+            return window[:index + 1]
+    return window[:180].rstrip() + "…"
+
+
 def parse_vulnerabilities(document: dict, components: list[dict]) -> list[dict]:
     """Normalize `vulnerabilities[]` and resolve each one to a component identity.
 
@@ -357,7 +379,7 @@ def parse_vulnerabilities(document: dict, components: list[dict]) -> list[dict]:
         out.append({
             "source_id": source_id,
             "cve_id": cve_id,
-            "title": (description or source_id)[:512],
+            "title": _short_title(entry, source_id, description),
             "detail": description[:4000] if isinstance(description, str) else None,
             "severity": severity,
             "cvss_score": score,

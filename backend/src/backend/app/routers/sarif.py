@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.versions import pick_version
 from backend.app import auth, incidents, models
+from backend.app.sast import _cwe_from
 from backend.app.db import get_session
 
 router = APIRouter(prefix="/api/v1", tags=["sarif"])
@@ -65,6 +66,28 @@ def _snippet(result: dict) -> str | None:
     if not isinstance(snippet, str) or not snippet.strip():
         return None
     return snippet.strip("\n")[:4000]
+
+
+def _title_of(message, rule_id: str) -> str:
+    """One line for the table, from whatever shape the tool wrote.
+
+    A SARIF message is free text and some engines (Trivy's misconfig rules) pack
+    the whole block into it — `Artifact: Dockerfile\\nType: dockerfile\\n
+    Vulnerability DS-0026\\nSeverity: LOW\\nMessage: Specify a tag…`. Stored raw,
+    the findings table shows a five-line cell and the reader cannot scan the
+    column. The sentence after the last `Message:` is the finding; when there is
+    none, the first non-empty line is.
+    """
+    text = message if isinstance(message, str) else ""
+    if not text.strip():
+        return rule_id[:512]
+    lines = [line.strip() for line in text.replace("\r\n", "\n").split("\n")
+             if line.strip()]
+    payload = next((line.split("Message:", 1)[1].strip()
+                    for line in reversed(lines) if line.startswith("Message:")), None)
+    chosen = payload or (lines[0] if lines else rule_id)
+    return " ".join(chosen.split())[:512]
+
 
 
 class SarifIngestIn(BaseModel):
@@ -126,6 +149,12 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
         message = ((result.get("message") or {}).get("text")
                    or (rules_index.get(rule_id, {}).get("shortDescription") or {}).get("text")
                    or rule_id)
+        title = _title_of(message, rule_id)
+        # The rule's own tags carry the weakness class (`CWE-89: Improper
+        # Neutralization…`). Without it a SAST row names a rule and nothing else,
+        # and the console cannot group two engines' findings as one class.
+        cwe = _cwe_from(rules_index.get(rule_id, {}).get("properties"),
+                        result.get("properties"))
         snippet = _snippet(result)
         fingerprint = incidents.recipe_fingerprint(
             kind, org_id, proj.id, rule_id, path)
@@ -135,7 +164,7 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
             finding = models.Finding(
                 org_id=org_id, project_id=proj.id, kind=kind, vector=vector,
                 fingerprint=fingerprint, source=source,
-                title=message[:512], severity=severity, url=None,
+                title=title, severity=severity, url=None, cwe=cwe,
                 detail=f"SARIF {tool_name} {rule_id}", tool=tool_name,
                 rule_id=rule_id, path=path, line=line,
                 reproduction=snippet,
@@ -158,6 +187,8 @@ def ingest_run(session, org_id: str, proj, pv, run: dict, *,
             finding.kind = kind
             finding.vector = vector
             finding.line = line
+            if cwe:
+                finding.cwe = cwe
             # The snippet follows the code: a fix moves the line, and the old
             # text would then point at something that is no longer there.
             if snippet:

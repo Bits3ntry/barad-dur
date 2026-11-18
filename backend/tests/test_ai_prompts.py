@@ -186,9 +186,12 @@ def test_the_gateway_injects_the_field_prompt(context, monkeypatch):
                          headers={"X-Agent-Token": token})
     assert response.status_code == 200, response.text
 
-    assert seen["messages"][0] == {"role": "system",
-                                   "content": "You are the field agent. "
-                                              "FIELD-MARKER: one line, one VERDICT."}
+    assert seen["messages"][0]["role"] == "system"
+    # The platform prepends the field prompt, then the language rule: the contract is that
+    # the operator's instructions reach the worker, not that the string is byte-identical.
+    assert "FIELD-MARKER" in seen["messages"][0]["content"], \
+        "the operator's instruction reaches the worker"
+    assert "language of the mission goal" in seen["messages"][0]["content"]
     step = (session.query(models.AiStep).filter_by(run_id=mission["run_id"]).one())
     assert step.prompt_version == "field.generic@1"
 

@@ -28,7 +28,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.app import auth, auth_local, models, scoping, secrets, shauron_signing
+from backend.app import auth, auth_local, decisions, models, scoping, secrets, shauron_signing
 from backend.app.ai import authz, engine, prompts as prompt_registry
 from backend.app.db import get_session
 from backend.app.routers.identity import _audit as _audit_log
@@ -67,7 +67,13 @@ class TargetIn(BaseModel):
 
 class BudgetIn(BaseModel):
     steps: int = Field(default=10, ge=1, le=200)
-    tokens: int = Field(default=20000, ge=0)
+    # A validate mission spends ~2.5–3k tokens per completion (tool schema + the
+    # envelope + the brief), so ten steps need ~30k and a lane running twelve needs
+    # ~36k. A 20k ceiling refused the eighth completion with `429 mission token
+    # budget reached` *after* the agent had done the work, which reads as a broken
+    # agent. The ceiling is a cost control, not a trap: 60k funds the default run
+    # and still stops a runaway loop.
+    tokens: int = Field(default=60000, ge=0)
     wall_s: int = Field(default=600, ge=30, le=14400)
     usd: float = Field(default=0.0, ge=0.0)
 
@@ -289,6 +295,79 @@ def _close_mission_run(session: Session, mission: models.AgentMission,
     run.finished_at = models.utcnow()
 
 
+#: Releases before a task is failed instead of requeued. Three claims that all died
+#: is evidence about the task, not about the queue.
+MAX_ATTEMPTS = 3
+
+
+def _settle_mission(session: Session, mission_id: str) -> None:
+    """A mission with nothing left open is no longer `running`."""
+    # The caller just changed a task's status; without the flush the counts below
+    # still see the old row and the mission never closes.
+    session.flush()
+    mission = session.get(models.AgentMission, mission_id)
+    if mission is None or mission.status not in {"queued", "running", "leased", "claimed"}:
+        return
+    open_tasks = (session.query(models.AgentTask)
+                  .filter(models.AgentTask.mission_id == mission_id,
+                          models.AgentTask.status.in_(("queued", "claimed", "running")))
+                  .count())
+    if open_tasks:
+        return
+    failed = (session.query(models.AgentTask)
+              .filter(models.AgentTask.mission_id == mission_id,
+                      models.AgentTask.status == "failed").count())
+    mission.status = "failed" if failed else "done"
+    mission.finished_at = models.utcnow()
+    _close_mission_run(session, mission, status="failed" if failed else "answered")
+
+
+def _release_expired_leases(session: Session, org_id: str) -> int:
+    """Give back the tasks whose worker disappeared.
+
+    A lane that claims a task and dies — a crash, a killed container, a provider
+    that answers `429` without the loop posting `final` — leaves the row `claimed`
+    and invisible to every other worker, because the queue lists `queued` only. The
+    mission then reads `running` for ever, which is the screen lying. The lease is
+    the only fact that says the worker is gone, so the lease is what puts it back:
+    the task returns to the queue, and after `MAX_ATTEMPTS` releases it fails with
+    the reason, so the mission closes instead of hanging.
+    """
+    now = models.utcnow()
+    rows = (session.query(models.AgentTask)
+            .filter(models.AgentTask.org_id == org_id,
+                    models.AgentTask.status.in_(("claimed", "running")))
+            .all())
+    released = 0
+    for row in rows:
+        # `lease_expires_at` is already the deadline. Only when it is missing does
+        # the row's own write time stand in for the claim — adding the lease to a
+        # deadline that exists double-counts it and nothing ever releases.
+        lease = _aware(row.lease_expires_at)
+        if lease is None:
+            stamp = _aware(row.updated_at)
+            lease = stamp + timedelta(minutes=LEASE_MINUTES) if stamp else None
+        if lease is None or lease > now:
+            continue
+        if (row.attempts or 0) >= MAX_ATTEMPTS:
+            row.status = "failed"
+            row.error = row.error or "lease expired without a final event"
+            row.finished_at = now
+            row.worker = None
+            row.lease_expires_at = None
+            _settle_mission(session, row.mission_id)
+        else:
+            row.status = "queued"
+            row.worker = None
+            row.lease_expires_at = None
+            row.token_hash = None
+            row.token_expires_at = None
+        released += 1
+    if released:
+        session.commit()
+    return released
+
+
 def _normalise_target(target: TargetIn) -> dict:
     """A mission names an origin; a task names a path.
 
@@ -440,6 +519,26 @@ def get_mission(mission_id: str, org: models.Organization = Depends(auth.require
                      "task_rows": [_task_data(task) for task in tasks]}}
 
 
+def _covered_by(envelope_value: str, task_value: str) -> bool:
+    """Whether the envelope entry covers the task's target.
+
+    An origin covers its own paths. The mission normalises a pasted URL to its origin
+    on purpose (widening scope must not be an accident of how a URL was typed), so the
+    task that follows it names a path — and comparing the two strings refused a task
+    for being *inside* the envelope it was created from. Same rule as the scope
+    engine: same scheme and host means covered; a different host is not.
+    """
+    if task_value == envelope_value:
+        return True
+    try:
+        want, have = urlsplit(task_value), urlsplit(envelope_value)
+    except ValueError:
+        return False
+    if not (want.scheme and want.netloc and have.scheme and have.netloc):
+        return False
+    return (want.scheme, want.netloc) == (have.scheme, have.netloc)
+
+
 @router.post("/missions/{mission_id}/tasks", status_code=status.HTTP_201_CREATED)
 def add_task(mission_id: str, payload: TaskIn = None,
              org: models.Organization = Depends(auth.require_org),
@@ -459,7 +558,8 @@ def add_task(mission_id: str, payload: TaskIn = None,
                             f"kind must be one of {sorted(models.AGENT_TASK_KINDS)}")
     envelope_values = {target["value"] for target in json.loads(mission.targets or "[]")}
     task_value = payload.target.get("value")
-    if task_value and task_value not in envelope_values:
+    if task_value and not any(_covered_by(value, task_value)
+                              for value in envelope_values):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"target {task_value} is not in the mission envelope; widening scope is "
@@ -581,16 +681,41 @@ def revoke_mission(mission_id: str, actor: str = Query(default="console"),
 
 
 def _proof_text(request: dict, url: str) -> str | None:
-    """`METHOD /path` + headers + body, the format the Repeat panel seeds from."""
+    """`METHOD /path?query` + headers + body, the format the Repeat panel seeds from.
+
+    The query string is part of the request: `GET /rest/products/search` without
+    `?q='))--` is a different request and repeats nothing. Dropping it made every
+    promoted SQLi point at the clean endpoint.
+    """
     if not isinstance(request, dict) or not request.get("url"):
         return None
     method = str(request.get("method") or "GET").upper()
-    path = urlsplit(request["url"]).path or "/"
+    parts = urlsplit(request["url"])
+    path = parts.path or "/"
+    if parts.query:
+        path += "?" + parts.query
     lines = [f"{method} {path} HTTP/1.1"]
+    if parts.netloc:
+        lines.append(f"Host: {parts.netloc}")
     for name, value in (request.get("headers") or {}).items():
         lines.append(f"{name}: {value}")
     body = request.get("body") or ""
     return "\n".join(lines) + ("\n\n" + body if body else "")
+
+
+def _response_text(exchange: dict | None, limit: int = 2000) -> str | None:
+    """The response the gate actually got, in the same shape as the request.
+
+    A finding without its response is a claim: the reader cannot tell a 200 with the
+    whole catalogue from a 401.
+    """
+    if not isinstance(exchange, dict) or exchange.get("status") is None:
+        return None
+    lines = [f"HTTP/1.1 {exchange.get('status')}"]
+    for name, value in (exchange.get("response_headers") or {}).items():
+        lines.append(f"{name}: {value}")
+    body = str(exchange.get("response_body") or "")
+    return "\n".join(lines) + ("\n\n" + body[:limit] if body else "")
 
 
 def _endpoint_of(url: str | None) -> str | None:
@@ -615,6 +740,10 @@ def list_tasks(status_filter: str = Query(default="queued", alias="status"),
     every lane. This is the fairness rule, and it lives in the query — a client cannot
     opt out of it.
     """
+    # Before answering: a task whose lease expired is the queue's again. Doing it
+    # here means every runtime lane heals the backlog by simply polling.
+    if status_filter == "queued":
+        _release_expired_leases(session, org.id)
     query = (session.query(models.AgentTask)
              .filter_by(org_id=org.id, status=status_filter))
     if kind:
@@ -689,6 +818,13 @@ def post_events(task_id: str, payload: EventsIn = None,
             .filter_by(task_id=task.id)
             .order_by(models.AgentTaskEvent.seq.desc()).first())
     seq = (last.seq if last else 0)
+    # A worker that is posting events is alive, and the lease exists to detect the ones
+    # that are not. Without this renewal a run longer than the lease was reaped mid-work
+    # — the queue handed it to a second worker, the first kept going with a token that no
+    # longer matched, and after three attempts the task died as "lease expired without a
+    # final event" over a run that had been answering all along.
+    task.lease_expires_at = models.utcnow() + timedelta(minutes=LEASE_MINUTES)
+    task.token_expires_at = models.utcnow() + timedelta(minutes=TOKEN_TTL_MINUTES)
     accepted = 0
     for event in payload.events:
         if event.kind not in models.AGENT_EVENT_KINDS:
@@ -722,12 +858,134 @@ def post_events(task_id: str, payload: EventsIn = None,
             # a finding. The gates are what decide whether it is usable, so the row
             # is written here and settled later, by a person or by `/promote`.
             _candidate_from_task(session, task)
+            # The verdict belongs to the finding that was asked about, not only to
+            # the thread: otherwise the row keeps `exploit_state: none` while the chat
+            # shows a verdict, and the screens count a validated finding as unproven.
+            _record_validation(session, mission, task)
+            # Discovery is only discovery if the estate keeps it: every path the run
+            # answered becomes an observation on the asset it answered on.
+            _record_observations(session, mission, task)
             # The verdict belongs to the conversation that asked for it: a mission born in
             # a chat that finishes without a word in that chat looks like a failure.
             _announce_in_chat(session, mission, task)
     session.commit()
     return {"data": {"accepted": accepted, "next_seq": seq},
             "task": _task_data(task)}
+
+
+def _record_validation(session: Session, mission: models.AgentMission,
+                       task: models.AgentTask) -> None:
+    """Write the field verdict onto the finding the mission was asked about.
+
+    The answer already reaches the thread and the task; without this it never reaches
+    the row, so a finding validated on camera kept `exploit_state: none` and every
+    count stayed as if nobody had looked. Only the machine's axis moves here:
+    `triage_status` is still the operator's.
+    """
+    try:
+        evidence = json.loads(mission.evidence or "{}")
+    except ValueError:
+        return
+    finding_id = (evidence or {}).get("finding_id")
+    if not finding_id:
+        return
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != mission.org_id:
+        return
+    try:
+        payload = json.loads(task.result or "{}")
+    except ValueError:
+        return
+    answer = (payload.get("answer") or "").strip()
+    if not answer:
+        return
+    upper = answer.upper()
+    if "NOT VULNERABLE" in upper:
+        # Probed and not reproduced: weaker than proven, stronger than untouched.
+        state = "attempted"
+    elif "VULNERABLE" in upper:
+        state = "reproduced"
+    elif "INCONCLUSIVE" in upper:
+        state = "attempted"
+    else:
+        return
+    finding.validation_output = answer[:8000]
+    finding.exploit_state = state
+
+
+def _record_observations(session: Session, mission: models.AgentMission,
+                         task: models.AgentTask) -> int:
+    """What a recon run saw becomes observations on the asset it saw them on.
+
+    A discovery whose result only lives in the task's prose is a paragraph: the asset
+    page cannot show it, `deployment_chain` cannot cite it, and the next run rediscovers
+    the same paths. Each `tool`/`observation` pair the worker posted carries a URL, a
+    status and a size — that is an observation, so it is written as one.
+    """
+    if task.kind != "recon.surface":
+        return 0
+    events = (session.query(models.AgentTaskEvent)
+              .filter_by(task_id=task.id).order_by(models.AgentTaskEvent.seq).all())
+    written = 0
+    pending: dict | None = None
+    for event in events:
+        try:
+            payload = json.loads(event.payload or "{}")
+        except ValueError:
+            continue
+        if event.kind == "tool":
+            pending = payload
+            continue
+        if event.kind != "observation" or pending is None:
+            continue
+        url = next((str(arg) for arg in (pending.get("argv") or [])
+                    if str(arg).lower().startswith(("http://", "https://"))), None)
+        pending = None
+        if not url:
+            continue
+        parts = urlsplit(url)
+        host = parts.netloc.split("@")[-1].split(":")[0].lower() if parts.netloc else ""
+        if not host:
+            continue
+        asset = (session.query(models.Asset)
+                 .filter(models.Asset.org_id == mission.org_id,
+                         models.Asset.value.in_([host, f"{parts.scheme}://{parts.netloc}",
+                                                 url]))
+                 .first())
+        if asset is None:
+            continue
+        head = str(payload.get("head") or "")
+        status = None
+        first = head.splitlines()[0] if head else ""
+        pieces = first.split()
+        if len(pieces) >= 2 and pieces[1].isdigit():
+            status = int(pieces[1])
+        if status is None:
+            # A call whose output carries no status line (`-o /dev/null -w …`) says
+            # nothing about the path: writing it would overwrite a real observation
+            # with an empty one for the same subject.
+            continue
+        subject = parts.path or "/"
+        value = {"status": status, "bytes": payload.get("bytes"),
+                 "method": "GET", "url": url}
+        existing = (session.query(models.Observation)
+                    .filter_by(org_id=mission.org_id, asset_id=asset.id, kind="web_path",
+                               subject=subject[:1024], source="agent:recon")
+                    .one_or_none())
+        if existing is not None:
+            existing.value = value
+            existing.observed_at = models.utcnow()
+            existing.coverage = "full" if status and 200 <= status < 400 else "partial"
+        else:
+            session.add(models.Observation(
+                org_id=mission.org_id, asset_id=asset.id, kind="web_path",
+                subject=subject[:1024], value=value, source="agent:recon",
+                coverage="full" if status and 200 <= status < 400 else "partial"))
+            # The session is created without autoflush, so the next lookup for this
+            # subject would miss the row we just added and write it twice.
+            session.flush()
+        written += 1
+    return written
 
 
 def _announce_in_chat(session: Session, mission: models.AgentMission,
@@ -747,17 +1005,37 @@ def _announce_in_chat(session: Session, mission: models.AgentMission,
         payload = {}
     answer = (payload.get("answer") or "").strip()
     if not answer:
+        # A run that died (budget, allowlist, timeout) used to leave the thread in
+        # silence, so the operator kept waiting for a report that was never coming.
+        reason = (task.error or payload.get("error")
+                  or f"el run terminó en `{task.status}` sin producir informe")
+        from backend.app.routers import chat as chat_router
+        chat_router._write_turn(
+            session, row, None,
+            answer=(f"**La misión no cerró** · tarea `{task.id[:8]}…` · "
+                    f"`{task.status}`\n\n{str(reason)[:600]}\n\n"
+                    "La traza de la tarea tiene los eventos: lo que se ejecutó y lo que "
+                    "la plataforma se negó a ejecutar. Eso es información, no un "
+                    "veredicto."),
+            actor="agent", profile_key=mission.profile, assistant_role="specialist",
+            extra_citations=[ref for ref in (mission.id, task.id) if ref])
         return
-    verdict = ""
-    upper = answer.upper()
-    for candidate in ("NOT VULNERABLE", "VULNERABLE", "INCONCLUSIVE"):
-        if candidate in upper:
-            verdict = f" · **{candidate}**"
-            break
+    # A recon run has no verdict to give: the worker still ends its brief with one, so
+    # grading a discovery as `INCONCLUSIVE` read as a failed validation of something
+    # nobody claimed. The badge says what the run was.
+    recon = task.kind == "recon.surface"
+    verdict = " · **discovery**" if recon else ""
+    if not recon:
+        upper = answer.upper()
+        for candidate in ("NOT VULNERABLE", "VULNERABLE", "INCONCLUSIVE"):
+            if candidate in upper:
+                verdict = f" · **{candidate}**"
+                break
     from backend.app.routers import chat as chat_router
+    title = "Informe de reconocimiento" if recon else "Informe del agente de campo"
     chat_router._write_turn(
         session, row, None,
-        answer=(f"**Informe del agente de campo** · tarea `{task.id[:8]}…` · "
+        answer=(f"**{title}** · tarea `{task.id[:8]}…` · "
                 f"`{task.status}`{verdict}\n\n{answer}"),
         actor="agent", profile_key=mission.profile, assistant_role="specialist",
         extra_citations=[ref for ref in (mission.id, task.id) if ref])
@@ -786,6 +1064,38 @@ def _usage_json(result: dict) -> str | None:
 
 
 # ──────────────────────────── the two channels ───────────────────────────────
+
+FIELD_LANGUAGE = ("Write the report in the language of the mission goal. Requests, "
+                  "responses, headers and payloads stay verbatim; the prose around them "
+                  "follows the operator's language.")
+
+
+def _plan_brief(mission: models.AgentMission) -> str:
+    """The approved plan, written where the worker actually reads.
+
+    The worker gets the target, the tools and what the task must return — never
+    `mission.evidence.plan`. So a discovery that was approved with five steps wandered
+    through thirty calls and rediscovered paths it had already answered, which is also
+    what made the run outlive its lease. The plan travels with the field instructions.
+    """
+    try:
+        evidence = json.loads(mission.evidence or "{}")
+    except ValueError:
+        return ""
+    steps = ((evidence.get("plan") or {}).get("steps") or [])
+    if not steps:
+        return ""
+    lines = ["**Plan aprobado** — el operador lo leyó antes de aprobarlo; seguilo en orden:"]
+    for index, step in enumerate(steps, start=1):
+        line = (f"{step.get('n') or index}. {step.get('method') or 'GET'} "
+                f"{step.get('path') or '/'}")
+        if step.get("expect"):
+            line += f" — {step['expect']}"
+        lines.append(line)
+    lines.append("Cuando esos pasos estén cubiertos, escribí el informe: no enumeres rutas "
+                 "que el plan no pide y no repitas una que ya respondió.")
+    return "\n".join(lines)
+
 
 def _narrow_tools(tools: list[dict], allowed: list[str]) -> list[dict]:
     """The envelope is the first lock on tools; the worker's registry is the second.
@@ -863,11 +1173,20 @@ def complete(payload: CompleteIn = None,
     field_body, field_label = prompt_registry.resolve(session,
                                                       prompt_registry.FIELD_KEY)
     messages = list(payload.messages or [])
-    if field_body:
-        if messages and (messages[0] or {}).get("role") == "system":
-            messages = [{"role": "system", "content": field_body}] + messages[1:]
-        else:
-            messages = [{"role": "system", "content": field_body}] + messages
+    # The worker keeps no prompt registry, so the language rule for the field report has to
+    # ride with the instructions the platform prepends — otherwise a Spanish mission comes
+    # back as an English report, which is what the operator then reads in the thread.
+    field_body = (field_body or "") + ("\n\n" + FIELD_LANGUAGE if True else "")
+    # The approved plan is the difference between a run that follows five steps and one
+    # that rediscovers the same surface until its lease expires.
+    plan_brief = _plan_brief(mission)
+    if plan_brief:
+        field_body = field_body + "\n\n" + plan_brief
+    if messages and (messages[0] or {}).get("role") == "system":
+        messages = [{"role": "system", "content": field_body + "\n\n" +
+                     (messages[0].get("content") or "")}] + messages[1:]
+    else:
+        messages = [{"role": "system", "content": field_body}] + messages
 
     try:
         result = engine.complete(provider, api_key, messages,
@@ -887,8 +1206,20 @@ def complete(payload: CompleteIn = None,
             .order_by(models.AiStep.seq.desc()).first())
     seq = (last.seq if last else 0) + 1
     cost, known = engine.price(provider, result["tokens_in"], result["tokens_out"])
-    asked = [{"tool": ((call.get("function") or {}).get("name") or "")}
-             for call in (result.get("tool_calls") or [])]
+    # The console paints a call red when its `status` is not 200, so a record without
+    # `status` painted every field step as `failed` over calls that ran fine. The name
+    # is the tool that actually ran (`run_tool` is the envelope, the enum value is the
+    # command), because "run_tool · run_tool · run_tool" says nothing.
+    asked = []
+    for call in (result.get("tool_calls") or []):
+        function = call.get("function") or {}
+        try:
+            args = json.loads(function.get("arguments") or "{}")
+        except ValueError:
+            args = {}
+        inner = args.get("tool") if isinstance(args, dict) else None
+        asked.append({"tool": inner or function.get("name") or "",
+                      "fn": function.get("name") or "", "args": args, "status": 200})
     session.add(models.AiStep(
         org_id=run.org_id, run_id=run.id, seq=seq, role="field",
         prompt_version=field_label, phase=task.kind, parent_run_id=run.id,
@@ -1624,6 +1955,9 @@ def promote_candidate(candidate_id: str, payload: PromoteIn = None,
             "cannot be promoted")
 
     gates = None
+    #: The exchange that satisfied the gate. The same request/response is what the
+    #: finding keeps: re-deriving it afterwards would store a proof nobody verified.
+    captured: dict = {}
     if payload.validate:
         from backend.app.routers import agents as agents_router
 
@@ -1655,6 +1989,8 @@ def promote_candidate(candidate_id: str, payload: PromoteIn = None,
             step = (outcome.get("steps") or [{}])[-1]
             state = {"ok": "reproduced", "denied": "denied",
                      "error": "failed"}.get(outcome.get("result"), "observed")
+            if state in {"reproduced", "observed"} and "exchange" not in captured:
+                captured["exchange"] = step
             return {"state": state, "response": {"status": step.get("status")},
                     "error": outcome.get("error"),
                     "authorized": step.get("authorized")}
@@ -1729,10 +2065,12 @@ def promote_candidate(candidate_id: str, payload: PromoteIn = None,
         # without the body a POST replay reaches an endpoint that needs a payload and
         # answers 401, which reads like a bad finding instead of a missing field.
         proof_request=_proof_text(proven, target_url),
+        # The response the gate actually got. A finding that keeps the payload and not
+        # the answer reads as a claim: nobody can tell the 200 with the catalogue from
+        # a 401 without replaying it themselves.
+        proof_response=_response_text(captured.get("exchange")),
         status="open",
-        # The click that promoted it *is* the confirmation: the campaign must not ask
-        # the same person to say yes twice — once on the claim, again on the row.
-        triage_status="confirmed", evidence_level="observed",
+        evidence_level="observed",
         exploit_state=("observed" if observation
                        else "reproduced" if row.state == "validated" else "attempted"))
     # The task id lives on the candidate's mission; the newest finished task is the
@@ -1743,6 +2081,11 @@ def promote_candidate(candidate_id: str, payload: PromoteIn = None,
     finding.agent_task_id = task.id if task else None
     session.add(finding)
     session.flush()
+    # The click that promoted it *is* the confirmation, and it goes through the one
+    # decision writer: `validate` → triage `triaged`. A hand-written "confirmed" is
+    # outside the vocabulary the screens and counts read, so it rendered raw and only
+    # looked settled because it was not "new".
+    decisions.apply(session, org, finding, "validate", actor)
     # The candidate has to point at its finding, or the review queue keeps offering
     # "promote" on a claim that already became one — a second click, a second finding.
     row.finding_id = finding.id

@@ -32,6 +32,12 @@ from backend.app.ai.state import (AgentState, Claim, Fact, brief_result, digest,
                                   projection, refs_from)
 
 MAX_CALLS_PER_SPECIALIST = 3
+#: A single-specialist answer is the whole run: it has to search, open the details and
+#: resolve the deployment before it may speak. At three calls the arithmetic never closes
+#: and every answer ended in "no consulté el despliegue" — a gap of our budget, reported
+#: as a gap of the estate. A chain member keeps the tighter cap, because `max_steps`
+#: belongs to the whole chain.
+SINGLE_SPECIALIST_CALLS = 5
 
 
 def _usage_json(result: dict) -> str | None:
@@ -60,6 +66,11 @@ ANSWER_NOW = ("You have no tool calls left. Answer the question now, in prose, f
 OUTPUT_CONTRACT = (
     "\n\nReturn exactly the JSON object your instructions describe. No prose, no code "
     "fences, no comments, nothing outside the object.")
+
+LANGUAGE = (
+    "\n\nWrite in the language of the operator's question. Every tool answer, field "
+    "report and advisory is written in English: that is data, not the language to reply "
+    "in. A question in Spanish gets a Spanish answer, ids and code untouched.")
 
 OUTPUT_PROSE = (
     "\n\nAnswer the operator directly in prose: the answer first, then the ids that "
@@ -157,7 +168,13 @@ def execute(session: Session, run: models.AiRun, *,
             transport=transport, context=context,
             json_mode=(bool((named.get(name) or {}).get("json_output"))
                        or not terminal),
-            calls_left=calls_left, prompt_set=prompt_set, named=named)
+            calls_left=calls_left, prompt_set=prompt_set, named=named,
+            # A named agent keeps the tighter cap: the planner reads finding, trace,
+            # targets and inventory on every round, and the fifth round is what turned
+            # a working proposal into a provider timeout.
+            cap=(MAX_CALLS_PER_SPECIALIST if named else
+                 (SINGLE_SPECIALIST_CALLS if len(plan) == 1
+                  else MAX_CALLS_PER_SPECIALIST)))
 
         if outcome["stopped"]:
             failed += 1
@@ -198,7 +215,8 @@ def _run_specialist(session: Session, run: models.AiRun, state: AgentState,
                     settings: models.AiSettings, *, transport, context,
                     json_mode: bool, calls_left: int | None = None,
                     prompt_set: dict[str, tuple[str, str]] | None = None,
-                    named: dict[str, dict] | None = None) -> dict:
+                    named: dict[str, dict] | None = None,
+                    cap: int = MAX_CALLS_PER_SPECIALIST) -> dict:
     spec = (named or {}).get(name) or specialists.get(name)
     if spec is None:
         return {"content": "", "new": False, "stopped": "unknown specialist"}
@@ -207,7 +225,7 @@ def _run_specialist(session: Session, run: models.AiRun, state: AgentState,
                           or (spec["prompt"],
                               spec.get("prompt_label") or f"{name}@code"))
     suffix = (spec.get("json_suffix")
-              or (OUTPUT_JSON if json_mode else OUTPUT_PROSE))
+              or (OUTPUT_JSON if json_mode else OUTPUT_PROSE)) + LANGUAGE
     messages = [{"role": "system", "content": body + suffix}]
     if context:
         messages.extend(_conversation_tail(context))
@@ -219,8 +237,7 @@ def _run_specialist(session: Session, run: models.AiRun, state: AgentState,
     content = ""
     step: models.AiStep | None = None
 
-    calls_allowed = min(MAX_CALLS_PER_SPECIALIST,
-                        calls_left or MAX_CALLS_PER_SPECIALIST)
+    calls_allowed = min(cap, calls_left or cap)
     # A repeated (tool, args) inside one run is not new evidence: answer from the cache
     # and keep the raw result in run_state. The tool stays callable — it is cached, not
     # forbidden.

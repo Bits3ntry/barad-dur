@@ -7,7 +7,9 @@ Four properties, each one earned:
 * a candidate without an observation that names where it was seen is refuted;
 * a stage that raises is a refusal, never a pass.
 """
+import json
 import sys
+from datetime import timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -195,6 +197,33 @@ def test_a_stage_that_raises_can_never_confirm(context):
     assert "adapter exploded" in result["reason"]
 
 
+def test_a_promoted_proof_keeps_the_query_string_and_the_response():
+    """The finding must answer "what do I replay" byte for byte.
+
+    `_proof_text` rebuilt the path with `urlsplit(...).path`, so the request that
+    proved a SQLi (`?q='))--`) was stored as the clean endpoint and Repeat replayed a
+    different request. The response was never stored at all: the reader saw the
+    payload and had to take the outcome on faith.
+    """
+    from backend.app.routers import agent as agent_router
+
+    request = {"method": "get",
+               "url": "https://lab.example.test/rest/products/search?q=%27))--",
+               "headers": {"Accept": "application/json"}, "body": None}
+    text = agent_router._proof_text(request, request["url"])
+    assert text.splitlines()[0] == "GET /rest/products/search?q=%27))-- HTTP/1.1"
+    assert "Host: lab.example.test" in text
+
+    response = agent_router._response_text({
+        "status": 200, "response_headers": {"Content-Type": "application/json"},
+        "response_body": '{"status":"success","data":[]}'})
+    assert response.startswith("HTTP/1.1 200")
+    assert '{"status":"success","data":[]}' in response
+
+    assert agent_router._response_text(None) is None, \
+        "no exchange means no response, never an invented one"
+
+
 def test_a_reproduced_replay_validates_the_candidate(context):
     http, headers, session, org = context
     import datetime as dt
@@ -233,6 +262,154 @@ def test_a_reproduced_replay_validates_the_candidate(context):
 
 
 # ── messages and the merged thread ────────────────────────────────────────
+
+def test_a_field_verdict_lands_on_the_finding_it_was_asked_about(context):
+    """The chat and the row must agree.
+
+    A validation that ended VULNERABLE left the finding at `exploit_state: none`, so
+    the answer on screen and the counts behind it told two different stories.
+    """
+    http, headers, session, org = context
+    from backend.app.routers import agent as agent_router
+
+    finding = models.Finding(org_id=org.id, kind="vulnerability", fingerprint="fp-v",
+                             source="agent", title="SQLi en búsqueda",
+                             severity="CRITICAL", status="open")
+    session.add(finding)
+    session.flush()
+    mission = models.AgentMission(
+        org_id=org.id, actor="tester", goal="validar", capability="validate",
+        profile="angmar", status="done",
+        evidence=json.dumps({"finding_id": finding.id, "required": ["verdict"]}))
+    session.add(mission)
+    session.flush()
+    task = models.AgentTask(org_id=org.id, mission_id=mission.id, kind="validate.finding",
+                            target="{}", tools="[]", must_return="[]", status="done",
+                            result=json.dumps({"answer": "Reproducido.\n\nVERDICT: VULNERABLE"}))
+    session.add(task)
+    session.commit()
+
+    agent_router._record_validation(session, mission, task)
+    session.commit()
+
+    assert finding.exploit_state == "reproduced"
+    assert "VERDICT: VULNERABLE" in (finding.validation_output or "")
+
+    human_axis = finding.triage_status
+    task.result = json.dumps({"answer": "El control no reprodujo.\n\nVERDICT: NOT VULNERABLE"})
+    agent_router._record_validation(session, mission, task)
+    session.commit()
+    assert finding.exploit_state == "attempted", \
+        "probed and not reproduced is not the same as untouched"
+    assert finding.triage_status == human_axis, \
+        "the machine's verdict never moves the human axis"
+
+
+def _utc(stamp):
+    """A timestamp the test can compare with `utcnow()` regardless of the driver."""
+    if stamp is None:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
+def test_posting_events_keeps_the_lease_alive(context):
+    """A worker that is reporting is alive; the lease only guards the ones that are not.
+
+    Without renewal, any run longer than the lease was reaped mid-work, handed to a
+    second worker, and finally failed as "lease expired without a final event" — over a
+    run that had been answering the whole time.
+    """
+    http, headers, session, org = context
+    mission = models.AgentMission(org_id=org.id, actor="tester", goal="recon",
+                                  capability="discover", profile="morgoth",
+                                  status="running", evidence="{}", tools='["curl"]',
+                                  targets=json.dumps([{"kind": "url", "value": "https://lab.test"}]))
+    session.add(mission)
+    session.flush()
+    task = models.AgentTask(org_id=org.id, mission_id=mission.id, kind="recon.surface",
+                            target=json.dumps({"kind": "url", "value": "https://lab.test"}),
+                            tools='["curl"]', must_return="[]", status="queued")
+    session.add(task)
+    session.commit()
+
+    claimed = http.post(f"/api/v1/agent/tasks/{task.id}/claim",
+                        json={"worker": "w-1"}, headers=headers).json()["data"]
+    token = claimed["token"]
+    task_id = task.id
+
+    # The lease is due in a minute and the run is still working.
+    row = session.get(models.AgentTask, task_id)
+    row.lease_expires_at = models.utcnow() + timedelta(minutes=1)
+    row.token_expires_at = models.utcnow() + timedelta(minutes=1)
+    session.commit()
+
+    http.post(f"/api/v1/agent/tasks/{task_id}/events",
+              json={"events": [{"kind": "tool", "tool": "curl",
+                                "payload": {"argv": ["-sS", "https://lab.test/"]}}]},
+              headers={"X-Agent-Token": token})
+
+    session.expire_all()
+    row = session.get(models.AgentTask, task_id)
+    assert row.lease_expires_at is not None
+    assert _utc(row.lease_expires_at) > models.utcnow() + timedelta(minutes=5), \
+        "posting an event must push the lease out, not leave it counting down"
+    assert _utc(row.token_expires_at) > models.utcnow() + timedelta(minutes=5)
+
+
+def test_a_recon_run_writes_what_it_saw_onto_the_asset(context):
+    """Discovery that stays in the task prose is a paragraph, not inventory.
+
+    The worker already posts the URL, the status and the size of every request; those
+    are observations, and a second run should update them instead of duplicating.
+    """
+    http, headers, session, org = context
+    from backend.app.routers import agent as agent_router
+
+    asset = models.Asset(org_id=org.id, type="domain", value="lab.example.test",
+                         source="manual", classification_status="owned")
+    session.add(asset)
+    mission = models.AgentMission(org_id=org.id, actor="tester", goal="recon",
+                                  capability="discover", profile="morgoth",
+                                  status="done", evidence="{}")
+    session.add(mission)
+    session.flush()
+    task = models.AgentTask(org_id=org.id, mission_id=mission.id, kind="recon.surface",
+                            target="{}", tools='["curl"]', must_return="[]", status="done")
+    session.add(task)
+    session.flush()
+    pairs = [("/rest/admin/application-version", "HTTP/1.1 200 OK\nContent-Type: application/json", 42),
+             ("/no-existe", "HTTP/1.1 404 Not Found\nContent-Type: text/html", 12)]
+    seq = 0
+    for path, head, size in pairs:
+        seq += 1
+        session.add(models.AgentTaskEvent(
+            org_id=org.id, task_id=task.id, seq=seq, kind="tool", tool="curl",
+            payload=json.dumps({"argv": ["-sS", "-i", f"https://lab.example.test{path}"],
+                                "rc": 0})))
+        seq += 1
+        session.add(models.AgentTaskEvent(
+            org_id=org.id, task_id=task.id, seq=seq, kind="observation", tool="curl",
+            payload=json.dumps({"tool": "curl", "rc": 0, "bytes": size, "head": head})))
+    session.commit()
+
+    assert agent_router._record_observations(session, mission, task) == 2
+    session.commit()
+
+    rows = (session.query(models.Observation)
+            .filter_by(asset_id=asset.id, source="agent:recon").all())
+    assert {row.subject for row in rows} == {"/rest/admin/application-version", "/no-existe"}
+    admin = next(row for row in rows if row.subject.endswith("version"))
+    assert admin.value["status"] == 200 and admin.coverage == "full"
+    missing = next(row for row in rows if row.subject == "/no-existe")
+    assert missing.coverage == "partial"
+
+    # Same run again: update in place, never a second row.
+    task.result = json.dumps({"answer": "repetido"})
+    agent_router._record_observations(session, mission, task)
+    session.commit()
+    assert (session.query(models.Observation)
+            .filter_by(asset_id=asset.id, source="agent:recon").count()) == 2
+
 
 def test_a_message_needs_a_recipient_that_exists(context):
     http, headers, session, org = context
