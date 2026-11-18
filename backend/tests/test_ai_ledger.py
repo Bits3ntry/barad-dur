@@ -708,7 +708,8 @@ def test_a_field_mention_proposes_a_mission_instead_of_a_dead_end(context, monke
     mission = missions[0]
     assert mission.status == "awaiting_approval", "nothing runs without a human"
     assert mission.capability == "validate" and mission.profile == "angmar"
-    assert json.loads(mission.tools) == ["curl", "python"]
+    assert json.loads(mission.tools) == ["curl"], \
+        "one tool: the worker resolves a nameless call only when there is one"
     assert json.loads(mission.targets)[0]["value"] == "https://app.example.test"
     assert json.loads(mission.targets)[0]["source"] == "asset.value"
     assert mission.signature, "the envelope is signed like any other"

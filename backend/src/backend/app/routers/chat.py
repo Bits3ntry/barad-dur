@@ -814,7 +814,12 @@ TARGET_RE = re.compile(
 DEICTIC_RE = re.compile(r"\b(esta|este|esto|esa|ese|eso|aquel|aquella|la\s+poc|"
                         r"el\s+hallazgo|ese\s+hallazgo|este\s+hallazgo)\b",
                         re.IGNORECASE)
-FIELD_TOOLS = ["curl", "python"]
+#: One tool, on purpose. Some providers emit a tool call with an empty
+#: `function.name`; the worker can only resolve that when the allowlist has a single
+#: entry, and with two it refuses every later call — the run then closes INCONCLUSIVE
+#: on its own plumbing. `curl` alone proves both halves (a differential is a size or a
+#: status; the login bypass is a token in the body), and `-w`/`-o` cover the rest.
+FIELD_TOOLS = ["curl"]
 
 
 def _suggested_finding(session_db: Session, org: models.Organization,
