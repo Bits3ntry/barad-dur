@@ -169,8 +169,12 @@ def execute(session: Session, run: models.AiRun, *,
             json_mode=(bool((named.get(name) or {}).get("json_output"))
                        or not terminal),
             calls_left=calls_left, prompt_set=prompt_set, named=named,
-            cap=(SINGLE_SPECIALIST_CALLS if len(plan) == 1
-                 else MAX_CALLS_PER_SPECIALIST))
+            # A named agent keeps the tighter cap: the planner reads finding, trace,
+            # targets and inventory on every round, and the fifth round is what turned
+            # a working proposal into a provider timeout.
+            cap=(MAX_CALLS_PER_SPECIALIST if named else
+                 (SINGLE_SPECIALIST_CALLS if len(plan) == 1
+                  else MAX_CALLS_PER_SPECIALIST)))
 
         if outcome["stopped"]:
             failed += 1

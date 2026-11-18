@@ -239,8 +239,11 @@ def complete(provider: models.AiProvider, api_key: str, messages: list[dict],
         body["tool_choice"] = "auto"
 
     url = provider.base_url.rstrip("/") + "/chat/completions"
-    client = httpx.Client(timeout=60.0, transport=transport) if transport else \
-        httpx.Client(timeout=60.0)
+    # A conversation turn with tools reaches 15–20k input tokens, and a 60 s ceiling
+    # made the planner die as "provider unreachable … read operation timed out" on the
+    # round that had everything it needed. 120 s is still a ceiling, not a wait.
+    client = httpx.Client(timeout=120.0, transport=transport) if transport else \
+        httpx.Client(timeout=120.0)
     # A local runtime (Ollama, vLLM, LM Studio) has no key, and asking it for one is
     # the reason people give up on local models: an empty key means "no header".
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
