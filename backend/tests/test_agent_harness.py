@@ -195,6 +195,33 @@ def test_a_stage_that_raises_can_never_confirm(context):
     assert "adapter exploded" in result["reason"]
 
 
+def test_a_promoted_proof_keeps_the_query_string_and_the_response():
+    """The finding must answer "what do I replay" byte for byte.
+
+    `_proof_text` rebuilt the path with `urlsplit(...).path`, so the request that
+    proved a SQLi (`?q='))--`) was stored as the clean endpoint and Repeat replayed a
+    different request. The response was never stored at all: the reader saw the
+    payload and had to take the outcome on faith.
+    """
+    from backend.app.routers import agent as agent_router
+
+    request = {"method": "get",
+               "url": "https://lab.example.test/rest/products/search?q=%27))--",
+               "headers": {"Accept": "application/json"}, "body": None}
+    text = agent_router._proof_text(request, request["url"])
+    assert text.splitlines()[0] == "GET /rest/products/search?q=%27))-- HTTP/1.1"
+    assert "Host: lab.example.test" in text
+
+    response = agent_router._response_text({
+        "status": 200, "response_headers": {"Content-Type": "application/json"},
+        "response_body": '{"status":"success","data":[]}'})
+    assert response.startswith("HTTP/1.1 200")
+    assert '{"status":"success","data":[]}' in response
+
+    assert agent_router._response_text(None) is None, \
+        "no exchange means no response, never an invented one"
+
+
 def test_a_reproduced_replay_validates_the_candidate(context):
     http, headers, session, org = context
     import datetime as dt
