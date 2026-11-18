@@ -9,6 +9,7 @@ Four properties, each one earned:
 """
 import json
 import sys
+from datetime import timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -302,6 +303,57 @@ def test_a_field_verdict_lands_on_the_finding_it_was_asked_about(context):
         "probed and not reproduced is not the same as untouched"
     assert finding.triage_status == human_axis, \
         "the machine's verdict never moves the human axis"
+
+
+def _utc(stamp):
+    """A timestamp the test can compare with `utcnow()` regardless of the driver."""
+    if stamp is None:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
+def test_posting_events_keeps_the_lease_alive(context):
+    """A worker that is reporting is alive; the lease only guards the ones that are not.
+
+    Without renewal, any run longer than the lease was reaped mid-work, handed to a
+    second worker, and finally failed as "lease expired without a final event" — over a
+    run that had been answering the whole time.
+    """
+    http, headers, session, org = context
+    mission = models.AgentMission(org_id=org.id, actor="tester", goal="recon",
+                                  capability="discover", profile="morgoth",
+                                  status="running", evidence="{}", tools='["curl"]',
+                                  targets=json.dumps([{"kind": "url", "value": "https://lab.test"}]))
+    session.add(mission)
+    session.flush()
+    task = models.AgentTask(org_id=org.id, mission_id=mission.id, kind="recon.surface",
+                            target=json.dumps({"kind": "url", "value": "https://lab.test"}),
+                            tools='["curl"]', must_return="[]", status="queued")
+    session.add(task)
+    session.commit()
+
+    claimed = http.post(f"/api/v1/agent/tasks/{task.id}/claim",
+                        json={"worker": "w-1"}, headers=headers).json()["data"]
+    token = claimed["token"]
+    task_id = task.id
+
+    # The lease is due in a minute and the run is still working.
+    row = session.get(models.AgentTask, task_id)
+    row.lease_expires_at = models.utcnow() + timedelta(minutes=1)
+    row.token_expires_at = models.utcnow() + timedelta(minutes=1)
+    session.commit()
+
+    http.post(f"/api/v1/agent/tasks/{task_id}/events",
+              json={"events": [{"kind": "tool", "tool": "curl",
+                                "payload": {"argv": ["-sS", "https://lab.test/"]}}]},
+              headers={"X-Agent-Token": token})
+
+    session.expire_all()
+    row = session.get(models.AgentTask, task_id)
+    assert row.lease_expires_at is not None
+    assert _utc(row.lease_expires_at) > models.utcnow() + timedelta(minutes=5), \
+        "posting an event must push the lease out, not leave it counting down"
+    assert _utc(row.token_expires_at) > models.utcnow() + timedelta(minutes=5)
 
 
 def test_a_recon_run_writes_what_it_saw_onto_the_asset(context):

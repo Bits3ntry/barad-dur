@@ -818,6 +818,13 @@ def post_events(task_id: str, payload: EventsIn = None,
             .filter_by(task_id=task.id)
             .order_by(models.AgentTaskEvent.seq.desc()).first())
     seq = (last.seq if last else 0)
+    # A worker that is posting events is alive, and the lease exists to detect the ones
+    # that are not. Without this renewal a run longer than the lease was reaped mid-work
+    # — the queue handed it to a second worker, the first kept going with a token that no
+    # longer matched, and after three attempts the task died as "lease expired without a
+    # final event" over a run that had been answering all along.
+    task.lease_expires_at = models.utcnow() + timedelta(minutes=LEASE_MINUTES)
+    task.token_expires_at = models.utcnow() + timedelta(minutes=TOKEN_TTL_MINUTES)
     accepted = 0
     for event in payload.events:
         if event.kind not in models.AGENT_EVENT_KINDS:
@@ -1063,6 +1070,33 @@ FIELD_LANGUAGE = ("Write the report in the language of the mission goal. Request
                   "follows the operator's language.")
 
 
+def _plan_brief(mission: models.AgentMission) -> str:
+    """The approved plan, written where the worker actually reads.
+
+    The worker gets the target, the tools and what the task must return — never
+    `mission.evidence.plan`. So a discovery that was approved with five steps wandered
+    through thirty calls and rediscovered paths it had already answered, which is also
+    what made the run outlive its lease. The plan travels with the field instructions.
+    """
+    try:
+        evidence = json.loads(mission.evidence or "{}")
+    except ValueError:
+        return ""
+    steps = ((evidence.get("plan") or {}).get("steps") or [])
+    if not steps:
+        return ""
+    lines = ["**Plan aprobado** — el operador lo leyó antes de aprobarlo; seguilo en orden:"]
+    for index, step in enumerate(steps, start=1):
+        line = (f"{step.get('n') or index}. {step.get('method') or 'GET'} "
+                f"{step.get('path') or '/'}")
+        if step.get("expect"):
+            line += f" — {step['expect']}"
+        lines.append(line)
+    lines.append("Cuando esos pasos estén cubiertos, escribí el informe: no enumeres rutas "
+                 "que el plan no pide y no repitas una que ya respondió.")
+    return "\n".join(lines)
+
+
 def _narrow_tools(tools: list[dict], allowed: list[str]) -> list[dict]:
     """The envelope is the first lock on tools; the worker's registry is the second.
 
@@ -1143,6 +1177,11 @@ def complete(payload: CompleteIn = None,
     # ride with the instructions the platform prepends — otherwise a Spanish mission comes
     # back as an English report, which is what the operator then reads in the thread.
     field_body = (field_body or "") + ("\n\n" + FIELD_LANGUAGE if True else "")
+    # The approved plan is the difference between a run that follows five steps and one
+    # that rediscovers the same surface until its lease expires.
+    plan_brief = _plan_brief(mission)
+    if plan_brief:
+        field_body = field_body + "\n\n" + plan_brief
     if messages and (messages[0] or {}).get("role") == "system":
         messages = [{"role": "system", "content": field_body + "\n\n" +
                      (messages[0].get("content") or "")}] + messages[1:]

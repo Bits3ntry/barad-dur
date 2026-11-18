@@ -168,6 +168,42 @@ def test_a_field_call_is_recorded_with_its_status_and_its_command(context, monke
     assert calls[0]["args"]["argv"] == ["-sS", "https://x/"]
 
 
+def test_the_field_prompt_carries_the_plan_the_operator_approved(context, monkeypatch):
+    """The worker gets the target and the contract — never the plan — so it wanders.
+
+    A discovery approved with five steps spent thirty calls rediscovering what it had
+    already answered. The plan now rides with the field instructions.
+    """
+    http, headers, session, _ = context
+    _provider(http, headers)
+    mission, task, token = _mission_and_task(http, headers, tokens=10_000)
+    row = session.get(models.AgentMission, mission["id"])
+    row.evidence = json.dumps({
+        "required": ["observation", "request", "response"], "task_kind": "recon.surface",
+        "plan": {"plan_source": "recon-template", "steps": [
+            {"n": 1, "method": "GET", "path": "/", "expect": "identidad del origen"},
+            {"n": 2, "method": "GET", "path": "/robots.txt", "expect": "rutas declaradas"},
+        ]}})
+    session.commit()
+
+    seen: dict = {}
+
+    def fake(provider, api_key, messages, tools, *, transport=None, session_id="",
+             max_tokens=None):
+        seen["system"] = messages[0]["content"]
+        return {"content": "ok", "tool_calls": [], "tokens_in": 5, "tokens_out": 2,
+                "cached_tokens": 0}
+
+    monkeypatch.setattr(engine, "complete", fake)
+    response = http.post("/api/v1/agent/llm/complete",
+                         json={"messages": [{"role": "user", "content": "go"}]},
+                         headers={"X-Agent-Token": token})
+    assert response.status_code == 200, response.text
+    assert "Plan aprobado" in seen["system"]
+    assert "GET /robots.txt" in seen["system"]
+    assert "no repitas una que ya respondió" in seen["system"]
+
+
 def test_the_mission_ceiling_refuses_the_next_completion(context, monkeypatch):
     http, headers, session, _ = context
     _provider(http, headers)
