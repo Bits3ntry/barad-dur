@@ -304,6 +304,61 @@ def test_a_field_verdict_lands_on_the_finding_it_was_asked_about(context):
         "the machine's verdict never moves the human axis"
 
 
+def test_a_recon_run_writes_what_it_saw_onto_the_asset(context):
+    """Discovery that stays in the task prose is a paragraph, not inventory.
+
+    The worker already posts the URL, the status and the size of every request; those
+    are observations, and a second run should update them instead of duplicating.
+    """
+    http, headers, session, org = context
+    from backend.app.routers import agent as agent_router
+
+    asset = models.Asset(org_id=org.id, type="domain", value="lab.example.test",
+                         source="manual", classification_status="owned")
+    session.add(asset)
+    mission = models.AgentMission(org_id=org.id, actor="tester", goal="recon",
+                                  capability="discover", profile="morgoth",
+                                  status="done", evidence="{}")
+    session.add(mission)
+    session.flush()
+    task = models.AgentTask(org_id=org.id, mission_id=mission.id, kind="recon.surface",
+                            target="{}", tools='["curl"]', must_return="[]", status="done")
+    session.add(task)
+    session.flush()
+    pairs = [("/rest/admin/application-version", "HTTP/1.1 200 OK\nContent-Type: application/json", 42),
+             ("/no-existe", "HTTP/1.1 404 Not Found\nContent-Type: text/html", 12)]
+    seq = 0
+    for path, head, size in pairs:
+        seq += 1
+        session.add(models.AgentTaskEvent(
+            org_id=org.id, task_id=task.id, seq=seq, kind="tool", tool="curl",
+            payload=json.dumps({"argv": ["-sS", "-i", f"https://lab.example.test{path}"],
+                                "rc": 0})))
+        seq += 1
+        session.add(models.AgentTaskEvent(
+            org_id=org.id, task_id=task.id, seq=seq, kind="observation", tool="curl",
+            payload=json.dumps({"tool": "curl", "rc": 0, "bytes": size, "head": head})))
+    session.commit()
+
+    assert agent_router._record_observations(session, mission, task) == 2
+    session.commit()
+
+    rows = (session.query(models.Observation)
+            .filter_by(asset_id=asset.id, source="agent:recon").all())
+    assert {row.subject for row in rows} == {"/rest/admin/application-version", "/no-existe"}
+    admin = next(row for row in rows if row.subject.endswith("version"))
+    assert admin.value["status"] == 200 and admin.coverage == "full"
+    missing = next(row for row in rows if row.subject == "/no-existe")
+    assert missing.coverage == "partial"
+
+    # Same run again: update in place, never a second row.
+    task.result = json.dumps({"answer": "repetido"})
+    agent_router._record_observations(session, mission, task)
+    session.commit()
+    assert (session.query(models.Observation)
+            .filter_by(asset_id=asset.id, source="agent:recon").count()) == 2
+
+
 def test_a_message_needs_a_recipient_that_exists(context):
     http, headers, session, org = context
     response = http.post("/api/v1/agents/messages", headers=headers,

@@ -855,6 +855,9 @@ def post_events(task_id: str, payload: EventsIn = None,
             # the thread: otherwise the row keeps `exploit_state: none` while the chat
             # shows a verdict, and the screens count a validated finding as unproven.
             _record_validation(session, mission, task)
+            # Discovery is only discovery if the estate keeps it: every path the run
+            # answered becomes an observation on the asset it answered on.
+            _record_observations(session, mission, task)
             # The verdict belongs to the conversation that asked for it: a mission born in
             # a chat that finishes without a word in that chat looks like a failure.
             _announce_in_chat(session, mission, task)
@@ -901,6 +904,81 @@ def _record_validation(session: Session, mission: models.AgentMission,
         return
     finding.validation_output = answer[:8000]
     finding.exploit_state = state
+
+
+def _record_observations(session: Session, mission: models.AgentMission,
+                         task: models.AgentTask) -> int:
+    """What a recon run saw becomes observations on the asset it saw them on.
+
+    A discovery whose result only lives in the task's prose is a paragraph: the asset
+    page cannot show it, `deployment_chain` cannot cite it, and the next run rediscovers
+    the same paths. Each `tool`/`observation` pair the worker posted carries a URL, a
+    status and a size — that is an observation, so it is written as one.
+    """
+    if task.kind != "recon.surface":
+        return 0
+    events = (session.query(models.AgentTaskEvent)
+              .filter_by(task_id=task.id).order_by(models.AgentTaskEvent.seq).all())
+    written = 0
+    pending: dict | None = None
+    for event in events:
+        try:
+            payload = json.loads(event.payload or "{}")
+        except ValueError:
+            continue
+        if event.kind == "tool":
+            pending = payload
+            continue
+        if event.kind != "observation" or pending is None:
+            continue
+        url = next((str(arg) for arg in (pending.get("argv") or [])
+                    if str(arg).lower().startswith(("http://", "https://"))), None)
+        pending = None
+        if not url:
+            continue
+        parts = urlsplit(url)
+        host = parts.netloc.split("@")[-1].split(":")[0].lower() if parts.netloc else ""
+        if not host:
+            continue
+        asset = (session.query(models.Asset)
+                 .filter(models.Asset.org_id == mission.org_id,
+                         models.Asset.value.in_([host, f"{parts.scheme}://{parts.netloc}",
+                                                 url]))
+                 .first())
+        if asset is None:
+            continue
+        head = str(payload.get("head") or "")
+        status = None
+        first = head.splitlines()[0] if head else ""
+        pieces = first.split()
+        if len(pieces) >= 2 and pieces[1].isdigit():
+            status = int(pieces[1])
+        if status is None:
+            # A call whose output carries no status line (`-o /dev/null -w …`) says
+            # nothing about the path: writing it would overwrite a real observation
+            # with an empty one for the same subject.
+            continue
+        subject = parts.path or "/"
+        value = {"status": status, "bytes": payload.get("bytes"),
+                 "method": "GET", "url": url}
+        existing = (session.query(models.Observation)
+                    .filter_by(org_id=mission.org_id, asset_id=asset.id, kind="web_path",
+                               subject=subject[:1024], source="agent:recon")
+                    .one_or_none())
+        if existing is not None:
+            existing.value = value
+            existing.observed_at = models.utcnow()
+            existing.coverage = "full" if status and 200 <= status < 400 else "partial"
+        else:
+            session.add(models.Observation(
+                org_id=mission.org_id, asset_id=asset.id, kind="web_path",
+                subject=subject[:1024], value=value, source="agent:recon",
+                coverage="full" if status and 200 <= status < 400 else "partial"))
+            # The session is created without autoflush, so the next lookup for this
+            # subject would miss the row we just added and write it twice.
+            session.flush()
+        written += 1
+    return written
 
 
 def _announce_in_chat(session: Session, mission: models.AgentMission,
