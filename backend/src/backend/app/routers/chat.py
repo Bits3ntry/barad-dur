@@ -1049,7 +1049,13 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
                              "source": source, "methods": ["GET", "POST"],
                              "rate_per_min": 20}]),
         tools=json.dumps(FIELD_TOOLS),
-        budget=json.dumps({"steps": 8, "tokens": 20000, "wall_s": 600, "usd": 0.0}),
+        # A validation with a plan is not a one-shot probe: a differential SQLi test
+        # (baseline, empty, tautology, false predicate) spends ~20k tokens with the
+        # verdict still unwritten, and the 20k envelope refused the last completion with
+        # "mission token budget reached (20109 of 20000)" — the run died at the sentence
+        # that made it a validation. The envelope is a ceiling, not a spend: raise it
+        # where the plan justifies it.
+        budget=json.dumps({"steps": 12, "tokens": 60000, "wall_s": 1200, "usd": 0.0}),
         evidence=json.dumps({"required": ["request", "response", "verdict"],
                              "finding_id": finding.id if finding is not None else None,
                              "task_kind": ("exploit.chain"

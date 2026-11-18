@@ -5,9 +5,22 @@ services:
   shauron-worker:
     extra_hosts:
       - "juice-shop.demo:${POC_TARGET_IP:-11.11.11.218}"
+    # The field lane has to verify the lab's certificate like any client: without the
+    # CA it answers `curl: (60) self-signed certificate` and the run closes INCONCLUSIVE
+    # on infrastructure, not on the app. `-k` is not the fix — the agent refuses it.
+    environment:
+      SSL_CERT_FILE: /lab-tls/ca-bundle.pem
+      CURL_CA_BUNDLE: /lab-tls/ca-bundle.pem
+    volumes:
+      - ${POC_TLS_DIR:-/Users/saf/HUB/Workspace/Councilbox/CYB/poc-juice-shop/tls}:/lab-tls:ro
   agent-worker:
     extra_hosts:
       - "juice-shop.demo:${POC_TARGET_IP:-11.11.11.218}"
+    environment:
+      SSL_CERT_FILE: /lab-tls/ca-bundle.pem
+      CURL_CA_BUNDLE: /lab-tls/ca-bundle.pem
+    volumes:
+      - ${POC_TLS_DIR:-/Users/saf/HUB/Workspace/Councilbox/CYB/poc-juice-shop/tls}:/lab-tls:ro
   # The API is here because the gates replay the decisive request *from the API
   # process*: with only the workers knowing the alias, a finding on juice-shop.demo
   # fails its `replay` gate on name resolution and the promotion answers 409 for
