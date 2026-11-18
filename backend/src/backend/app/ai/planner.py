@@ -196,6 +196,49 @@ def plan(session: Session, org: models.Organization, *, actor: str,
     return plan_row, answer
 
 
+def plan_from_proof(finding, origin: str) -> dict | None:
+    """A falsification plan built from the proof the finding already carries.
+
+    When the planner answers in prose instead of the object, the alternative to "no
+    mission" is not improvisation: a validated finding names the exact request that
+    proved it, so the question "is it still alive?" is answered by re-sending that
+    request and comparing it with a benign control. No model is consulted, and the
+    plan says where it came from (`plan_source`).
+    """
+    request = (getattr(finding, "proof_request", None) or "").strip()
+    if not request:
+        return None
+    head = request.splitlines()[0].split()
+    if len(head) < 2 or not head[1].startswith("/"):
+        return None
+    method, path = head[0].upper(), head[1]
+    endpoint = path.split("?")[0] or "/"
+    return {
+        "technique": {
+            "known": True,
+            "summary": (f"re-send the recorded request ({method} {endpoint}) and compare "
+                        "it with a benign control"),
+            "sources": [finding.id]},
+        "hypothesis": (f"{origin} sigue sirviendo el defecto registrado: la misma "
+                       "petición reproduce el mismo observable"),
+        "steps": [
+            {"n": 1, "method": method, "path": path, "payload": None,
+             "expect": ("el status y el tamaño del cuerpo registrados en la evidencia "
+                        "(reproduce el observable)")},
+            {"n": 2, "method": method, "path": endpoint, "payload": None,
+             "expect": ("una respuesta distinta de la del paso 1: sin payload no hay "
+                        "observable, que es el control negativo")},
+        ],
+        "success_signal": ("el paso 1 reproduce el observable registrado y el paso 2 "
+                           "no; si ambos coinciden, el defecto ya no está"),
+        "safety": "read_only" if method == "GET" else "active",
+        "needs_grant": True,
+        "open_questions": ["si el paso 1 no reproduce, el hallazgo está mitigado o el "
+                           "host cambió: eso también es un resultado"],
+        "plan_source": "recorded-proof",
+    }
+
+
 def describe(plan_row: dict, limit: int = 5) -> str:
     """The plan as the operator reads it, before approving anything."""
     technique = plan_row.get("technique") or {}

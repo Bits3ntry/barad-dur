@@ -7,6 +7,7 @@ Four properties, each one earned:
 * a candidate without an observation that names where it was seen is refuted;
 * a stage that raises is a refusal, never a pass.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -260,6 +261,48 @@ def test_a_reproduced_replay_validates_the_candidate(context):
 
 
 # ── messages and the merged thread ────────────────────────────────────────
+
+def test_a_field_verdict_lands_on_the_finding_it_was_asked_about(context):
+    """The chat and the row must agree.
+
+    A validation that ended VULNERABLE left the finding at `exploit_state: none`, so
+    the answer on screen and the counts behind it told two different stories.
+    """
+    http, headers, session, org = context
+    from backend.app.routers import agent as agent_router
+
+    finding = models.Finding(org_id=org.id, kind="vulnerability", fingerprint="fp-v",
+                             source="agent", title="SQLi en búsqueda",
+                             severity="CRITICAL", status="open")
+    session.add(finding)
+    session.flush()
+    mission = models.AgentMission(
+        org_id=org.id, actor="tester", goal="validar", capability="validate",
+        profile="angmar", status="done",
+        evidence=json.dumps({"finding_id": finding.id, "required": ["verdict"]}))
+    session.add(mission)
+    session.flush()
+    task = models.AgentTask(org_id=org.id, mission_id=mission.id, kind="validate.finding",
+                            target="{}", tools="[]", must_return="[]", status="done",
+                            result=json.dumps({"answer": "Reproducido.\n\nVERDICT: VULNERABLE"}))
+    session.add(task)
+    session.commit()
+
+    agent_router._record_validation(session, mission, task)
+    session.commit()
+
+    assert finding.exploit_state == "reproduced"
+    assert "VERDICT: VULNERABLE" in (finding.validation_output or "")
+
+    human_axis = finding.triage_status
+    task.result = json.dumps({"answer": "El control no reprodujo.\n\nVERDICT: NOT VULNERABLE"})
+    agent_router._record_validation(session, mission, task)
+    session.commit()
+    assert finding.exploit_state == "attempted", \
+        "probed and not reproduced is not the same as untouched"
+    assert finding.triage_status == human_axis, \
+        "the machine's verdict never moves the human axis"
+
 
 def test_a_message_needs_a_recipient_that_exists(context):
     http, headers, session, org = context

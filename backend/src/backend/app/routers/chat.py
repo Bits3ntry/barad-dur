@@ -1032,6 +1032,14 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
     plan_row, plan_prose = planner.plan(
         session_db, org, actor=actor, question=f"{question.strip()}\n\n{facts}")
     if plan_row is None:
+        # The model answered in prose: not a reason to refuse the mission. A finding
+        # with recorded proof already says what to re-send, so the plan comes from
+        # the evidence instead of from a second guess.
+        plan_row = (planner.plan_from_proof(finding, origin or "")
+                    if finding is not None else None)
+        if plan_row is not None:
+            plan_prose = ""
+    if plan_row is None:
         # Fail closed: a mission without a plan is a sentence the worker improvises on.
         # The planner's own prose is the reason, and it is worth more than a template.
         return {"blocked": "el planner no produjo un plan ejecutable",
@@ -1103,6 +1111,11 @@ def _proposal_answer(result: dict, capability: str) -> str:
     """What the operator reads. It names the next action, never the outcome."""
     if "mission" in result:
         mission = result["mission"]
+        provenance = ("\n\n**Plan derivado de la evidencia registrada** — el modelo no "
+                      "volvió a planificar: se reenvía la petición que probó el hallazgo "
+                      "y su control negativo."
+                      if (result.get("plan") or {}).get("plan_source") == "recorded-proof"
+                      else "")
         if result.get("auto"):
             return (
                 "**La misión está aprobada y la tarea en cola** — la pediste vos contra ese "
@@ -1114,7 +1127,8 @@ def _proposal_answer(result: dict, capability: str) -> str:
                 f"- prueba exigida: "
                 f"{', '.join((mission['evidence'] or {}).get('required') or [])}\n"
                 + (f"\n{planner.describe(result['plan'])}\n\n" if result.get("plan") else "")
-                + "El worker la levanta en segundos y devuelve request/response/veredicto.")
+                + provenance
+                + "\n\nEl worker la levanta en segundos y devuelve request/response/veredicto.")
         return (
             "Armé la misión y está esperando tu aprobación — no ejecuta nada hasta que "
             "la apruebes.\n\n"
@@ -1129,7 +1143,8 @@ def _proposal_answer(result: dict, capability: str) -> str:
                if (mission['evidence'] or {}).get("finding_id")
                else "- sin hallazgo: es un target declarado en este chat\n\n")
             + (f"\n{planner.describe(result['plan'])}\n\n" if result.get("plan") else "")
-            + f"Aprobala en Missions (`#missions::{mission['id']}`) y el agente de campo "
+            + provenance
+            + f"\n\nAprobala en Missions (`#missions::{mission['id']}`) y el agente de campo "
             "corre ahí con su envelope firmado: lee qué está realmente desplegado, prueba "
             "la hipótesis y devuelve request/response. Eso entra como candidato y pasa "
             "los gates antes de tocar el hallazgo — el veredicto del modelo no lo "

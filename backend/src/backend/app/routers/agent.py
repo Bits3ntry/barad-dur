@@ -851,12 +851,56 @@ def post_events(task_id: str, payload: EventsIn = None,
             # a finding. The gates are what decide whether it is usable, so the row
             # is written here and settled later, by a person or by `/promote`.
             _candidate_from_task(session, task)
+            # The verdict belongs to the finding that was asked about, not only to
+            # the thread: otherwise the row keeps `exploit_state: none` while the chat
+            # shows a verdict, and the screens count a validated finding as unproven.
+            _record_validation(session, mission, task)
             # The verdict belongs to the conversation that asked for it: a mission born in
             # a chat that finishes without a word in that chat looks like a failure.
             _announce_in_chat(session, mission, task)
     session.commit()
     return {"data": {"accepted": accepted, "next_seq": seq},
             "task": _task_data(task)}
+
+
+def _record_validation(session: Session, mission: models.AgentMission,
+                       task: models.AgentTask) -> None:
+    """Write the field verdict onto the finding the mission was asked about.
+
+    The answer already reaches the thread and the task; without this it never reaches
+    the row, so a finding validated on camera kept `exploit_state: none` and every
+    count stayed as if nobody had looked. Only the machine's axis moves here:
+    `triage_status` is still the operator's.
+    """
+    try:
+        evidence = json.loads(mission.evidence or "{}")
+    except ValueError:
+        return
+    finding_id = (evidence or {}).get("finding_id")
+    if not finding_id:
+        return
+    finding = session.get(models.Finding, finding_id)
+    if finding is None or finding.org_id != mission.org_id:
+        return
+    try:
+        payload = json.loads(task.result or "{}")
+    except ValueError:
+        return
+    answer = (payload.get("answer") or "").strip()
+    if not answer:
+        return
+    upper = answer.upper()
+    if "NOT VULNERABLE" in upper:
+        # Probed and not reproduced: weaker than proven, stronger than untouched.
+        state = "attempted"
+    elif "VULNERABLE" in upper:
+        state = "reproduced"
+    elif "INCONCLUSIVE" in upper:
+        state = "attempted"
+    else:
+        return
+    finding.validation_output = answer[:8000]
+    finding.exploit_state = state
 
 
 def _announce_in_chat(session: Session, mission: models.AgentMission,
@@ -876,6 +920,20 @@ def _announce_in_chat(session: Session, mission: models.AgentMission,
         payload = {}
     answer = (payload.get("answer") or "").strip()
     if not answer:
+        # A run that died (budget, allowlist, timeout) used to leave the thread in
+        # silence, so the operator kept waiting for a report that was never coming.
+        reason = (task.error or payload.get("error")
+                  or f"el run terminó en `{task.status}` sin producir informe")
+        from backend.app.routers import chat as chat_router
+        chat_router._write_turn(
+            session, row, None,
+            answer=(f"**La misión no cerró** · tarea `{task.id[:8]}…` · "
+                    f"`{task.status}`\n\n{str(reason)[:600]}\n\n"
+                    "La traza de la tarea tiene los eventos: lo que se ejecutó y lo que "
+                    "la plataforma se negó a ejecutar. Eso es información, no un "
+                    "veredicto."),
+            actor="agent", profile_key=mission.profile, assistant_role="specialist",
+            extra_citations=[ref for ref in (mission.id, task.id) if ref])
         return
     verdict = ""
     upper = answer.upper()

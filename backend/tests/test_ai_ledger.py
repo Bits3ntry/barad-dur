@@ -748,6 +748,32 @@ def test_the_planner_reads_the_operators_own_sentence(context, monkeypatch):
     assert finding.id in seen["question"], "the finding travels as a fact"
 
 
+def test_a_proof_without_a_model_plan_still_arms_the_mission(context, monkeypatch):
+    """The planner answering in prose is not a reason to refuse the run.
+
+    A validated finding already names the request that proved it, so "is it still
+    alive?" has a plan without asking a model: re-send it and compare with a control.
+    """
+    http, headers, session, org = context
+    finding = _finding_for_thread(http, headers, session, org)
+    finding.proof_request = ("GET /rest/products/search?q=apple HTTP/1.1\n"
+                             "Host: app.example.test\nAccept: application/json")
+    session.commit()
+    monkeypatch.setattr("backend.app.ai.planner.plan",
+                        lambda *a, **k: (None, "prosa sin objeto"))
+    row = http.post("/api/v1/ai/sessions", json={}, headers=headers).json()["data"]
+
+    body = http.post(f"/api/v1/ai/sessions/{row['id']}/turns",
+                     json={"question": f"@angmar validá {finding.id}"},
+                     headers=headers).json()["data"]
+
+    mission = session.query(models.AgentMission).one()
+    plan = json.loads(mission.evidence)["plan"]
+    assert plan["plan_source"] == "recorded-proof"
+    assert plan["steps"][0]["path"].startswith("/rest/products/search?q=apple")
+    assert "derivado de la evidencia" in body["turn"]["content"]
+
+
 def test_an_ungranted_target_is_refused_with_the_reason_and_no_mission(context):
     http, headers, session, org = context
     finding = _finding_for_thread(http, headers, session, org,
