@@ -795,7 +795,13 @@ def test_a_discovery_verb_proposes_a_recon_mission(context, monkeypatch):
     evidence = json.loads(mission.evidence)
     assert evidence["task_kind"] == "recon.surface"
     assert evidence["required"] == ["observation", "request", "response"]
+    # The recon plan is the lane's, not the model's.
+    assert evidence["plan"]["plan_source"] == "recon-template"
     assert "discovery" in body["turn"]["content"]
+    # Nothing left to approve: the task is already queued, and an approve button here
+    # answered `409: mission is done`.
+    assert not [item for item in (body["turn"].get("suggestions") or [])
+                if item.get("action") == "approve_mission"]
     task = session.query(models.AgentTask).one()
     assert task.kind == "recon.surface"
 

@@ -239,6 +239,43 @@ def plan_from_proof(finding, origin: str) -> dict | None:
     }
 
 
+def plan_for_discovery(origin: str) -> dict:
+    """The recon plan is the same every time, so it does not ask a model.
+
+    Discovery answers "what is here", not "is this vulnerable": a planner prompted for a
+    falsification hypothesis wrote sentences like "there is no documented technique for
+    this vulnerability" about a host nobody had claimed anything about. The lane's steps
+    are fixed and honest, and the plan says where it came from.
+    """
+    return {
+        "technique": {"known": True,
+                      "summary": (f"identificar y enumerar {origin}: identidad del origen, "
+                                  "superficie declarada y exposición accidental"),
+                      "sources": []},
+        "hypothesis": (f"{origin} expone una superficie más amplia que la registrada en el "
+                       "inventario: rutas, documentación de API o respaldos accesibles"),
+        "steps": [
+            {"n": 1, "method": "GET", "path": "/", "payload": None,
+             "expect": "status y cabecera Server: la identidad del origen"},
+            {"n": 2, "method": "GET", "path": "/robots.txt", "payload": None,
+             "expect": "las rutas que el propio sitio declara"},
+            {"n": 3, "method": "GET", "path": "/rest/admin/application-version",
+             "payload": None, "expect": "versión del producto sin autenticación, o 401/404"},
+            {"n": 4, "method": "GET", "path": "/api-docs/", "payload": None,
+             "expect": "documentación de API expuesta, o ausencia"},
+            {"n": 5, "method": "GET", "path": "/ftp/", "payload": None,
+             "expect": "listado o respaldos accesibles, o ausencia"},
+        ],
+        "success_signal": ("la superficie queda inventariada: cada ruta con su status y su "
+                           "tamaño, sin declarar vulnerable nada que no se haya probado"),
+        "safety": "read_only",
+        "needs_grant": False,
+        "open_questions": ["un 200 no es una vulnerabilidad: la interpretación es del "
+                           "analista, y lo que no se listó sigue sin observarse"],
+        "plan_source": "recon-template",
+    }
+
+
 def describe(plan_row: dict, limit: int = 5) -> str:
     """The plan as the operator reads it, before approving anything."""
     technique = plan_row.get("technique") or {}

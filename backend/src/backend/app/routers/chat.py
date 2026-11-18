@@ -602,9 +602,12 @@ def create_turn(session_id: str, payload: TurnIn, response: Response,
                                  ((proposal or {}).get("ids") or {}).get("finding"))
                  if ref]
         # The approve button travels with the proposal: the operator says yes to what the
-        # turn just described, in the turn, without a trip to Missions.
+        # turn just described, in the turn, without a trip to Missions. Only when there is
+        # something left to approve — an auto-approved mission already has its task
+        # queued, and a button that answers `409: mission is done` is a dead affordance
+        # drawn by us.
         buttons: list[dict] = []
-        if created.get("id"):
+        if created.get("id") and created.get("status") == "awaiting_approval":
             buttons.append({"action": "approve_mission", "label": "Aprobar y ejecutar",
                             "mission_id": created["id"],
                             "href": f"#missions::{created['id']}"})
@@ -1044,8 +1047,12 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
     # conversation produce an English plan inside a Spanish answer.
     facts = (f"[hallazgo {finding.id} · {finding.title} · target {origin}]"
              if finding is not None else f"[target {origin}]")
-    plan_row, plan_prose = planner.plan(
-        session_db, org, actor=actor, question=f"{question.strip()}\n\n{facts}")
+    if capability == "discover":
+        # Discovery has no hypothesis to invent: the steps are the lane's own contract.
+        plan_row, plan_prose = planner.plan_for_discovery(origin or ""), ""
+    else:
+        plan_row, plan_prose = planner.plan(
+            session_db, org, actor=actor, question=f"{question.strip()}\n\n{facts}")
     if plan_row is None:
         # The model answered in prose: not a reason to refuse the mission. A finding
         # with recorded proof already says what to re-send, so the plan comes from
@@ -1135,7 +1142,11 @@ def _proposal_answer(result: dict, capability: str) -> str:
                       "volvió a planificar: se reenvía la petición que probó el hallazgo "
                       "y su control negativo."
                       if (result.get("plan") or {}).get("plan_source") == "recorded-proof"
-                      else "")
+                      else ("\n\n**Plan de reconocimiento fijo** — no consulta al modelo: "
+                            "identidad del origen, rutas declaradas y exposición "
+                            "accidental, en ese orden."
+                            if (result.get("plan") or {}).get("plan_source") == "recon-template"
+                            else ""))
         if result.get("auto"):
             return (
                 "**La misión está aprobada y la tarea en cola** — la pediste vos contra ese "
