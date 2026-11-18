@@ -204,6 +204,50 @@ def test_the_field_prompt_carries_the_plan_the_operator_approved(context, monkey
     assert "no repitas una que ya respondió" in seen["system"]
 
 
+def test_the_conversation_carries_its_missions_and_what_they_executed(context):
+    """The chat is the harness: the thread has to show the run without leaving it."""
+    http, headers, session, org = context
+    chat = models.ChatSession(org_id=org.id, title="DEMO · discovery", status="idle")
+    session.add(chat)
+    session.flush()
+    run = models.AiRun(org_id=org.id, actor="tester", actor_role="analyst",
+                       session_id=chat.id, mode="mission", question="mission: recon",
+                       status="running")
+    session.add(run)
+    session.flush()
+    mission = models.AgentMission(org_id=org.id, actor="tester", goal="recon",
+                                  capability="discover", profile="morgoth",
+                                  status="running", run_id=run.id,
+                                  tools='["curl"]', budget=json.dumps({"steps": 12, "tokens": 60000}))
+    session.add(mission)
+    session.flush()
+    task = models.AgentTask(org_id=org.id, mission_id=mission.id, kind="recon.surface",
+                            target=json.dumps({"kind": "url", "value": "https://lab.test"}),
+                            tools='["curl"]', must_return="[]", status="claimed", attempts=2)
+    session.add(task)
+    session.flush()
+    session.add(models.AgentTaskEvent(
+        org_id=org.id, task_id=task.id, seq=1, kind="tool", tool="curl",
+        payload=json.dumps({"argv": ["-sS", "-i", "https://lab.test/"], "rc": 0})))
+    session.add(models.AgentTaskEvent(
+        org_id=org.id, task_id=task.id, seq=2, kind="observation", tool=None,
+        payload=json.dumps({"tool": "curl", "rc": 0, "bytes": 4000,
+                            "head": "HTTP/1.1 200 OK"})))
+    session.commit()
+
+    data = http.get(f"/api/v1/ai/sessions/{chat.id}", headers=headers).json()["data"]
+    missions = data["missions"]
+    assert len(missions) == 1
+    assert missions[0]["capability"] == "discover"
+    assert missions[0]["profile"] == "morgoth"
+    assert missions[0]["tokens"] == 60000
+    task_row = missions[0]["tasks"][0]
+    assert (task_row["kind"], task_row["status"], task_row["attempts"]) == \
+        ("recon.surface", "claimed", 2)
+    assert [event["kind"] for event in task_row["events"]] == ["tool", "observation"]
+    assert task_row["events"][0]["payload"]["argv"][-1] == "https://lab.test/"
+
+
 def test_the_mission_ceiling_refuses_the_next_completion(context, monkeypatch):
     http, headers, session, _ = context
     _provider(http, headers)

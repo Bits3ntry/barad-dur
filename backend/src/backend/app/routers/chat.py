@@ -209,6 +209,64 @@ def _session_cost(session_db: Session, session: models.ChatSession) -> float | N
     return round(sum(run.cost_usd or 0.0 for run in runs), 6)
 
 
+MISSION_EVENT_CAP = 160
+
+
+def _payload_json(raw: str | None) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {"value": value}
+
+
+def _session_missions(session_db: Session, org: models.Organization,
+                      session: models.ChatSession) -> list[dict]:
+    """The missions this conversation armed, with their task and what it executed.
+
+    The thread is the harness: an operator who approved a mission here should not have
+    to leave the conversation to learn whether it is running, what it ran and what came
+    back. One payload, one poll, and the same records the Missions screen reads.
+    """
+    run_ids = [run.id for run in
+               session_db.query(models.AiRun)
+               .filter_by(org_id=org.id, session_id=session.id, mode="mission").all()]
+    if not run_ids:
+        return []
+    missions = (session_db.query(models.AgentMission)
+                .filter(models.AgentMission.org_id == org.id,
+                        models.AgentMission.run_id.in_(run_ids))
+                .order_by(models.AgentMission.created_at).all())
+    out: list[dict] = []
+    for mission in missions:
+        budget = _payload_json(mission.budget)
+        tasks = (session_db.query(models.AgentTask)
+                 .filter_by(mission_id=mission.id)
+                 .order_by(models.AgentTask.created_at).all())
+        out.append({
+            "id": mission.id, "run_id": mission.run_id,
+            "capability": mission.capability, "profile": mission.profile,
+            "status": mission.status, "goal": mission.goal,
+            "steps": budget.get("steps"), "tokens": budget.get("tokens"),
+            "created_at": mission.created_at.isoformat() if mission.created_at else None,
+            "deadline_at": mission.deadline_at.isoformat() if mission.deadline_at else None,
+            "tasks": [{
+                "id": task.id, "kind": task.kind, "status": task.status,
+                "attempts": task.attempts, "error": task.error,
+                "target": _payload_json(task.target),
+                "events": [
+                    {"seq": event.seq, "kind": event.kind, "tool": event.tool,
+                     "payload": _payload_json(event.payload),
+                     "at": event.created_at.isoformat()}
+                    for event in (session_db.query(models.AgentTaskEvent)
+                                  .filter_by(task_id=task.id)
+                                  .order_by(models.AgentTaskEvent.seq).all()
+                                  [-MISSION_EVENT_CAP:])],
+            } for task in tasks],
+        })
+    return out
+
+
 @router.get("/sessions/{session_id}")
 def get_session(session_id: str,
                 include_brief: bool = Query(default=True),
@@ -223,6 +281,10 @@ def get_session(session_id: str,
     data["turn_rows"] = [_turn_data(turn) for turn in turns]
     data["pins"] = [{"id": pin.id, "turn_id": pin.turn_id, "note": pin.note}
                     for pin in pins]
+    # The chat is the harness: a mission this conversation armed leaves its task and
+    # what it executed in the same payload as the turns, so the thread can show it
+    # without a trip to Missions and without a second request per poll.
+    data["missions"] = _session_missions(session_db, org, row)
     if include_brief:
         data["brief"] = row.brief
     return {"data": data}
