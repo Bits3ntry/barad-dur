@@ -930,6 +930,8 @@ def test_an_ungranted_target_is_refused_with_the_reason_and_no_mission(context):
     answer = body["turn"]["content"]
     assert "No puedo armarla" in answer
     assert "grant" in answer
+    assert "no active scope target covers this value" not in answer, \
+        "el motivo es de la API; el operador lo lee en español"
     assert session.query(models.AgentMission).count() == 0, \
         "scope is a grant, not a sentence the operator can talk themselves into"
 

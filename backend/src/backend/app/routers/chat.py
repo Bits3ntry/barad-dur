@@ -1030,6 +1030,25 @@ def _finding_target(session_db: Session, finding: models.Finding) -> tuple[str |
     return None, "none"
 
 
+#: Reasons the scope decision writes in English for the API, read by an operator in a
+#: Spanish answer. The decision keeps its own wording; only the surface translates, and a
+#: reason nobody listed is passed through instead of being replaced by a vague one.
+DECISION_REASONS_ES = {
+    "no active scope target covers this value": "ningún target de scope activo cubre ese valor",
+    "covered by an active scope target": "cubierto por un target de scope activo",
+    "capability not granted": "la capacidad no está concedida",
+    "target is not in scope": "el target está fuera de alcance",
+    "outside the effective scope": "fuera del alcance efectivo",
+}
+
+
+def _reason_es(reason: str | None) -> str:
+    text = (reason or "").strip()
+    if not text:
+        return "fuera del alcance efectivo"
+    return DECISION_REASONS_ES.get(text, text)
+
+
 def propose_mission(session_db: Session, org: models.Organization, thread,
                     *, actor: str, capability: str, question: str) -> dict:
     """A mission proposal from a conversation. Never executed: `awaiting_approval`.
@@ -1097,8 +1116,8 @@ def propose_mission(session_db: Session, org: models.Organization, thread,
                             f"`{value}`"), "needs": "target", "ids": ids}
     decision = agent_router._scope_decision(session_db, org, "url", origin, capability)
     if not decision.allowed:
-        return {"blocked": decision.reason or "outside the effective scope",
-                "needs": "grant", "ids": {**ids, "target": origin},
+        return {"blocked": _reason_es(decision.reason), "needs": "grant",
+                "ids": {**ids, "target": origin},
                 "target": origin, "source": source, "capability": capability,
                 "matched": getattr(decision, "matched_rule", None)}
 
